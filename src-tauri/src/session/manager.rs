@@ -80,6 +80,18 @@ pub fn get_lap_channel_data(
 }
 
 #[tauri::command]
+pub fn get_session_yaml(state: State<AppState>, session_id: String) -> Result<String, String> {
+    let raw = {
+        let sessions = state.sessions.lock().unwrap();
+        let (_, r) = sessions.get(&session_id)
+            .ok_or_else(|| format!("Session {} not found", session_id))?;
+        r.clone()
+    };
+    let ibt = IbtFile::from_bytes(raw)?;
+    Ok(ibt.session_info_yaml())
+}
+
+#[tauri::command]
 pub fn get_telemetry_folder() -> String {
     iracing_telemetry_dir().to_string_lossy().to_string()
 }
