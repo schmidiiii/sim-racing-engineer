@@ -16,6 +16,7 @@ export default function TraceGroup() {
   const [activeGroup, setActiveGroup] = useState(0)
   const [traces, setTraces] = useState<Record<string, LapTrace[]>>({})
   const [crosshairTime, setCrosshairTime] = useState<number | null>(null)
+  const [fetchError, setFetchError] = useState<string | null>(null)
   const loadedRef = useRef<string>('')
 
   const group = CHANNEL_GROUPS[activeGroup]
@@ -27,6 +28,7 @@ export default function TraceGroup() {
     if (loadedRef.current === key) return
     loadedRef.current = key
 
+    setFetchError(null)
     const availableChannels = new Set(session.available_channels.map(c => c.name))
 
     const fetchAll = async () => {
@@ -36,23 +38,22 @@ export default function TraceGroup() {
         if (!availableChannels.has(channel)) continue
         nextTraces[channel] = []
 
-        for (const lapNum of selectedLaps) {
-          const lap = session.laps.find(l => l.lap_number === lapNum)
-          if (!lap) continue
-          try {
-            const data = await invoke<LapChannelData>('get_lap_channel_data', {
-              sessionId: session.id,
-              lapNumber: lapNum,
-              channel,
-            })
+        try {
+          // Rust command takes all lap numbers at once and returns Vec<LapChannelData>
+          const results = await invoke<LapChannelData[]>('get_lap_channel_data', {
+            sessionId: session.id,
+            lapNumbers: selectedLaps,
+            channel,
+          })
+          for (const data of results) {
             nextTraces[channel].push({
-              lapNumber: lapNum,
+              lapNumber: data.lap_number,
               samples: data.samples,
               timestamps: data.timestamps,
             })
-          } catch {
-            // channel may not exist for this lap
           }
+        } catch (e) {
+          setFetchError(`${channel}: ${String(e)}`)
         }
       }
 
@@ -91,6 +92,9 @@ export default function TraceGroup() {
 
       {/* Charts */}
       <div className="flex-1 overflow-y-auto px-3 py-2 space-y-1">
+        {fetchError && (
+          <p className="text-xs text-destructive px-3 py-1">{fetchError}</p>
+        )}
         {group.channels.map(channel => {
           const channelTraces = traces[channel] ?? []
           return (
