@@ -99,8 +99,6 @@ impl IbtFile {
 
         let lap_var = self.find_var("Lap")
             .ok_or("Missing 'Lap' channel")?;
-        let st_var = self.find_var("SessionTime")
-            .ok_or("Missing 'SessionTime' channel")?;
         let llt_var = self.find_var("LapLastLapTime");
 
         let lap_nums: Vec<i32> = (0..record_count)
@@ -111,8 +109,9 @@ impl IbtFile {
 
         let laps: Vec<Lap> = segments.iter().map(|&(lap_num, start, end)| {
             // LapLastLapTime is written at the start of the next lap
+            // LapLastLapTime is written at the first sample of the next lap
             let lap_time = llt_var
-                .map(|v| self.read_f64(start.min(record_count.saturating_sub(1)), v) as f32)
+                .map(|v| self.read_f64(end.min(record_count.saturating_sub(1)), v) as f32)
                 .unwrap_or(0.0);
 
             Lap {
