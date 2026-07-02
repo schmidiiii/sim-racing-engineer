@@ -3,6 +3,7 @@ import { listen } from '@tauri-apps/api/event'
 import { useSessionStore } from '@/store/session'
 import LapSidebar from '@/components/LapSidebar'
 import TraceGroup from '@/components/TraceGroup'
+import TrackMap from '@/components/TrackMap'
 
 export default function Viewer() {
   const { loadLatest, loadFile } = useSessionStore()
@@ -28,8 +29,8 @@ export default function Viewer() {
         <div className="flex-1 overflow-hidden">
           <TraceGroup />
         </div>
-        <div className="h-64 border-t border-border p-3 shrink-0">
-          <p className="text-xs text-muted-foreground">Track map</p>
+        <div className="h-64 border-t border-border shrink-0">
+          <TrackMap />
         </div>
       </div>
 
