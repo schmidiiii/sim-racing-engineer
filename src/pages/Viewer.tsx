@@ -4,6 +4,7 @@ import { useSessionStore } from '@/store/session'
 import LapSidebar from '@/components/LapSidebar'
 import TraceGroup from '@/components/TraceGroup'
 import TrackMap from '@/components/TrackMap'
+import AiPanel from '@/components/AiPanel'
 
 export default function Viewer() {
   const { loadLatest, loadFile } = useSessionStore()
@@ -34,13 +35,7 @@ export default function Viewer() {
         </div>
       </div>
 
-      {/* Right: AI Panel */}
-      <aside className="w-72 shrink-0 border-l border-border p-3 flex flex-col overflow-hidden">
-        <p className="text-xs text-muted-foreground font-medium mb-2 uppercase tracking-wider">AI Coach</p>
-        <div className="flex-1 overflow-y-auto">
-          <p className="text-xs text-muted-foreground">Analysis will appear here…</p>
-        </div>
-      </aside>
+      <AiPanel />
     </div>
   )
 }
