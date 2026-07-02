@@ -27,6 +27,13 @@ impl IbtFile {
 
         let vh_offset = header.var_header_offset as usize;
         let num_vars = header.num_vars as usize;
+        let required = vh_offset + num_vars * 144;
+        if required > data.len() {
+            return Err(format!(
+                "IBT file too small for {} var headers (need {} bytes, have {})",
+                num_vars, required, data.len()
+            ));
+        }
         let var_headers: Vec<VarHeader> = (0..num_vars)
             .map(|i| unsafe { read_struct(&data, vh_offset + i * 144) })
             .collect();
@@ -39,7 +46,9 @@ impl IbtFile {
             name: cstr_to_string(&vh.name),
             description: cstr_to_string(&vh.desc),
             unit: cstr_to_string(&vh.unit),
-            var_type: format!("{:?}", VarType::from_i32(vh.var_type)),
+            var_type: VarType::from_i32(vh.var_type)
+                .map(|t| format!("{:?}", t))
+                .unwrap_or_else(|| format!("Unknown({})", vh.var_type)),
         }).collect()
     }
 
@@ -64,21 +73,23 @@ impl IbtFile {
         let rec_start = buf_start + record_idx * self.header.buf_len as usize;
         let off = rec_start + vh.offset as usize;
 
-        if off + 8 > self.data.len() {
-            return 0.0;
-        }
-
         match VarType::from_i32(vh.var_type) {
             Some(VarType::Float) => {
+                if off + 4 > self.data.len() { return 0.0; }
                 f32::from_le_bytes(self.data[off..off + 4].try_into().unwrap_or([0; 4])) as f64
             }
             Some(VarType::Double) => {
+                if off + 8 > self.data.len() { return 0.0; }
                 f64::from_le_bytes(self.data[off..off + 8].try_into().unwrap_or([0; 8]))
             }
             Some(VarType::Int) | Some(VarType::BitField) => {
+                if off + 4 > self.data.len() { return 0.0; }
                 i32::from_le_bytes(self.data[off..off + 4].try_into().unwrap_or([0; 4])) as f64
             }
-            Some(VarType::Bool) | Some(VarType::Char) => self.data[off] as f64,
+            Some(VarType::Bool) | Some(VarType::Char) => {
+                if off >= self.data.len() { return 0.0; }
+                self.data[off] as f64
+            }
             None => 0.0,
         }
     }
