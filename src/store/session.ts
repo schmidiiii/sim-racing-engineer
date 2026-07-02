@@ -54,6 +54,8 @@ interface SessionStore {
   selectedLapKeys: string[]
   loading: boolean
   error: string | null
+  crosshairTime: number | null
+  setCrosshairTime: (t: number | null) => void
   loadLatest: () => Promise<void>
   loadFiles: (paths: string[]) => Promise<void>
   toggleLap: (sessionId: string, lapNumber: number) => void
@@ -81,6 +83,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   selectedLapKeys: [],
   loading: false,
   error: null,
+  crosshairTime: null,
+  setCrosshairTime: (t) => set({ crosshairTime: t }),
 
   loadLatest: async () => {
     set({ loading: true, error: null })
