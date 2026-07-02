@@ -87,22 +87,22 @@ export default function TraceGroup() {
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      <div className="flex gap-1 px-3 pt-2 shrink-0 border-b border-border">
+      <div className="flex items-end gap-0.5 px-4 pt-2 shrink-0 border-b border-border bg-card">
         {CHANNEL_GROUPS.map((g, i) => (
           <button
             key={g.label}
             onClick={() => setActiveGroup(i)}
-            className={`text-xs px-3 py-1.5 rounded-t transition-colors ${
+            className={`px-3 py-2 text-xs font-semibold border-b-2 -mb-px transition-colors ${
               i === activeGroup
-                ? 'bg-secondary text-foreground'
-                : 'text-muted-foreground hover:text-foreground'
+                ? 'border-racing-amber text-racing-amber'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
             }`}
           >
             {g.label}
           </button>
         ))}
       </div>
-      <div className="flex-1 overflow-y-auto px-3 py-2 space-y-1">
+      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2 bg-background">
         {fetchError && (
           <p className="text-xs text-destructive px-1 py-1">{fetchError}</p>
         )}

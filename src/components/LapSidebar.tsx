@@ -19,26 +19,26 @@ function LapRow({ sessionId, lapNumber, lapTime, isValid, colorIndex, fastestTim
   const timeStr = lapTime > 10 ? `${mins}:${secs}` : '–'
 
   return (
-    <label className="flex items-center gap-2 py-0.5 px-1 rounded hover:bg-secondary/40 cursor-pointer select-none">
+    <label className="flex items-center gap-2 py-1 px-3 hover:bg-secondary/60 cursor-pointer select-none transition-colors">
       <span
-        className="w-3 h-3 rounded-sm shrink-0 border"
+        className="w-2.5 h-2.5 rounded-sm shrink-0 border transition-colors"
         style={{
           backgroundColor: selected ? color : 'transparent',
-          borderColor: selected ? color : '#4b5563',
+          borderColor: selected ? color : 'hsl(var(--border))',
         }}
         onClick={() => toggleLap(sessionId, lapNumber)}
       />
       <input type="checkbox" className="sr-only" checked={selected} onChange={() => toggleLap(sessionId, lapNumber)} />
-      <span className="text-xs font-mono flex-1">L{lapNumber}</span>
-      <span className={`text-xs font-mono ${isValid ? 'text-foreground' : 'text-muted-foreground'}`}>
+      <span className="text-xs font-mono text-muted-foreground flex-1">L{lapNumber}</span>
+      <span className={`text-xs font-mono tabular-nums ${isValid ? 'text-foreground' : 'text-muted-foreground/50'}`}>
         {timeStr}
       </span>
-      {isValid && lapTime > 10 && fastestTime < Infinity && lapTime === fastestTime && (
-        <span className="text-xs text-green-400 font-mono">★</span>
+      {isValid && lapTime > 10 && lapTime === fastestTime && (
+        <span className="text-[10px] text-racing-green">★</span>
       )}
       {isValid && lapTime > 10 && fastestTime < Infinity && lapTime !== fastestTime && (
-        <span className="text-xs text-destructive/80 font-mono">
-          +{(lapTime - fastestTime).toFixed(3)}
+        <span className="text-[10px] text-racing-red font-mono tabular-nums">
+          +{(lapTime - fastestTime).toFixed(2)}
         </span>
       )}
     </label>
@@ -67,11 +67,11 @@ export default function LapSidebar() {
   selectedLapKeys.forEach((k, i) => { keyColorIndex[k] = i })
 
   return (
-    <aside className="w-48 shrink-0 border-r border-border flex flex-col overflow-hidden">
-      <div className="px-3 pt-3 pb-2 border-b border-border shrink-0">
-        <p className="text-xs text-muted-foreground font-medium uppercase tracking-wider mb-1">Laps</p>
+    <aside className="w-52 shrink-0 border-r border-border bg-card flex flex-col overflow-hidden">
+      <div className="px-4 pt-4 pb-3 border-b border-border shrink-0">
+        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest mb-2">Sessions</p>
         {loading && <p className="text-xs text-muted-foreground">Loading…</p>}
-        {error && <p className="text-xs text-destructive truncate" title={error}>Error loading</p>}
+        {error && <p className="text-xs text-destructive truncate" title={error}>Error</p>}
         {sessions.length === 0 && !loading && (
           <p className="text-xs text-muted-foreground">No session loaded</p>
         )}
@@ -81,17 +81,13 @@ export default function LapSidebar() {
         {sessions.map((session, si) => (
           <div key={session.id} className="mb-2">
             {/* Session header */}
-            <div className="px-3 py-1">
-              <p className="text-xs font-medium truncate leading-tight" title={session.track}>
-                {session.track}
-              </p>
-              <p className="text-xs text-muted-foreground truncate" title={session.car}>
-                {session.car}
-              </p>
-              <p className="text-xs text-muted-foreground">{session.date.slice(0, 10)}</p>
+            <div className="px-4 pt-3 pb-1">
+              <p className="text-xs font-semibold text-foreground truncate leading-tight">{session.track}</p>
+              <p className="text-xs text-muted-foreground truncate">{session.car}</p>
+              <p className="text-[10px] text-muted-foreground/70">{session.date.slice(0, 10)}</p>
             </div>
             {/* Laps */}
-            <div className="px-2">
+            <div>
               {session.laps.map(lap => {
                 const k = lapKey(session.id, lap.lap_number)
                 const ci = keyColorIndex[k] ?? -1
@@ -113,10 +109,10 @@ export default function LapSidebar() {
         ))}
       </div>
 
-      <div className="px-3 py-2 border-t border-border shrink-0">
+      <div className="px-4 py-3 border-t border-border shrink-0">
         <button
           onClick={handleOpen}
-          className="w-full text-xs text-muted-foreground hover:text-foreground hover:bg-secondary/40 rounded px-2 py-1.5 text-center transition-colors"
+          className="w-full text-xs text-muted-foreground hover:text-foreground border border-border hover:border-foreground/30 rounded-lg px-3 py-2 text-center transition-colors"
         >
           + Load file(s)…
         </button>

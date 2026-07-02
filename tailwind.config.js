@@ -24,6 +24,13 @@ export default {
           '4': 'hsl(var(--chart-4))',
           '5': 'hsl(var(--chart-5))',
         },
+        racing: {
+          amber: '#f59e0b',
+          'amber-dark': '#d97706',
+          green: '#34d399',
+          red: '#f87171',
+          muted: '#7b8898',
+        },
       },
       borderRadius: {
         lg: 'var(--radius)',
