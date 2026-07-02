@@ -3,6 +3,8 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { useSessionStore } from '@/store/session'
 import { useAiStore } from '@/store/ai'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 export default function ChatThread() {
   const { sessions } = useSessionStore()
@@ -74,8 +76,23 @@ export default function ChatThread() {
                 {msg.content}
               </div>
             ) : (
-              <div className="text-xs text-foreground/90 whitespace-pre-wrap leading-relaxed">
-                {msg.content}
+              <div className="prose-ai text-xs leading-relaxed">
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  components={{
+                    h2: ({ children }) => <h2 className="text-sm font-semibold text-foreground mt-3 mb-1 first:mt-0">{children}</h2>,
+                    h3: ({ children }) => <h3 className="text-xs font-semibold text-foreground/90 mt-2 mb-0.5">{children}</h3>,
+                    p: ({ children }) => <p className="text-xs text-foreground/85 mb-1.5 leading-relaxed">{children}</p>,
+                    ul: ({ children }) => <ul className="list-disc list-inside space-y-0.5 mb-1.5 text-xs text-foreground/85">{children}</ul>,
+                    ol: ({ children }) => <ol className="list-decimal list-inside space-y-0.5 mb-1.5 text-xs text-foreground/85">{children}</ol>,
+                    li: ({ children }) => <li className="text-xs">{children}</li>,
+                    strong: ({ children }) => <strong className="font-semibold text-foreground">{children}</strong>,
+                    code: ({ children }) => <code className="bg-secondary px-1 rounded text-xs font-mono">{children}</code>,
+                    hr: () => <hr className="border-border my-2" />,
+                  }}
+                >
+                  {msg.content}
+                </ReactMarkdown>
                 {streaming && i === messages.length - 1 && (
                   <span className="inline-block w-1 h-3 bg-foreground/60 ml-0.5 animate-pulse" />
                 )}

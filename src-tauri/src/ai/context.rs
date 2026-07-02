@@ -23,10 +23,18 @@ pub fn build_analysis_prompt(session: &Session, stats: &[LapStats]) -> String {
     }
 
     format!(
-        "{}\n\nYou are an expert iRacing driving coach. \
-         Analyze this telemetry session and give 3-5 specific, actionable coaching tips. \
-         Focus on braking points, throttle application, and consistency between laps. \
-         Be concise and direct.",
+        "{}\n\nYou are an expert iRacing driving coach. Analyze this telemetry session.\n\n\
+         Respond in this exact markdown format:\n\n\
+         ## Session Overview\n\
+         One sentence summary of the session quality.\n\n\
+         ## Coaching Tips\n\
+         For each tip use this format:\n\
+         ### [Tip Title]\n\
+         **What:** One sentence describing the issue.\n\
+         **How to fix:** One concrete action.\n\
+         **Data:** Reference a specific number from the telemetry.\n\n\
+         Give 3-5 tips. Focus on: braking points, throttle application, consistency, lap delta.\n\
+         Be direct and concise. No filler text.",
         ctx
     )
 }
