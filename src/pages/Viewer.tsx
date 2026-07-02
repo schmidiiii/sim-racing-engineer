@@ -32,14 +32,14 @@ export default function Viewer() {
       {/* Center column */}
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* View switcher */}
-        <div className="flex gap-1 px-3 pt-2 pb-0 shrink-0 border-b border-border bg-background">
+        <div className="flex items-end gap-0.5 px-4 pt-2 shrink-0 border-b border-border bg-card">
           {(['telemetry', 'setup'] as CenterView[]).map(v => (
             <button
               key={v}
               onClick={() => setCenterView(v)}
-              className={`text-xs px-3 py-1.5 capitalize transition-colors border-b-2 -mb-px ${
+              className={`px-4 py-2 text-xs font-semibold border-b-2 -mb-px transition-colors ${
                 v === centerView
-                  ? 'border-primary text-foreground'
+                  ? 'border-racing-amber text-racing-amber'
                   : 'border-transparent text-muted-foreground hover:text-foreground'
               }`}
             >
