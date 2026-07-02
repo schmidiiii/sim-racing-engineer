@@ -12,10 +12,9 @@ interface LapChannelData {
 }
 
 export default function TraceGroup() {
-  const { sessions, selectedLapKeys } = useSessionStore()
+  const { sessions, selectedLapKeys, crosshairTime, setCrosshairTime } = useSessionStore()
   const [activeGroup, setActiveGroup] = useState(0)
   const [traces, setTraces] = useState<Record<string, LapTrace[]>>({})
-  const [crosshairTime, setCrosshairTime] = useState<number | null>(null)
   const [fetchError, setFetchError] = useState<string | null>(null)
   const loadedRef = useRef<string>('')
 
