@@ -7,7 +7,7 @@ import TrackMap from '@/components/TrackMap'
 import AiPanel from '@/components/AiPanel'
 
 export default function Viewer() {
-  const { loadLatest, loadFile } = useSessionStore()
+  const { loadLatest, loadFiles } = useSessionStore()
 
   useEffect(() => {
     loadLatest()
@@ -16,7 +16,7 @@ export default function Viewer() {
   useEffect(() => {
     let unlisten: (() => void) | undefined
     listen<string>('new-ibt-file', (event) => {
-      loadFile(event.payload)
+      loadFiles([event.payload])
     }).then(fn => { unlisten = fn })
     return () => { unlisten?.() }
   }, [])

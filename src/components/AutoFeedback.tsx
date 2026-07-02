@@ -5,7 +5,8 @@ import { useSessionStore } from '@/store/session'
 import { useAiStore } from '@/store/ai'
 
 export default function AutoFeedback() {
-  const { session } = useSessionStore()
+  const { sessions } = useSessionStore()
+  const session = sessions[0]
   const { provider, addMessage, appendToLast, setStreaming, clearMessages } = useAiStore()
   const analyzedSessionRef = useRef<string | null>(null)
 
