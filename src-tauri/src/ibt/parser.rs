@@ -93,6 +93,122 @@ impl IbtFile {
             None => 0.0,
         }
     }
+
+    pub fn parse_session(&self, file_path: String) -> Result<Session, String> {
+        let record_count = self.disk_header.session_record_count as usize;
+
+        let lap_var = self.find_var("Lap")
+            .ok_or("Missing 'Lap' channel")?;
+        let st_var = self.find_var("SessionTime")
+            .ok_or("Missing 'SessionTime' channel")?;
+        let llt_var = self.find_var("LapLastLapTime");
+
+        let lap_nums: Vec<i32> = (0..record_count)
+            .map(|i| self.read_f64(i, lap_var) as i32)
+            .collect();
+
+        let segments = split_by_lap(&lap_nums);
+
+        let laps: Vec<Lap> = segments.iter().map(|&(lap_num, start, end)| {
+            // LapLastLapTime is written at the start of the next lap
+            let lap_time = llt_var
+                .map(|v| self.read_f64(start.min(record_count.saturating_sub(1)), v) as f32)
+                .unwrap_or(0.0);
+
+            Lap {
+                lap_number: lap_num,
+                lap_time,
+                is_valid: lap_time > 10.0,
+                start_sample: start,
+                end_sample: end,
+            }
+        }).collect();
+
+        let yaml = self.session_info_yaml();
+        let track = extract_yaml_field(&yaml, "TrackDisplayName")
+            .unwrap_or_else(|| "Unknown Track".into());
+        let car = extract_yaml_field(&yaml, "CarScreenName")
+            .unwrap_or_else(|| "Unknown Car".into());
+        let date = chrono::DateTime::from_timestamp(self.disk_header.session_start_date, 0)
+            .map(|d| d.format("%Y-%m-%d %H:%M").to_string())
+            .unwrap_or_else(|| "Unknown".into());
+
+        Ok(Session {
+            id: uuid::Uuid::new_v4().to_string(),
+            file_path,
+            track,
+            car,
+            date,
+            tick_rate: self.header.tick_rate,
+            record_count: self.disk_header.session_record_count,
+            laps,
+            available_channels: self.channels(),
+        })
+    }
+
+    pub fn get_lap_channel_data(&self, lap: &Lap, channel: &str) -> Option<LapChannelData> {
+        let ch_var = self.find_var(channel)?;
+        let st_var = self.find_var("SessionTime")?;
+        let total = self.disk_header.session_record_count as usize;
+        let end = lap.end_sample.min(total);
+
+        let t0 = self.read_f64(lap.start_sample, st_var);
+
+        let samples: Vec<f64> = (lap.start_sample..end)
+            .map(|i| self.read_f64(i, ch_var))
+            .collect();
+        let timestamps: Vec<f64> = (lap.start_sample..end)
+            .map(|i| self.read_f64(i, st_var) - t0)
+            .collect();
+
+        Some(LapChannelData {
+            lap_number: lap.lap_number,
+            channel: channel.to_string(),
+            samples,
+            timestamps,
+        })
+    }
+
+    pub fn compute_lap_stats(
+        &self,
+        lap: &Lap,
+        channels: &[&str],
+    ) -> LapStats {
+        use std::collections::HashMap;
+        let mut channel_stats = HashMap::new();
+        for &ch in channels {
+            if let Some(data) = self.get_lap_channel_data(lap, ch) {
+                let n = data.samples.len() as f64;
+                if n == 0.0 { continue; }
+                let min = data.samples.iter().cloned().fold(f64::INFINITY, f64::min);
+                let max = data.samples.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                let avg = data.samples.iter().sum::<f64>() / n;
+                channel_stats.insert(ch.to_string(), ChannelStat { min, max, avg });
+            }
+        }
+        LapStats {
+            lap_number: lap.lap_number,
+            lap_time: lap.lap_time,
+            channel_stats,
+        }
+    }
+}
+
+/// Returns (lap_number, start_record_inclusive, end_record_exclusive) for each lap
+pub fn split_by_lap(lap_nums: &[i32]) -> Vec<(i32, usize, usize)> {
+    if lap_nums.is_empty() { return vec![]; }
+    let mut result = Vec::new();
+    let mut cur = lap_nums[0];
+    let mut start = 0usize;
+    for (i, &n) in lap_nums.iter().enumerate() {
+        if n != cur {
+            result.push((cur, start, i));
+            cur = n;
+            start = i;
+        }
+    }
+    result.push((cur, start, lap_nums.len()));
+    result
 }
 
 pub fn extract_yaml_field(yaml: &str, key: &str) -> Option<String> {
@@ -151,5 +267,37 @@ mod tests {
         let t0 = f.read_f64(0, vh);
         let t1 = f.read_f64(1, vh);
         assert!(t1 > t0, "session time must increase: {} not > {}", t0, t1);
+    }
+
+    #[test]
+    fn split_two_laps() {
+        let laps = split_by_lap(&[0, 0, 0, 1, 1]);
+        assert_eq!(laps.len(), 2);
+        assert_eq!(laps[0], (0i32, 0usize, 3usize));
+        assert_eq!(laps[1], (1i32, 3usize, 5usize));
+    }
+
+    #[test]
+    fn split_empty() {
+        assert_eq!(split_by_lap(&[]), vec![]);
+    }
+
+    #[test]
+    fn parse_session_extracts_track_and_car() {
+        let Some(f) = open_test_file() else { return };
+        let s = f.parse_session(TEST_FILE.to_string()).unwrap();
+        assert!(s.track.contains("Oulton"), "track={}", s.track);
+        assert!(s.car.contains("Ferrari"), "car={}", s.car);
+        assert!(!s.laps.is_empty());
+    }
+
+    #[test]
+    fn get_lap_channel_data_returns_speed() {
+        let Some(f) = open_test_file() else { return };
+        let s = f.parse_session(TEST_FILE.to_string()).unwrap();
+        let lap = &s.laps[0];
+        let data = f.get_lap_channel_data(lap, "Speed").expect("Speed must exist");
+        assert!(!data.samples.is_empty());
+        assert!(data.samples.iter().all(|&v| v >= 0.0), "speed should be non-negative");
     }
 }
