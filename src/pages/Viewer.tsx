@@ -1,16 +1,44 @@
+import { useEffect } from 'react'
+import { listen } from '@tauri-apps/api/event'
+import { useSessionStore } from '@/store/session'
+
 export default function Viewer() {
+  const { session, loading, error, loadLatest, loadFile } = useSessionStore()
+
+  useEffect(() => {
+    loadLatest()
+  }, [])
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined
+    listen<string>('new-ibt-file', (event) => {
+      loadFile(event.payload)
+    }).then(fn => { unlisten = fn })
+    return () => { unlisten?.() }
+  }, [])
+
   return (
     <div className="flex h-full gap-0">
       {/* Left: Lap Sidebar */}
       <aside className="w-48 shrink-0 border-r border-border p-3 overflow-y-auto">
         <p className="text-xs text-muted-foreground font-medium mb-2 uppercase tracking-wider">Laps</p>
-        <p className="text-xs text-muted-foreground">Loading…</p>
+        {loading && <p className="text-xs text-muted-foreground">Loading…</p>}
+        {error && <p className="text-xs text-destructive">{error}</p>}
+        {session && (
+          <div className="space-y-1">
+            <p className="text-xs font-medium truncate">{session.track}</p>
+            <p className="text-xs text-muted-foreground truncate">{session.car}</p>
+            <p className="text-xs text-muted-foreground">{session.date}</p>
+          </div>
+        )}
       </aside>
 
       {/* Center: Telemetry + Track Map */}
       <div className="flex-1 flex flex-col overflow-hidden">
         <div className="flex-1 overflow-hidden p-3">
-          <p className="text-xs text-muted-foreground">Telemetry traces</p>
+          <p className="text-xs text-muted-foreground">
+            {session ? `${session.laps.length} laps · ${session.record_count} samples` : 'Telemetry traces'}
+          </p>
         </div>
         <div className="h-64 border-t border-border p-3 shrink-0">
           <p className="text-xs text-muted-foreground">Track map</p>
