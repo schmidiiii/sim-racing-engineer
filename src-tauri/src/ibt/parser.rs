@@ -11,34 +11,33 @@ pub struct IbtFile {
 }
 
 impl IbtFile {
-    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, String> {
-        let data = fs::read(&path).map_err(|e| e.to_string())?;
-
+    pub fn from_bytes(data: Vec<u8>) -> Result<Self, String> {
         if data.len() < 144 {
-            return Err("File too small to be a valid IBT file".into());
+            return Err("Data too small to be a valid IBT file".into());
         }
-
         let header: IbtHeader = unsafe { read_struct(&data, 0) };
         if header.ver < 1 || header.ver > 3 {
             return Err(format!("Unexpected IBT version {}", header.ver));
         }
-
         let disk_header: DiskSubHeader = unsafe { read_struct(&data, 112) };
-
         let vh_offset = header.var_header_offset as usize;
         let num_vars = header.num_vars as usize;
         let required = vh_offset + num_vars * 144;
         if required > data.len() {
             return Err(format!(
-                "IBT file too small for {} var headers (need {} bytes, have {})",
+                "Data too small for {} var headers (need {} bytes, have {})",
                 num_vars, required, data.len()
             ));
         }
         let var_headers: Vec<VarHeader> = (0..num_vars)
             .map(|i| unsafe { read_struct(&data, vh_offset + i * 144) })
             .collect();
-
         Ok(IbtFile { data, header, disk_header, var_headers })
+    }
+
+    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, String> {
+        let data = fs::read(&path).map_err(|e| e.to_string())?;
+        Self::from_bytes(data)
     }
 
     pub fn channels(&self) -> Vec<Channel> {
