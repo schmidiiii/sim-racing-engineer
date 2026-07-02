@@ -5,7 +5,8 @@ import { useSessionStore } from '@/store/session'
 import { useAiStore } from '@/store/ai'
 
 export default function ChatThread() {
-  const { session } = useSessionStore()
+  const { sessions } = useSessionStore()
+  const session = sessions[0]
   const { provider, messages, streaming, addMessage, appendToLast, setStreaming } = useAiStore()
   const [input, setInput] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)

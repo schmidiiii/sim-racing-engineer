@@ -35,15 +35,11 @@ export interface LapChannelData {
   timestamps: number[]
 }
 
-interface SessionStore {
-  session: Session | null
-  selectedLaps: number[]
-  loading: boolean
-  error: string | null
-  loadLatest: () => Promise<void>
-  loadFile: (path: string) => Promise<void>
-  toggleLap: (lapNumber: number) => void
-  selectAllLaps: () => void
+// Lap key uniquely identifies a lap across sessions: "sessionId:lapNumber"
+export const lapKey = (sessionId: string, lapNumber: number) => `${sessionId}:${lapNumber}`
+export const parseLapKey = (key: string): { sessionId: string; lapNumber: number } => {
+  const idx = key.lastIndexOf(':')
+  return { sessionId: key.slice(0, idx), lapNumber: parseInt(key.slice(idx + 1)) }
 }
 
 const LAP_COLORS = [
@@ -51,12 +47,38 @@ const LAP_COLORS = [
   '#a855f7', '#ec4899', '#14b8a6', '#f97316',
 ]
 
-export const useLapColor = (lapNumber: number) =>
-  LAP_COLORS[lapNumber % LAP_COLORS.length]
+export const getLapColor = (colorIndex: number) => LAP_COLORS[colorIndex % LAP_COLORS.length]
+
+interface SessionStore {
+  sessions: Session[]
+  selectedLapKeys: string[]
+  loading: boolean
+  error: string | null
+  loadLatest: () => Promise<void>
+  loadFiles: (paths: string[]) => Promise<void>
+  toggleLap: (sessionId: string, lapNumber: number) => void
+  // Helper: index of this lap key in the global selected list (for color assignment)
+  lapColorIndex: (key: string) => number
+}
+
+function pickDefaultLaps(sessions: Session[], existingKeys: string[]): string[] {
+  // Pick up to 4 valid laps total across all sessions (newest sessions first)
+  const keys: string[] = []
+  for (const session of [...sessions].reverse()) {
+    for (const lap of session.laps) {
+      if (lap.is_valid && keys.length < 4) {
+        const k = lapKey(session.id, lap.lap_number)
+        if (!existingKeys.includes(k)) keys.push(k)
+      }
+    }
+    if (keys.length >= 4) break
+  }
+  return keys
+}
 
 export const useSessionStore = create<SessionStore>((set, get) => ({
-  session: null,
-  selectedLaps: [],
+  sessions: [],
+  selectedLapKeys: [],
   loading: false,
   error: null,
 
@@ -64,42 +86,54 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     set({ loading: true, error: null })
     try {
       const session = await invoke<Session>('get_latest_session')
-      const validLaps = session.laps
-        .filter(l => l.is_valid)
-        .slice(0, 4)
-        .map(l => l.lap_number)
-      set({ session, selectedLaps: validLaps, loading: false })
+      const keys = pickDefaultLaps([session], [])
+      set(_s => ({
+        sessions: [session],
+        selectedLapKeys: keys,
+        loading: false,
+      }))
     } catch (e) {
       set({ error: String(e), loading: false })
     }
   },
 
-  loadFile: async (path: string) => {
+  loadFiles: async (paths: string[]) => {
     set({ loading: true, error: null })
     try {
-      const session = await invoke<Session>('load_session', { path })
-      const validLaps = session.laps
-        .filter(l => l.is_valid)
-        .slice(0, 4)
-        .map(l => l.lap_number)
-      set({ session, selectedLaps: validLaps, loading: false })
+      const loaded: Session[] = []
+      for (const path of paths) {
+        const session = await invoke<Session>('load_session', { path })
+        loaded.push(session)
+      }
+      set(s => {
+        // Merge: keep existing sessions (deduplicated by id), add new ones
+        const existingIds = new Set(s.sessions.map(x => x.id))
+        const merged = [...s.sessions, ...loaded.filter(x => !existingIds.has(x.id))]
+        const newKeys = pickDefaultLaps(loaded, s.selectedLapKeys)
+        return {
+          sessions: merged,
+          selectedLapKeys: [...s.selectedLapKeys, ...newKeys].slice(0, 8),
+          loading: false,
+        }
+      })
     } catch (e) {
       set({ error: String(e), loading: false })
     }
   },
 
-  toggleLap: (lapNumber: number) => {
-    const { selectedLaps } = get()
-    if (selectedLaps.includes(lapNumber)) {
-      set({ selectedLaps: selectedLaps.filter(n => n !== lapNumber) })
+  toggleLap: (sessionId: string, lapNumber: number) => {
+    const key = lapKey(sessionId, lapNumber)
+    const { selectedLapKeys } = get()
+    if (selectedLapKeys.includes(key)) {
+      set({ selectedLapKeys: selectedLapKeys.filter(k => k !== key) })
     } else {
-      set({ selectedLaps: [...selectedLaps, lapNumber] })
+      set({ selectedLapKeys: [...selectedLapKeys, key] })
     }
   },
 
-  selectAllLaps: () => {
-    const { session } = get()
-    if (!session) return
-    set({ selectedLaps: session.laps.map(l => l.lap_number) })
+  lapColorIndex: (key: string) => {
+    const { selectedLapKeys } = get()
+    const idx = selectedLapKeys.indexOf(key)
+    return idx >= 0 ? idx : selectedLapKeys.length
   },
 }))
