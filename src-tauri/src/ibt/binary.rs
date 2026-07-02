@@ -75,7 +75,8 @@ impl VarType {
 }
 
 /// Read a C struct from a byte slice at the given offset.
-pub fn read_struct<T: Copy>(bytes: &[u8], offset: usize) -> T {
+/// SAFETY: T must be a #[repr(C)] struct containing only numeric types with no invalid bit patterns.
+pub unsafe fn read_struct<T: Copy>(bytes: &[u8], offset: usize) -> T {
     assert!(
         bytes.len() >= offset + std::mem::size_of::<T>(),
         "not enough bytes: need {} at offset {}, have {}",
@@ -106,6 +107,11 @@ mod tests {
     #[test]
     fn var_header_is_144_bytes() {
         assert_eq!(std::mem::size_of::<VarHeader>(), 144);
+    }
+
+    #[test]
+    fn var_buf_is_16_bytes() {
+        assert_eq!(std::mem::size_of::<VarBuf>(), 16);
     }
 
     #[test]
