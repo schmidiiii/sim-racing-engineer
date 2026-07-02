@@ -20,6 +20,8 @@ pub fn run() {
             session::manager::load_session,
             session::manager::get_lap_channel_data,
             session::manager::get_telemetry_folder,
+            ai::commands::query_ai,
+            ai::commands::auto_analyze,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
