@@ -1,12 +1,13 @@
 import { open } from '@tauri-apps/plugin-dialog'
 import { useSessionStore, getLapColor, lapKey } from '@/store/session'
 
-function LapRow({ sessionId, lapNumber, lapTime, isValid, colorIndex }: {
+function LapRow({ sessionId, lapNumber, lapTime, isValid, colorIndex, fastestTime }: {
   sessionId: string
   lapNumber: number
   lapTime: number
   isValid: boolean
   colorIndex: number
+  fastestTime: number
 }) {
   const { selectedLapKeys, toggleLap } = useSessionStore()
   const key = lapKey(sessionId, lapNumber)
@@ -32,12 +33,24 @@ function LapRow({ sessionId, lapNumber, lapTime, isValid, colorIndex }: {
       <span className={`text-xs font-mono ${isValid ? 'text-foreground' : 'text-muted-foreground'}`}>
         {timeStr}
       </span>
+      {isValid && lapTime > 10 && fastestTime < Infinity && lapTime === fastestTime && (
+        <span className="text-xs text-green-400 font-mono">★</span>
+      )}
+      {isValid && lapTime > 10 && fastestTime < Infinity && lapTime !== fastestTime && (
+        <span className="text-xs text-destructive/80 font-mono">
+          +{(lapTime - fastestTime).toFixed(3)}
+        </span>
+      )}
     </label>
   )
 }
 
 export default function LapSidebar() {
   const { sessions, selectedLapKeys, loading, error, loadFiles } = useSessionStore()
+
+  const fastestTime = sessions.flatMap(s => s.laps)
+    .filter(l => l.is_valid && l.lap_time > 10)
+    .reduce((min, l) => l.lap_time < min ? l.lap_time : min, Infinity)
 
   const handleOpen = async () => {
     const selected = await open({
@@ -90,6 +103,7 @@ export default function LapSidebar() {
                     lapTime={lap.lap_time}
                     isValid={lap.is_valid}
                     colorIndex={ci >= 0 ? ci : selectedLapKeys.length}
+                    fastestTime={fastestTime}
                   />
                 )
               })}
