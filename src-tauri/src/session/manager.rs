@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::State;
-use crate::ibt::{IbtFile, Session, Lap, LapChannelData};
+use crate::ibt::{IbtFile, Session, LapChannelData};
 
 pub struct AppState {
     pub sessions: Mutex<HashMap<String, (Session, Vec<u8>)>>,
@@ -31,13 +31,11 @@ fn latest_ibt_in_dir(dir: &PathBuf) -> Option<PathBuf> {
     files.last().map(|e| e.path())
 }
 
-fn load_session_from_path(
-    state: &State<AppState>,
-    path: String,
-) -> Result<Session, String> {
+fn load_from_path(state: &State<AppState>, path: String) -> Result<Session, String> {
+    // Read file once, parse from bytes — no double-read
     let data = std::fs::read(&path).map_err(|e| e.to_string())?;
-    let ibt = IbtFile::open(&path)?;
-    let session = ibt.parse_session(path.clone())?;
+    let ibt = IbtFile::from_bytes(data.clone())?;
+    let session = ibt.parse_session(path)?;
     let id = session.id.clone();
     state.sessions.lock().unwrap().insert(id, (session.clone(), data));
     Ok(session)
@@ -48,12 +46,12 @@ pub fn get_latest_session(state: State<AppState>) -> Result<Session, String> {
     let dir = iracing_telemetry_dir();
     let path = latest_ibt_in_dir(&dir)
         .ok_or_else(|| format!("No .ibt files found in {:?}", dir))?;
-    load_session_from_path(&state, path.to_string_lossy().to_string())
+    load_from_path(&state, path.to_string_lossy().to_string())
 }
 
 #[tauri::command]
 pub fn load_session(state: State<AppState>, path: String) -> Result<Session, String> {
-    load_session_from_path(&state, path)
+    load_from_path(&state, path)
 }
 
 #[tauri::command]
@@ -63,14 +61,15 @@ pub fn get_lap_channel_data(
     lap_numbers: Vec<i32>,
     channel: String,
 ) -> Result<Vec<LapChannelData>, String> {
-    let sessions = state.sessions.lock().unwrap();
-    let (session, raw) = sessions.get(&session_id)
-        .ok_or_else(|| format!("Session {} not found", session_id))?;
+    // Clone data under the lock, then drop the lock before doing any I/O or parsing
+    let (session, raw) = {
+        let sessions = state.sessions.lock().unwrap();
+        let (s, r) = sessions.get(&session_id)
+            .ok_or_else(|| format!("Session {} not found", session_id))?;
+        (s.clone(), r.clone())
+    }; // lock released here
 
-    // Write raw bytes to a temp file and re-open as IbtFile to parse channel data
-    let tmp_path = std::env::temp_dir().join("__iracing_tmp.ibt");
-    std::fs::write(&tmp_path, raw).map_err(|e| e.to_string())?;
-    let ibt = IbtFile::open(&tmp_path)?;
+    let ibt = IbtFile::from_bytes(raw)?;
 
     let results: Vec<LapChannelData> = session.laps.iter()
         .filter(|l| lap_numbers.contains(&l.lap_number))
