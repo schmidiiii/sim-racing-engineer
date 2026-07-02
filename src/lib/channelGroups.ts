@@ -11,7 +11,7 @@ export const CHANNEL_GROUPS: ChannelGroupDef[] = [
   },
   {
     label: 'Steering',
-    channels: ['SteeringWheelAngle'],
+    channels: ['SteeringWheelAngle', 'SteeringWheelTorque'],
   },
   {
     label: 'Wheel Speed',
@@ -20,5 +20,13 @@ export const CHANNEL_GROUPS: ChannelGroupDef[] = [
   {
     label: 'Suspension',
     channels: ['LFshockDefl', 'RFshockDefl', 'LRshockDefl', 'RRshockDefl'],
+  },
+  {
+    label: 'Tyres',
+    channels: ['LFtempCL', 'RFtempCL', 'LRtempCL', 'RRtempCL'],
+  },
+  {
+    label: 'Engine',
+    channels: ['RPM', 'FuelLevel', 'FuelUsePerHour', 'OilTemp'],
   },
 ]
