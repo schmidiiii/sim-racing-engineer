@@ -2,9 +2,10 @@ import { useEffect } from 'react'
 import { listen } from '@tauri-apps/api/event'
 import { useSessionStore } from '@/store/session'
 import LapSidebar from '@/components/LapSidebar'
+import TraceGroup from '@/components/TraceGroup'
 
 export default function Viewer() {
-  const { session, loadLatest, loadFile } = useSessionStore()
+  const { loadLatest, loadFile } = useSessionStore()
 
   useEffect(() => {
     loadLatest()
@@ -24,10 +25,8 @@ export default function Viewer() {
 
       {/* Center: Telemetry + Track Map */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        <div className="flex-1 overflow-hidden p-3">
-          <p className="text-xs text-muted-foreground">
-            {session ? `${session.laps.length} laps · ${session.record_count} samples` : 'Telemetry traces'}
-          </p>
+        <div className="flex-1 overflow-hidden">
+          <TraceGroup />
         </div>
         <div className="h-64 border-t border-border p-3 shrink-0">
           <p className="text-xs text-muted-foreground">Track map</p>
