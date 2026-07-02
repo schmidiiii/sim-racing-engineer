@@ -77,7 +77,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   loadFile: async (path: string) => {
     set({ loading: true, error: null })
     try {
-      const session = await invoke<Session>('load_session', { filePath: path })
+      const session = await invoke<Session>('load_session', { path })
       const validLaps = session.laps
         .filter(l => l.is_valid)
         .slice(0, 4)
