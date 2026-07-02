@@ -13,11 +13,12 @@ interface Point {
   x: number
   y: number
   speed: number
+  timestamp: number
 }
 
-function normalizePoints(lats: number[], lons: number[], speeds: number[]): Point[] {
+function normalizePoints(lats: number[], lons: number[], speeds: number[], timestamps: number[]): Point[] {
   if (lats.length === 0) return []
-  const n = Math.min(lats.length, lons.length, speeds.length)
+  const n = Math.min(lats.length, lons.length, speeds.length, timestamps.length)
   const minLat = Math.min(...lats.slice(0, n))
   const maxLat = Math.max(...lats.slice(0, n))
   const minLon = Math.min(...lons.slice(0, n))
@@ -29,6 +30,7 @@ function normalizePoints(lats: number[], lons: number[], speeds: number[]): Poin
     x: (lons[i] - minLon) * scale + 10,
     y: 230 - (lats[i] - minLat) * scale - 10,
     speed: speeds[i],
+    timestamp: timestamps[i],
   }))
 }
 
@@ -42,7 +44,7 @@ function speedToColor(speed: number, minSpeed: number, maxSpeed: number): string
 }
 
 export default function TrackMap() {
-  const { sessions, selectedLapKeys } = useSessionStore()
+  const { sessions, selectedLapKeys, crosshairTime } = useSessionStore()
   const [points, setPoints] = useState<Point[]>([])
   const [loading, setLoading] = useState(false)
 
@@ -69,8 +71,9 @@ export default function TrackMap() {
       const latData = latResults[0]
       const lonData = lonResults[0]
       if (!latData || !lonData) { setLoading(false); return }
+      const timestamps = latResults[0].timestamps
       const speeds = speedResults?.[0]?.samples ?? latData.samples.map(() => 0)
-      setPoints(normalizePoints(latData.samples, lonData.samples, speeds))
+      setPoints(normalizePoints(latData.samples, lonData.samples, speeds, timestamps))
       setLoading(false)
     }).catch(() => setLoading(false))
   }, [firstKey, sessions.length])
@@ -80,6 +83,17 @@ export default function TrackMap() {
     const speeds = points.map(p => p.speed)
     return { minSpeed: Math.min(...speeds), maxSpeed: Math.max(...speeds) }
   }, [points])
+
+  const cursorPoint = useMemo(() => {
+    if (crosshairTime == null || points.length === 0) return null
+    let best = points[0]
+    let bestDiff = Math.abs(points[0].timestamp - crosshairTime)
+    for (const pt of points) {
+      const diff = Math.abs(pt.timestamp - crosshairTime)
+      if (diff < bestDiff) { bestDiff = diff; best = pt }
+    }
+    return best
+  }, [crosshairTime, points])
 
   if (sessions.length === 0) return null
 
@@ -111,6 +125,17 @@ export default function TrackMap() {
             />
           ))}
           {points[0] && <circle cx={points[0].x} cy={points[0].y} r={4} fill="#ffffff" opacity={0.8} />}
+          {cursorPoint && (
+            <circle
+              cx={cursorPoint.x}
+              cy={cursorPoint.y}
+              r={5}
+              fill="#ffffff"
+              stroke="#000000"
+              strokeWidth={1.5}
+              opacity={0.95}
+            />
+          )}
         </svg>
       )}
       {points.length > 0 && (
