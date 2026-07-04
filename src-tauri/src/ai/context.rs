@@ -72,8 +72,15 @@ pub fn build_analysis_prompt(session: &Session, stats: &[LapStats], language: &s
         }
     }
 
+    let address_note = if language == "de" {
+        "Du redest den Fahrer direkt an — verwende \"du\" (niemals \"Sie\" oder \"der Fahrer\"). Beispiel: \"Du bremst zu spät in T3\", nicht \"Der Fahrer bremst...\". "
+    } else {
+        "Address the driver directly as \"you\" — never say \"the driver\" or refer to them in third person. Example: \"You brake too late at T3\", not \"The driver brakes...\". "
+    };
+
     format!(
         "IMPORTANT: Respond ONLY in {lang_name}. Do not use any other language.\n\
+         {address_note}\n\
          \n\
          ## Session Telemetry — {track} | {car} | {date}\n\
          Valid laps: {n} | Best: {best} | Avg: {avg} | Worst: {worst} | Spread: {spread:.3}s\n\
@@ -81,10 +88,10 @@ pub fn build_analysis_prompt(session: &Session, stats: &[LapStats], language: &s
          ## Lap-by-Lap Data\n\
          {laps}\n\
          ## Task\n\
-         Analyse this telemetry as the driver's personal race engineer. \
-         Do NOT reference real-world lap times. Do NOT use filler praise like \"great job\" or \"well done\". \
-         Be direct, data-driven, and constructively critical. Use motorsport vocabulary \
-         (trail-braking, apex, throttle application, rotation, understeer, oversteer, track limits, minimum speed).\n\
+         You are a personal race engineer giving direct, blunt feedback to the driver. \
+         Do NOT reference real-world lap times. Do NOT use filler phrases like \"great job\", \"well done\", or \"interesting\". \
+         Start immediately with the point. Be specific: reference lap numbers, data values, and corner names. \
+         Use motorsport vocabulary (trail-braking, apex, throttle application, rotation, understeer, oversteer, track limits, minimum speed).\n\
          When referencing corners, use the OFFICIAL turn numbers for {track} from your knowledge, \
          combined with the corner name — e.g. \"T3 (Raidillon)\", \"T1 (La Source)\", \"T10 (Bruxelles)\". \
          If the official turn number is uncertain for a corner, use the corner name only.\n\
@@ -93,26 +100,27 @@ pub fn build_analysis_prompt(session: &Session, stats: &[LapStats], language: &s
          \n\
          ## Reference Benchmark\n\
          Based ONLY on iRacing knowledge (not real-world), state the approximate fastest achievable lap \
-         for a {car} at {track}. Note if uncertain. State the gap to driver's best ({best}).\n\
+         for a {car} at {track}. Note if uncertain. State the gap to your best ({best}).\n\
          \n\
          ## Session Snapshot\n\
-         One sentence: overall pace and biggest consistency weakness from the numbers.\n\
+         One sentence: your overall pace and biggest consistency weakness from the numbers.\n\
          \n\
          ## 1. Braking & Entry\n\
-         Bullet points on: brake point accuracy, trail-braking usage, minimum corner speed. \
+         Bullet points on: your brake point accuracy, trail-braking usage, minimum corner speed. \
          Reference specific lap numbers, turn numbers with names, and data values.\n\
          \n\
          ## 2. Apex & Exit\n\
-         Bullet points on: throttle application timing, progressive vs. erratic gas pickup, \
+         Bullet points on: your throttle application timing, progressive vs. erratic gas pickup, \
          use of track limits at exit. Reference specific lap numbers, turn numbers with names, and data values.\n\
          \n\
          ## 3. Line & Balance\n\
-         Bullet points on: understeer / oversteer indicators from steering angle and speed data, \
-         consistency of line. Reference specific lap numbers, turn numbers with names, and data values.\n\
+         Bullet points on: understeer / oversteer indicators from your steering angle and speed data, \
+         consistency of your line. Reference specific lap numbers, turn numbers with names, and data values.\n\
          \n\
          ## ⚑ Top Priority\n\
-         The single most impactful thing to fix in the next stint. One sentence, no fluff.",
+         The single most impactful thing you need to fix in the next stint. One sentence, no fluff.",
         lang_name = lang_name,
+        address_note = address_note,
         track = session.track,
         car = session.car,
         date = session.date,

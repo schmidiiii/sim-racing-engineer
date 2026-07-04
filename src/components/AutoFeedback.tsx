@@ -28,16 +28,16 @@ function hasTabData(tabLabel: string, availableChannels: string[]): boolean {
 }
 
 function buildSystemPrompt(langName: string): string {
-  const duNote = langName === 'Deutsch'
-    ? 'Spreche den Fahrer immer mit "du" an (informelle Form, niemals "Sie"). '
-    : ''
+  const addressNote = langName === 'Deutsch'
+    ? 'Sprich den Fahrer immer direkt mit "du" an — niemals "Sie", niemals "der Fahrer". Beispiel: "Du bremst zu spät", nicht "Der Fahrer bremst zu spät". '
+    : 'Always address the driver directly as "you" — never say "the driver" or refer to them in third person. Example: "You brake too late at T3", not "The driver brakes...". '
   return (
-    `You are a personal race engineer analysing iRacing telemetry data. ` +
-    `${duNote}` +
+    `You are a personal race engineer giving direct, blunt feedback on iRacing telemetry. ` +
+    `${addressNote}` +
     `Rules you MUST follow:\n` +
-    `- Be direct, honest, and blunt. Zero filler phrases like "great job", "well done", "interesting". Start answers immediately with the point.\n` +
-    `- Reference ONLY the data provided in the user message. Numbers, lap times, deltas — always be specific.\n` +
-    `- If data is missing or insufficient for a question, say so explicitly and briefly. Do not invent data.\n` +
+    `- Be direct, honest, and blunt. Zero filler phrases like "great job", "well done", "interesting". Start immediately with the point.\n` +
+    `- Reference ONLY the data provided. Numbers, lap times, deltas — always be specific.\n` +
+    `- If data is missing or insufficient, say so explicitly and briefly. Do not invent data.\n` +
     `- No hedging ("might", "could possibly", "it depends"). Give a concrete opinion.\n` +
     `- Use motorsport vocabulary: trail-braking, apex, understeer, oversteer, throttle application, rotation, brake bias, minimum speed.\n` +
     `- Respond ONLY in ${langName}. Never switch language.`
@@ -72,8 +72,8 @@ function buildTabPrompt(
 
   if (validLaps.length === 0) {
     return langName === 'Deutsch'
-      ? `Auto: ${car} | Strecke: ${track}\n\nKeine gültigen Runden ausgewählt. Weise den Fahrer kurz darauf hin und sag, was er tun soll.`
-      : `Car: ${car} | Track: ${track}\n\nNo valid laps selected. Tell the driver briefly.`
+      ? `Auto: ${car} | Strecke: ${track}\n\nKeine gültigen Runden ausgewählt. Sag mir kurz, was ich tun soll.`
+      : `Car: ${car} | Track: ${track}\n\nNo valid laps selected. Tell me briefly what I need to do.`
   }
 
   const bestTime = validLaps[0].lap_time
@@ -90,85 +90,84 @@ function buildTabPrompt(
   switch (tabLabel) {
     case 'Delta':
       return ctx +
-        `The driver is on the Delta tab. ` +
-        `Fastest lap is ${fmtTime(bestTime)}. ` +
+        `You are looking at the Delta tab. Your fastest lap is ${fmtTime(bestTime)}. ` +
         (validLaps.length > 1
-          ? `There are ${validLaps.length} laps selected with a spread of ${(validLaps[validLaps.length - 1].lap_time - bestTime).toFixed(3)}s. ` +
-            `Analyse where the time is likely being lost: name the specific corners at ${track} by number/name. ` +
-            `Give 2 concrete, actionable things to work on — not generic, specific to this track layout. ` +
-            `Be direct about what the driver is probably doing wrong.`
+          ? `You have ${validLaps.length} laps selected with a spread of ${(validLaps[validLaps.length - 1].lap_time - bestTime).toFixed(3)}s. ` +
+            `Tell me directly where you are losing time — name the specific corners at ${track} by number/name. ` +
+            `Give 2 concrete, actionable things to fix — not generic, specific to this track layout. ` +
+            `Be blunt about what you are probably doing wrong.`
           : `Only one lap selected — no delta comparison possible. ` +
-            `Critique the lap time ${fmtTime(bestTime)} for ${car} at ${track}: is it competitive, what is a realistic target, where are tenths most commonly lost on this track with this car?`
+            `Critique my lap time ${fmtTime(bestTime)} in the ${car} at ${track}: is it competitive, what is a realistic target, where are tenths most commonly lost on this track with this car?`
         )
 
     case 'Setup':
       return ctx +
-        `The driver is reviewing the car setup. ` +
-        `Based on the lap time of ${fmtTime(bestTime)} for ${car} at ${track}, ` +
+        `You are reviewing your car setup. ` +
+        `Based on your lap time of ${fmtTime(bestTime)} in the ${car} at ${track}, ` +
         `give 2 specific setup directions — not vague, pick actual parameters ` +
         `(e.g. "increase front ARB by 2 clicks", "soften rear rebound", "lower rear ride height 2mm"). ` +
         `Reference what balance issue the lap time spread suggests.`
 
     case 'Ride Height':
       return ctx +
-        `The driver is on the Ride Height view. ${car} at ${track}. ` +
-        `Explain what the ride height data on this track reveals about aero platform and ground clearance. ` +
+        `You are on the Ride Height view. ${car} at ${track}. ` +
+        `Tell me what my ride height data reveals about aero platform and ground clearance on this track. ` +
         `Name the specific corners where ride height is most critical at ${track}. ` +
         `What values are too high/too low and what happens if they are? Be specific, no generics.`
 
     case 'Rake':
       return ctx +
-        `The driver is on the Pitch/Roll (Rake) view. ${car} at ${track}. ` +
-        `Explain what the pitch and roll telemetry reveals about the car's balance. ` +
+        `You are on the Pitch/Roll (Rake) view. ${car} at ${track}. ` +
+        `Tell me what my pitch and roll telemetry reveals about the car's balance. ` +
         `What setup change does a front-heavy pitch pattern suggest vs. a rear-heavy one? ` +
         `Reference ${track}'s specific braking and corner characteristics.`
 
     case 'Wheel Speed':
       return ctx +
-        `The driver is on the Wheel Speed view. ` +
-        `Analyse what wheel speed differential between front and rear reveals about traction and locking. ` +
+        `You are on the Wheel Speed view. ` +
+        `Analyse what my wheel speed differential between front and rear reveals about traction and locking. ` +
         `At ${track}, which corners are most critical for wheel speed management with ${car}? ` +
         `Name them specifically. What does a lockup signature look like in this data?`
 
     case 'Wheel Spin':
       return ctx +
-        `The driver is on the Wheel Slip/Spin view. ` +
-        `Analyse the slip ratio data for ${car} at ${track}. ` +
+        `You are on the Wheel Slip/Spin view. ` +
+        `Analyse my slip ratio data for the ${car} at ${track}. ` +
         `Which exit zones are most likely to cause wheelspin with this car? ` +
         `What slip ratio range is acceptable vs. damaging lap time? Name specific corners at ${track}.`
 
     case 'Shocks':
       return ctx +
-        `The driver is on the Shock Deflection view. ` +
-        `Analyse what the shock deflection patterns reveal about damper setup for ${car} at ${track}. ` +
+        `You are on the Shock Deflection view. ` +
+        `Analyse what my shock deflection patterns reveal about damper setup for the ${car} at ${track}. ` +
         `Is the car bottoming, is one corner working harder than others? ` +
-        `Give a specific damper setup direction (bump/rebound stiffness) based on what the data would show.`
+        `Give a specific damper direction (bump/rebound stiffness) based on what the data shows.`
 
     case 'Shocks Hist':
       return ctx +
-        `The driver is on the Shock Velocity histogram. ` +
-        `Explain the velocity distribution for ${car} at ${track}. ` +
+        `You are on the Shock Velocity histogram. ` +
+        `Explain my velocity distribution for the ${car} at ${track}. ` +
         `What does a histogram skewed to high velocities indicate vs. one clustered in low velocities? ` +
-        `Give a concrete damper adjustment based on what an over-damped or under-damped profile looks like.`
+        `Give a concrete damper adjustment based on whether the profile looks over- or under-damped.`
 
     case 'Tyre Temp':
       return ctx +
-        `The driver is on the Tyre Temperature view. ${car} at ${track}. ` +
-        `Analyse the L/M/R temperature distribution across all four corners. ` +
+        `You are on the Tyre Temperature view. ${car} at ${track}. ` +
+        `Analyse my L/M/R temperature distribution across all four corners. ` +
         `What does outside-edge overheating indicate vs. inside-edge? ` +
         `Give a specific setup correction for any imbalance — tyre pressures, camber, or aero.`
 
     case 'Tyre Pressure':
       return ctx +
-        `The driver is on the Tyre Pressure view. ${car} at ${track}. ` +
-        `What is the optimal hot pressure window for ${car}? ` +
-        `If pressures are too high at the end of a stint, what causes it and how is it corrected? ` +
+        `You are on the Tyre Pressure view. ${car} at ${track}. ` +
+        `What is the optimal hot pressure window for the ${car}? ` +
+        `If my pressures are too high at the end of a stint, what causes it and how do I fix it? ` +
         `Be specific with numbers where possible.`
 
     default:
       return ctx +
-        `The driver is on the ${tabLabel} telemetry view for ${car} at ${track}. ` +
-        `Give specific, data-driven coaching on what this view reveals and what the driver should be looking for. ` +
+        `You are on the ${tabLabel} telemetry view for the ${car} at ${track}. ` +
+        `Give specific, data-driven coaching on what this view reveals and what I should be looking for. ` +
         `No generic explanations — focus on ${track} and ${car} specifically.`
   }
 }
