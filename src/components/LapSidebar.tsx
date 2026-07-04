@@ -61,7 +61,7 @@ function SessionCard({ session, active, onActivate, onRemove }: {
   const t = useT()
   const openTrackGuide = (e: React.MouseEvent) => {
     e.stopPropagation()
-    const url = `https://www.youtube.com/results?search_query=${encodeURIComponent(`iRacing ${session.track} track guide onboard`)}`
+    const url = `https://www.youtube.com/results?search_query=${encodeURIComponent(`iRacing "${session.car}" "${session.track}" track guide`)}`
     invoke('open_url', { url })
   }
   return (
