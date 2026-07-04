@@ -11,6 +11,7 @@ function fmtTime(t: number): string {
 
 // Channels that must be present for a tab to have meaningful data
 const TAB_CHANNELS: Record<string, string[]> = {
+  'Braking':     ['Brake', 'Speed'],
   'Ride Height': ['RFrideHeight', 'LFrideHeight', 'RRrideHeight', 'LRrideHeight'],
   'Rake':        ['Pitch', 'Roll', 'RFrideHeight', 'RRrideHeight'],
   'Wheel Speed': ['RFspeed', 'LFspeed', 'RRspeed', 'LRspeed'],
@@ -88,6 +89,14 @@ function buildTabPrompt(
   const ctx = `Car: ${car} | Track: ${track}\nLaps:\n${lapLines}${spread}\n\n`
 
   switch (tabLabel) {
+    case 'Braking':
+      return ctx +
+        `You are on the Brake Analysis tab. Your fastest lap is ${fmtTime(bestTime)}. ` +
+        `Tell me specifically about my braking technique at ${track} with the ${car}. ` +
+        `Which corners require the most aggressive braking? Where am I likely losing time under braking? ` +
+        `What is the ideal brake point for the key heavy braking zones at ${track}? ` +
+        `Give concrete, specific advice — name the turn numbers and corners.`
+
     case 'Delta':
       return ctx +
         `You are looking at the Delta tab. Your fastest lap is ${fmtTime(bestTime)}. ` +
