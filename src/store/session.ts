@@ -43,59 +43,97 @@ export const parseLapKey = (key: string): { sessionId: string; lapNumber: number
 }
 
 const LAP_COLORS = [
-  '#3b82f6', '#ef4444', '#22c55e', '#f59e0b',
-  '#a855f7', '#ec4899', '#14b8a6', '#f97316',
+  '#64AAB2', // EOS Teal
+  '#F43F5E', // Rose
+  '#FBBF24', // Amber
+  '#818CF8', // Indigo
+  '#34D399', // Emerald
+  '#FB923C', // Orange
+  '#38BDF8', // Sky
+  '#E879F9', // Fuchsia
 ]
 
 export const getLapColor = (colorIndex: number) => LAP_COLORS[colorIndex % LAP_COLORS.length]
 
 interface SessionStore {
   sessions: Session[]
+  activeSessionId: string | null
+  setActiveSessionId: (id: string) => void
+  removeSession: (id: string) => void
   selectedLapKeys: string[]
   loading: boolean
   error: string | null
   crosshairTime: number | null
   setCrosshairTime: (t: number | null) => void
+  activeTabLabel: string
+  setActiveTabLabel: (label: string) => void
   loadLatest: () => Promise<void>
   loadFiles: (paths: string[]) => Promise<void>
   toggleLap: (sessionId: string, lapNumber: number) => void
-  // Helper: index of this lap key in the global selected list (for color assignment)
   lapColorIndex: (key: string) => number
 }
 
 function pickDefaultLaps(sessions: Session[], existingKeys: string[]): string[] {
-  // Pick up to 4 valid laps total across all sessions (newest sessions first)
+  // Pick the 2 fastest valid laps per newly loaded session
   const keys: string[] = []
   for (const session of [...sessions].reverse()) {
-    for (const lap of session.laps) {
-      if (lap.is_valid && keys.length < 4) {
-        const k = lapKey(session.id, lap.lap_number)
-        if (!existingKeys.includes(k)) keys.push(k)
-      }
+    const best2 = session.laps
+      .filter(l => l.is_valid && l.lap_time > 10)
+      .sort((a, b) => a.lap_time - b.lap_time)
+      .slice(0, 2)
+    for (const lap of best2) {
+      const k = lapKey(session.id, lap.lap_number)
+      if (!existingKeys.includes(k)) keys.push(k)
     }
-    if (keys.length >= 4) break
   }
   return keys
 }
 
 export const useSessionStore = create<SessionStore>((set, get) => ({
   sessions: [],
+  activeSessionId: null,
   selectedLapKeys: [],
   loading: false,
   error: null,
   crosshairTime: null,
   setCrosshairTime: (t) => set({ crosshairTime: t }),
 
+  activeTabLabel: 'General',
+  setActiveTabLabel: (label) => set({ activeTabLabel: label }),
+
+  setActiveSessionId: (id) => {
+    const { sessions } = get()
+    const session = sessions.find(s => s.id === id)
+    if (!session) return
+    const newKeys = session.laps
+      .filter(l => l.is_valid && l.lap_time > 10)
+      .sort((a, b) => a.lap_time - b.lap_time)
+      .slice(0, 2)
+      .map(l => lapKey(id, l.lap_number))
+    set({ activeSessionId: id, selectedLapKeys: newKeys })
+  },
+
+  removeSession: (id) => {
+    const { sessions, activeSessionId, selectedLapKeys } = get()
+    const remaining = sessions.filter(s => s.id !== id)
+    const cleanedKeys = selectedLapKeys.filter(k => !k.startsWith(id + ':'))
+    const newActive = activeSessionId === id
+      ? (remaining[0]?.id ?? null)
+      : activeSessionId
+    set({ sessions: remaining, selectedLapKeys: cleanedKeys, activeSessionId: newActive })
+  },
+
   loadLatest: async () => {
     set({ loading: true, error: null })
     try {
       const session = await invoke<Session>('get_latest_session')
       const keys = pickDefaultLaps([session], [])
-      set(_s => ({
+      set({
         sessions: [session],
         selectedLapKeys: keys,
+        activeSessionId: session.id,
         loading: false,
-      }))
+      })
     } catch (e) {
       set({ error: String(e), loading: false })
     }
@@ -110,13 +148,15 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         loaded.push(session)
       }
       set(s => {
-        // Merge: keep existing sessions (deduplicated by id), add new ones
         const existingIds = new Set(s.sessions.map(x => x.id))
         const merged = [...s.sessions, ...loaded.filter(x => !existingIds.has(x.id))]
-        const newKeys = pickDefaultLaps(loaded, s.selectedLapKeys)
+        // Always switch to the newly loaded session — no cross-session auto-selection.
+        // The user can manually add laps from other sessions if track+car match.
+        const newKeys = pickDefaultLaps(loaded, [])
         return {
           sessions: merged,
-          selectedLapKeys: [...s.selectedLapKeys, ...newKeys].slice(0, 8),
+          selectedLapKeys: newKeys,
+          activeSessionId: loaded[0]?.id ?? s.activeSessionId,
           loading: false,
         }
       })
@@ -127,12 +167,21 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
   toggleLap: (sessionId: string, lapNumber: number) => {
     const key = lapKey(sessionId, lapNumber)
-    const { selectedLapKeys } = get()
+    const { selectedLapKeys, sessions } = get()
     if (selectedLapKeys.includes(key)) {
       set({ selectedLapKeys: selectedLapKeys.filter(k => k !== key) })
-    } else {
-      set({ selectedLapKeys: [...selectedLapKeys, key] })
+      return
     }
+    // Cross-session guard: only allow if track AND car match all already-selected sessions
+    const target = sessions.find(s => s.id === sessionId)
+    if (target) {
+      const otherIds = new Set(selectedLapKeys.map(k => parseLapKey(k).sessionId).filter(id => id !== sessionId))
+      for (const otherId of otherIds) {
+        const other = sessions.find(s => s.id === otherId)
+        if (other && (other.track !== target.track || other.car !== target.car)) return
+      }
+    }
+    set({ selectedLapKeys: [...selectedLapKeys, key] })
   },
 
   lapColorIndex: (key: string) => {

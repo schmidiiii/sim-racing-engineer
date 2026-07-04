@@ -1,13 +1,16 @@
 import { open } from '@tauri-apps/plugin-dialog'
-import { useSessionStore, getLapColor, lapKey } from '@/store/session'
+import { useSessionStore, getLapColor, lapKey, type Session } from '@/store/session'
+import TrackMap from '@/components/TrackMap'
+import { useT } from '@/lib/i18n'
 
-function LapRow({ sessionId, lapNumber, lapTime, isValid, colorIndex, fastestTime }: {
+function LapRow({ sessionId, lapNumber, lapTime, isValid, colorIndex, fastestTime, disabled }: {
   sessionId: string
   lapNumber: number
   lapTime: number
   isValid: boolean
   colorIndex: number
   fastestTime: number
+  disabled: boolean
 }) {
   const { selectedLapKeys, toggleLap } = useSessionStore()
   const key = lapKey(sessionId, lapNumber)
@@ -17,36 +20,81 @@ function LapRow({ sessionId, lapNumber, lapTime, isValid, colorIndex, fastestTim
   const mins = Math.floor(lapTime / 60)
   const secs = (lapTime % 60).toFixed(3).padStart(6, '0')
   const timeStr = lapTime > 10 ? `${mins}:${secs}` : '–'
+  const delta = isValid && lapTime > 10 && fastestTime < Infinity && lapTime !== fastestTime
+    ? `+${(lapTime - fastestTime).toFixed(2)}`
+    : null
+  const isBest = isValid && lapTime > 10 && lapTime === fastestTime
 
   return (
-    <label className="flex items-center gap-2 py-1 px-3 hover:bg-secondary/60 cursor-pointer select-none transition-colors">
+    <label
+      className={`flex items-center gap-2.5 py-1.5 px-3 select-none transition-colors group ${
+        disabled ? 'opacity-30 cursor-not-allowed' : 'hover:bg-secondary/50 cursor-pointer'
+      }`}
+      title={disabled ? 'Andere Strecke oder Auto — nicht vergleichbar' : undefined}
+    >
       <span
-        className="w-2.5 h-2.5 rounded-sm shrink-0 border transition-colors"
+        className="w-3 h-3 rounded shrink-0 border-2 transition-colors"
         style={{
           backgroundColor: selected ? color : 'transparent',
           borderColor: selected ? color : 'hsl(var(--border))',
         }}
-        onClick={() => toggleLap(sessionId, lapNumber)}
+        onClick={() => !disabled && toggleLap(sessionId, lapNumber)}
       />
-      <input type="checkbox" className="sr-only" checked={selected} onChange={() => toggleLap(sessionId, lapNumber)} />
-      <span className="text-xs font-mono text-muted-foreground flex-1">L{lapNumber}</span>
-      <span className={`text-xs font-mono tabular-nums ${isValid ? 'text-foreground' : 'text-muted-foreground/50'}`}>
+      <input type="checkbox" className="sr-only" checked={selected} disabled={disabled} onChange={() => !disabled && toggleLap(sessionId, lapNumber)} />
+      <span className="text-xs font-mono text-muted-foreground w-6 shrink-0">L{lapNumber}</span>
+      <span className={`text-xs font-mono tabular-nums flex-1 ${isValid ? 'text-foreground' : 'text-muted-foreground/40'}`}>
         {timeStr}
       </span>
-      {isValid && lapTime > 10 && lapTime === fastestTime && (
-        <span className="text-[10px] text-racing-green">★</span>
-      )}
-      {isValid && lapTime > 10 && fastestTime < Infinity && lapTime !== fastestTime && (
-        <span className="text-[10px] text-racing-red font-mono tabular-nums">
-          +{(lapTime - fastestTime).toFixed(2)}
-        </span>
-      )}
+      {isBest && <span className="text-[10px] text-emerald-500 font-semibold">BEST</span>}
+      {delta && <span className="text-[10px] text-muted-foreground font-mono tabular-nums">{delta}</span>}
     </label>
   )
 }
 
+function SessionCard({ session, active, onActivate, onRemove }: {
+  session: Session
+  active: boolean
+  onActivate: () => void
+  onRemove: () => void
+}) {
+  const t = useT()
+  return (
+    <div
+      className={`group/card mx-2 mb-1 rounded-lg border transition-colors cursor-pointer ${
+        active
+          ? 'bg-secondary/70 border-border'
+          : 'bg-transparent border-transparent hover:bg-secondary/30 hover:border-border/50'
+      }`}
+      onClick={onActivate}
+    >
+      <div className="flex items-start gap-2 px-3 pt-2.5 pb-1.5">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5 mb-0.5">
+            {active && (
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-primary shrink-0" />
+            )}
+            <span className="text-xs font-semibold text-foreground truncate leading-tight">{session.track}</span>
+          </div>
+          <span className="text-[11px] text-muted-foreground truncate block leading-tight">{session.car}</span>
+          <span className="text-[10px] text-muted-foreground/60">{session.date.slice(0, 10)}</span>
+        </div>
+        <button
+          onClick={e => { e.stopPropagation(); onRemove() }}
+          className="opacity-0 group-hover/card:opacity-100 text-muted-foreground/40 hover:text-destructive transition-all mt-0.5 shrink-0 p-0.5 rounded"
+          title={t('removeSession')}
+        >
+          <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+            <path d="M2 2l8 8M10 2l-8 8"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export default function LapSidebar() {
-  const { sessions, selectedLapKeys, loading, error, loadFiles } = useSessionStore()
+  const t = useT()
+  const { sessions, activeSessionId, setActiveSessionId, removeSession, loading, error, loadFiles } = useSessionStore()
 
   const fastestTime = sessions.flatMap(s => s.laps)
     .filter(l => l.is_valid && l.lap_time > 10)
@@ -62,35 +110,50 @@ export default function LapSidebar() {
     if (paths.length > 0) await loadFiles(paths)
   }
 
-  // Build a global color assignment map: key → colorIndex (order of selection)
+  const { selectedLapKeys } = useSessionStore()
   const keyColorIndex: Record<string, number> = {}
   selectedLapKeys.forEach((k, i) => { keyColorIndex[k] = i })
 
+  // Determine compatibility: a session is incompatible if track OR car differs
+  // from any already-selected session. Compatible sessions can be added manually.
+  const selectedSessionIds = new Set(selectedLapKeys.map(k => {
+    const idx = k.lastIndexOf(':')
+    return k.slice(0, idx)
+  }))
+  const selectedSessions = sessions.filter(s => selectedSessionIds.has(s.id))
+  const refTrack = selectedSessions[0]?.track ?? null
+  const refCar = selectedSessions[0]?.car ?? null
+  const isSessionCompatible = (s: typeof sessions[0]) =>
+    !refTrack || !refCar || (s.track === refTrack && s.car === refCar)
+
   return (
-    <aside className="w-52 shrink-0 border-r border-border bg-card flex flex-col overflow-hidden">
+    <aside className="w-72 shrink-0 border-r border-border bg-card flex flex-col overflow-hidden">
+
+      {/* Header */}
       <div className="px-4 pt-4 pb-3 border-b border-border shrink-0">
-        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest mb-2">Sessions</p>
-        {loading && <p className="text-xs text-muted-foreground">Loading…</p>}
-        {error && <p className="text-xs text-destructive truncate" title={error}>Error</p>}
+        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest mb-1">{t('sessions')}</p>
+        {loading && <p className="text-xs text-muted-foreground">{t('loading')}</p>}
+        {error && <p className="text-xs text-destructive truncate" title={error}>{t('errorLoadingFile')}</p>}
         {sessions.length === 0 && !loading && (
-          <p className="text-xs text-muted-foreground">No session loaded</p>
+          <p className="text-xs text-muted-foreground/60">{t('noSessionLoaded')}</p>
         )}
       </div>
 
-      <div className="flex-1 overflow-y-auto py-1">
+      {/* Sessions + laps */}
+      <div className="flex-1 overflow-y-auto py-2">
         {sessions.map((session, si) => (
-          <div key={session.id} className="mb-2">
-            {/* Session header */}
-            <div className="px-4 pt-3 pb-1">
-              <p className="text-xs font-semibold text-foreground truncate leading-tight">{session.track}</p>
-              <p className="text-xs text-muted-foreground truncate">{session.car}</p>
-              <p className="text-[10px] text-muted-foreground/70">{session.date.slice(0, 10)}</p>
-            </div>
-            {/* Laps */}
-            <div>
-              {session.laps.map(lap => {
+          <div key={session.id} className="group">
+            <SessionCard
+              session={session}
+              active={activeSessionId === session.id}
+              onActivate={() => setActiveSessionId(session.id)}
+              onRemove={() => removeSession(session.id)}
+            />
+            <div className="mb-1">
+              {session.laps.filter(lap => lap.is_valid).map(lap => {
                 const k = lapKey(session.id, lap.lap_number)
                 const ci = keyColorIndex[k] ?? -1
+                const isSelected = selectedLapKeys.includes(k)
                 return (
                   <LapRow
                     key={k}
@@ -100,21 +163,28 @@ export default function LapSidebar() {
                     isValid={lap.is_valid}
                     colorIndex={ci >= 0 ? ci : selectedLapKeys.length}
                     fastestTime={fastestTime}
+                    disabled={!isSelected && !isSessionCompatible(session)}
                   />
                 )
               })}
             </div>
-            {si < sessions.length - 1 && <div className="border-t border-border mt-2" />}
+            {si < sessions.length - 1 && <div className="border-t border-border/50 mx-3 my-1" />}
           </div>
         ))}
       </div>
 
-      <div className="px-4 py-3 border-t border-border shrink-0">
+      {/* Track map */}
+      <div className="shrink-0 border-t border-border p-2" style={{ height: 280 }}>
+        <TrackMap />
+      </div>
+
+      {/* Load button */}
+      <div className="px-3 py-3 border-t border-border shrink-0">
         <button
           onClick={handleOpen}
           className="w-full text-xs text-muted-foreground hover:text-foreground border border-border hover:border-foreground/30 rounded-lg px-3 py-2 text-center transition-colors"
         >
-          + Load file(s)…
+          {t('loadFiles')}
         </button>
       </div>
     </aside>

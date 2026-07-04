@@ -1,148 +1,179 @@
 import { useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { useSessionStore } from '@/store/session'
+import { useSessionStore, getLapColor, type Session } from '@/store/session'
 
-// Parse iRacing YAML into a tree: section → subsection → key: value
-type YamlTree = Record<string, Record<string, Record<string, string>>>
+type SetupTree = Record<string, Record<string, Record<string, string>>>
 
-function parseIracingYaml(yaml: string): YamlTree {
-  const tree: YamlTree = {}
-  let section = 'General'
-  let subsection = ''
+function parseCarSetup(yaml: string): SetupTree {
+  const result: SetupTree = {}
+  let inSetup = false
+  let group = ''
+  let subgroup = ''
 
-  for (const raw of yaml.split('\n')) {
-    const line = raw.trimEnd()
-    if (!line.trim() || line.trim().startsWith('#')) continue
-
+  for (const rawLine of yaml.split('\n')) {
+    const line = rawLine.trimEnd()
+    if (!line.trim()) continue
     const indent = line.length - line.trimStart().length
     const trimmed = line.trim()
 
-    // Top-level section (indent 0, ends with colon, no value after colon)
-    if (indent === 0 && trimmed.endsWith(':') && !trimmed.includes(': ')) {
-      section = trimmed.slice(0, -1)
-      subsection = ''
-      if (!tree[section]) tree[section] = {}
+    if (indent === 0) {
+      inSetup = trimmed === 'CarSetup:'
       continue
     }
+    if (!inSetup) continue
 
-    // Subsection (indent 1 space, ends with colon)
     if (indent === 1 && trimmed.endsWith(':') && !trimmed.includes(': ')) {
-      subsection = trimmed.slice(0, -1)
-      if (!tree[section]) tree[section] = {}
-      if (!tree[section][subsection]) tree[section][subsection] = {}
-      continue
+      group = trimmed.slice(0, -1)
+      result[group] = {}
+      subgroup = ''
+    } else if (indent === 2 && trimmed.endsWith(':') && !trimmed.includes(': ')) {
+      subgroup = trimmed.slice(0, -1)
+      if (group) result[group][subgroup] = {}
+    } else if (indent === 3 && group && subgroup) {
+      const ci = trimmed.indexOf(': ')
+      if (ci >= 0) result[group][subgroup][trimmed.slice(0, ci)] = trimmed.slice(ci + 2)
     }
-
-    // Key-value pair
-    const colonIdx = trimmed.indexOf(': ')
-    if (colonIdx < 0) continue
-    const key = trimmed.slice(0, colonIdx).trim()
-    const value = trimmed.slice(colonIdx + 2).trim()
-
-    if (!tree[section]) tree[section] = {}
-    const sub = subsection || '_root'
-    if (!tree[section][sub]) tree[section][sub] = {}
-    tree[section][sub][key] = value
   }
-
-  return tree
+  return result
 }
 
-// Sections to show and their display names
-const VISIBLE_SECTIONS: { key: string; label: string }[] = [
-  { key: 'WeekendInfo', label: 'Weekend / Track' },
-  { key: 'SessionInfo', label: 'Session' },
-  { key: 'CarSetup', label: 'Car Setup' },
-  { key: 'DriverInfo', label: 'Driver' },
-]
+// CamelCase → "Camel Case"
+function label(s: string) {
+  return s.replace(/([A-Z])/g, ' $1').replace(/^./, c => c.toUpperCase()).trim()
+}
 
-// Keys to hide (noisy/internal)
-const HIDDEN_KEYS = new Set([
-  'ResultsFastestLap', 'ResultsAverageLapTime', 'ResultsNumCautionFlags',
-  'ResultsNumCautionLaps', 'ResultsNumLeadChanges', 'ResultsLapsComplete',
-  'ResultsOfficial', 'SessionLapsRemain', 'SessionTimeRemain',
-  'SessionNum', 'SessionType', 'SessionTrackRubberState',
-  'PaceCarIdx', 'RadioTransmitCarIdx', 'RadioTransmitRadioIdx',
-  'RadioTransmitFrequencyIdx', 'SeriesID', 'SeasonID', 'SessionID',
-  'SubSessionID', 'LeagueID', 'QualifyScoring',
-])
+// Group header labels
+const GROUP_LABELS: Record<string, string> = {
+  TiresAero: 'TIRES & AERO',
+  Chassis: 'CHASSIS',
+}
 
-function SectionBlock({ title, data }: { title: string; data: Record<string, Record<string, string>> }) {
-  const [open, setOpen] = useState(true)
-  const entries = Object.entries(data)
-    .filter(([sub]) => sub !== '_root' || Object.keys(data['_root'] ?? {}).length > 0)
+// Subgroup display names
+function subLabel(s: string) {
+  const map: Record<string, string> = {
+    TireType: 'Tire Type',
+    LeftFront: 'Left Front',
+    LeftRear: 'Left Rear',
+    RightFront: 'Right Front',
+    RightRear: 'Right Rear',
+    AeroBalanceCalc: 'Aero Balance',
+    FrontBrakesLights: 'Front / Brakes',
+    Rear: 'Rear',
+    InCarAdjustments: 'In-Car Adjustments',
+  }
+  return map[s] ?? label(s)
+}
 
-  const rootEntries = Object.entries(data['_root'] ?? {})
-    .filter(([k]) => !HIDDEN_KEYS.has(k))
-
-  const subEntries = entries.filter(([sub]) => sub !== '_root')
-
-  if (rootEntries.length === 0 && subEntries.length === 0) return null
+function SubgroupBlock({
+  name,
+  setups,
+}: {
+  name: string
+  sessions?: Session[]
+  setups: (SetupTree | null)[]
+}) {
+  // Collect all keys across all sessions for this subgroup
+  const groupName = Object.keys(setups[0] ?? {}).find(g =>
+    setups[0]?.[g]?.[name] != null
+  ) ?? ''
+  const allKeys = Array.from(
+    new Set(setups.flatMap(st => Object.keys(st?.[groupName]?.[name] ?? {})))
+  )
+  if (allKeys.length === 0) return null
 
   return (
-    <div className="mb-4">
-      <button
-        onClick={() => setOpen(o => !o)}
-        className="flex items-center gap-1.5 w-full text-left mb-1.5"
-      >
-        <span className="text-xs font-semibold text-foreground/80 uppercase tracking-wider">{title}</span>
-        <span className="text-xs text-muted-foreground">{open ? '▾' : '▸'}</span>
-      </button>
-
-      {open && (
-        <div className="space-y-3">
-          {/* Root-level key-values */}
-          {rootEntries.length > 0 && (
-            <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
-              {rootEntries.map(([k, v]) => (
-                <div key={k} className="contents">
-                  <span className="text-xs text-muted-foreground truncate">{k}</span>
-                  <span className="text-xs text-foreground truncate" title={v}>{v || '—'}</span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Subsections */}
-          {subEntries.map(([sub, kvs]) => {
-            const filtered = Object.entries(kvs).filter(([k]) => !HIDDEN_KEYS.has(k))
-            if (filtered.length === 0) return null
-            return (
-              <div key={sub} className="pl-2 border-l border-border">
-                <p className="text-xs text-muted-foreground/70 mb-1 font-medium">{sub}</p>
-                <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
-                  {filtered.map(([k, v]) => (
-                    <div key={k} className="contents">
-                      <span className="text-xs text-muted-foreground truncate">{k}</span>
-                      <span className="text-xs text-foreground truncate" title={v}>{v || '—'}</span>
-                    </div>
-                  ))}
-                </div>
+    <div>
+      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest mb-1.5 mt-3">
+        {subLabel(name)}
+      </p>
+      <div className="space-y-0">
+        {allKeys.map(key => {
+          const vals = setups.map(st => st?.[groupName]?.[name]?.[key] ?? '—')
+          const allSame = vals.every(v => v === vals[0])
+          return (
+            <div key={key} className="flex items-center gap-2 py-0.5 border-b border-border/40 last:border-0">
+              <span className="text-xs text-muted-foreground flex-1 min-w-0 truncate">{label(key)}</span>
+              <div className="flex items-center gap-4 shrink-0">
+                {vals.map((v, i) => (
+                  <span
+                    key={i}
+                    className="text-xs font-mono tabular-nums"
+                    style={{ color: allSame ? undefined : getLapColor(i) }}
+                  >
+                    {v}
+                  </span>
+                ))}
               </div>
-            )
-          })}
-        </div>
-      )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function GroupCard({
+  groupKey,
+  sessions,
+  setups,
+}: {
+  groupKey: string
+  sessions: Session[]
+  setups: (SetupTree | null)[]
+}) {
+  const subgroups = Array.from(
+    new Set(setups.flatMap(st => Object.keys(st?.[groupKey] ?? {})))
+  )
+  if (subgroups.length === 0) return null
+
+  return (
+    <div className="bg-card rounded-xl border border-border shadow-sm p-4">
+      <div className="flex items-center justify-between mb-1">
+        <h3 className="text-sm font-bold text-foreground tracking-wide">
+          {GROUP_LABELS[groupKey] ?? groupKey.toUpperCase()}
+        </h3>
+        {sessions.length > 1 && (
+          <div className="flex items-center gap-3">
+            {sessions.map((s, i) => (
+              <span key={s.id} className="text-[10px] font-semibold" style={{ color: getLapColor(i) }}>
+                {s.track.split(' ')[0]}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="divide-y divide-border/30">
+        {subgroups.map(sub => (
+          <SubgroupBlock key={sub} name={sub} sessions={sessions} setups={setups} />
+        ))}
+      </div>
     </div>
   )
 }
 
 export default function SetupPanel() {
-  const { sessions } = useSessionStore()
-  const session = sessions[0]
-  const [yaml, setYaml] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const { sessions, activeSessionId } = useSessionStore()
+  const [setups, setSetups] = useState<(SetupTree | null)[]>([])
+  const [loading, setLoading] = useState(false)
+
+  const orderedSessions = [
+    sessions.find(s => s.id === activeSessionId),
+    ...sessions.filter(s => s.id !== activeSessionId),
+  ].filter(Boolean) as Session[]
 
   useEffect(() => {
-    if (!session) return
-    setYaml(null)
-    setError(null)
-    invoke<string>('get_session_yaml', { sessionId: session.id })
-      .then(setYaml)
-      .catch(e => setError(String(e)))
-  }, [session?.id])
+    if (orderedSessions.length === 0) { setSetups([]); return }
+    setLoading(true)
+    Promise.all(
+      orderedSessions.map(s =>
+        invoke<string>('get_session_yaml', { sessionId: s.id })
+          .then(yaml => parseCarSetup(yaml))
+          .catch(() => null)
+      )
+    ).then(results => { setSetups(results); setLoading(false) })
+  }, [orderedSessions.map(s => s.id).join(',')])
 
-  if (!session) {
+  if (orderedSessions.length === 0) {
     return (
       <div className="flex-1 flex items-center justify-center">
         <p className="text-sm text-muted-foreground">No session loaded</p>
@@ -150,31 +181,23 @@ export default function SetupPanel() {
     )
   }
 
-  if (error) {
-    return (
-      <div className="p-4">
-        <p className="text-xs text-destructive">{error}</p>
-      </div>
-    )
-  }
-
-  if (!yaml) {
+  if (loading) {
     return (
       <div className="flex-1 flex items-center justify-center">
-        <p className="text-xs text-muted-foreground">Loading setup data…</p>
+        <p className="text-xs text-muted-foreground">Loading setup…</p>
       </div>
     )
   }
 
-  const tree = parseIracingYaml(yaml)
+  const groupKeys = Array.from(
+    new Set(setups.flatMap(st => Object.keys(st ?? {})))
+  ).filter(k => k !== 'UpdateCount')
 
   return (
-    <div className="h-full overflow-y-auto px-4 py-3">
-      {VISIBLE_SECTIONS.map(({ key, label }) => {
-        const data = tree[key]
-        if (!data) return null
-        return <SectionBlock key={key} title={label} data={data} />
-      })}
+    <div className="h-full overflow-y-auto p-4 space-y-4 bg-background">
+      {groupKeys.map(gk => (
+        <GroupCard key={gk} groupKey={gk} sessions={orderedSessions} setups={setups} />
+      ))}
     </div>
   )
 }

@@ -4,8 +4,8 @@ export type ProviderType = 'Ollama' | 'OpenAI' | 'Gemini'
 
 export interface ProviderConfig {
   type: ProviderType
-  base_url?: string   // Ollama only
-  api_key?: string    // OpenAI / Gemini
+  base_url?: string
+  api_key?: string
   model: string
 }
 
@@ -14,15 +14,33 @@ export interface AiMessage {
   content: string
 }
 
+export type Language = 'en' | 'de' | 'fr' | 'es' | 'it' | 'pt' | 'nl' | 'pl' | 'ru' | 'ja' | 'zh'
+
+export const LANGUAGES: Record<Language, string> = {
+  en: 'English',
+  de: 'Deutsch',
+  fr: 'Français',
+  es: 'Español',
+  it: 'Italiano',
+  pt: 'Português',
+  nl: 'Nederlands',
+  pl: 'Polski',
+  ru: 'Русский',
+  ja: '日本語',
+  zh: '中文',
+}
+
 interface AiStore {
   provider: ProviderConfig
-  messages: AiMessage[]
+  language: Language
+  chatHistory: Record<string, AiMessage[]>  // keyed by sessionId
   streaming: boolean
   setProvider: (p: ProviderConfig) => void
-  addMessage: (m: AiMessage) => void
-  appendToLast: (token: string) => void
+  setLanguage: (l: Language) => void
+  addMessage: (sessionId: string, m: AiMessage) => void
+  appendToLast: (sessionId: string, token: string) => void
   setStreaming: (v: boolean) => void
-  clearMessages: () => void
+  clearMessages: (sessionId: string) => void
 }
 
 const DEFAULT_PROVIDER: ProviderConfig = {
@@ -41,7 +59,8 @@ function loadProvider(): ProviderConfig {
 
 export const useAiStore = create<AiStore>((set) => ({
   provider: loadProvider(),
-  messages: [],
+  language: (localStorage.getItem('ai_language') as Language) ?? 'en',
+  chatHistory: {},
   streaming: false,
 
   setProvider: (p) => {
@@ -49,17 +68,29 @@ export const useAiStore = create<AiStore>((set) => ({
     set({ provider: p })
   },
 
-  addMessage: (m) => set(s => ({ messages: [...s.messages, m] })),
+  setLanguage: (l) => {
+    localStorage.setItem('ai_language', l)
+    set({ language: l })
+  },
 
-  appendToLast: (token) => set(s => {
-    const msgs = [...s.messages]
+  addMessage: (sessionId, m) => set(s => ({
+    chatHistory: {
+      ...s.chatHistory,
+      [sessionId]: [...(s.chatHistory[sessionId] ?? []), m],
+    },
+  })),
+
+  appendToLast: (sessionId, token) => set(s => {
+    const msgs = [...(s.chatHistory[sessionId] ?? [])]
     if (msgs.length === 0) return s
     const last = msgs[msgs.length - 1]
     msgs[msgs.length - 1] = { ...last, content: last.content + token }
-    return { messages: msgs }
+    return { chatHistory: { ...s.chatHistory, [sessionId]: msgs } }
   }),
 
   setStreaming: (v) => set({ streaming: v }),
 
-  clearMessages: () => set({ messages: [] }),
+  clearMessages: (sessionId) => set(s => ({
+    chatHistory: { ...s.chatHistory, [sessionId]: [] },
+  })),
 }))

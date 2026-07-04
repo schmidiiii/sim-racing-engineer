@@ -2,14 +2,18 @@ import { useRef, useEffect, useState, KeyboardEvent } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { useSessionStore } from '@/store/session'
-import { useAiStore } from '@/store/ai'
+import { useAiStore, LANGUAGES } from '@/store/ai'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { useT } from '@/lib/i18n'
 
 export default function ChatThread() {
-  const { sessions } = useSessionStore()
-  const session = sessions[0]
-  const { provider, messages, streaming, addMessage, appendToLast, setStreaming } = useAiStore()
+  const t = useT()
+  const { sessions, activeSessionId, activeTabLabel } = useSessionStore()
+  const session = sessions.find(s => s.id === activeSessionId) ?? sessions[0]
+  const { provider, language, chatHistory, streaming, addMessage, appendToLast, setStreaming } = useAiStore()
+  const chatKey = session ? `${session.id}:${activeTabLabel}` : ''
+  const messages = chatHistory[chatKey] ?? []
   const [input, setInput] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)
 
@@ -20,11 +24,12 @@ export default function ChatThread() {
   const sendMessage = async () => {
     if (!input.trim() || streaming || !session) return
 
+    const key = chatKey
     const userMsg = input.trim()
     setInput('')
 
-    addMessage({ role: 'user', content: userMsg })
-    addMessage({ role: 'assistant', content: '' })
+    addMessage(key, { role: 'user', content: userMsg })
+    addMessage(key, { role: 'assistant', content: '' })
     setStreaming(true)
 
     const eventId = crypto.randomUUID()
@@ -33,7 +38,7 @@ export default function ChatThread() {
     let unlistenDone: (() => void) | undefined
 
     const [ut, ud] = await Promise.all([
-      listen<string>(`ai-token-${eventId}`, (e) => appendToLast(e.payload)),
+      listen<string>(`ai-token-${eventId}`, (e) => appendToLast(key, e.payload)),
       listen<void>(`ai-done-${eventId}`, () => {
         setStreaming(false)
         unlistenToken?.()
@@ -43,8 +48,22 @@ export default function ChatThread() {
     unlistenToken = ut
     unlistenDone = ud
 
+    const langName = LANGUAGES[language] ?? 'English'
+    const sessionCtx = session
+      ? ` The driver is analysing an iRacing session at ${session.track} in the ${session.car}.`
+      : ''
+    const systemMsg =
+      `You are the driver's personal race engineer for iRacing sim-racing.${sessionCtx} ` +
+      `Your tone is professional, direct, data-driven, and constructively critical — ` +
+      `no filler praise ("great job", "well done"), no hedging. You hunt for tenths left on track. ` +
+      `Use motorsport vocabulary: trail-braking, apex, throttle application, rotation, ` +
+      `understeer, oversteer, track limits, minimum speed, brake bias. ` +
+      `Every question the driver asks is about their iRacing driving performance — treat it that way. ` +
+      `Respond ONLY in ${langName}. Never switch language.`
+
     const chatMessages = [
-      ...messages.filter(m => m.content.trim()),
+      { role: 'system' as const, content: systemMsg },
+      ...messages.filter(m => m.content.trim() && m.role !== 'system'),
       { role: 'user' as const, content: userMsg },
     ]
 
@@ -53,7 +72,7 @@ export default function ChatThread() {
       messages: chatMessages,
       eventId,
     }).catch((err: unknown) => {
-      appendToLast(`\n\nError: ${String(err)}`)
+      appendToLast(key, `\n\nError: ${String(err)}`)
       setStreaming(false)
     })
   }
@@ -67,8 +86,21 @@ export default function ChatThread() {
 
   return (
     <>
+      {/* Session indicator */}
+      {session && (
+        <div className="shrink-0 pb-2 mb-1 border-b border-border">
+          <p className="text-[10px] font-medium text-muted-foreground truncate leading-snug">{session.track}</p>
+          <p className="text-[10px] text-muted-foreground/60 truncate">{session.car} · {session.date.slice(0, 10)}</p>
+        </div>
+      )}
+
       {/* Messages */}
       <div className="flex-1 overflow-y-auto space-y-3 pr-1">
+        {messages.length === 0 && (
+          <p className="text-xs text-muted-foreground/50 text-center pt-6">
+            {t('noMessages')}
+          </p>
+        )}
         {messages.map((msg, i) => (
           <div key={i} className={msg.role === 'user' ? 'flex justify-end' : ''}>
             {msg.role === 'user' ? (
@@ -107,7 +139,7 @@ export default function ChatThread() {
       <div className="shrink-0 pt-2 border-t border-border">
         <textarea
           className="w-full bg-secondary/50 text-foreground text-xs rounded px-3 py-2 resize-none focus:outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground"
-          placeholder={session ? 'Ask a question… (Enter to send)' : 'Load a session first'}
+          placeholder={session ? t('askQuestion') : t('loadSessionFirst')}
           rows={2}
           value={input}
           onChange={e => setInput(e.target.value)}
