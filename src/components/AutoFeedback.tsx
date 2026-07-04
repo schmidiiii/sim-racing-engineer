@@ -11,7 +11,8 @@ function fmtTime(t: number): string {
 
 // Channels that must be present for a tab to have meaningful data
 const TAB_CHANNELS: Record<string, string[]> = {
-  'Braking':     ['Brake', 'Speed'],
+  'Braking':      ['Brake', 'Speed'],
+  'Corner Speed': ['Speed'],
   'Ride Height': ['RFrideHeight', 'LFrideHeight', 'RRrideHeight', 'LRrideHeight'],
   'Rake':        ['Pitch', 'Roll', 'RFrideHeight', 'RRrideHeight'],
   'Wheel Speed': ['RFspeed', 'LFspeed', 'RRspeed', 'LRspeed'],
@@ -89,6 +90,14 @@ function buildTabPrompt(
   const ctx = `Car: ${car} | Track: ${track}\nLaps:\n${lapLines}${spread}\n\n`
 
   switch (tabLabel) {
+    case 'Corner Speed':
+      return ctx +
+        `You are on the Corner Speed tab showing minimum speed through each corner. ` +
+        `Tell me specifically which corners I'm losing the most speed in at ${track} with the ${car}. ` +
+        `What is the minimum speed target for the key corners? ` +
+        `Is it better to sacrifice entry speed for a better exit, or is there a corner where I can carry more speed through? ` +
+        `Name the corners by turn number and name. Be direct and specific.`
+
     case 'Braking':
       return ctx +
         `You are on the Brake Analysis tab. Your fastest lap is ${fmtTime(bestTime)}. ` +
