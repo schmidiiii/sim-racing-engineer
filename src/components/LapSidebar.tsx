@@ -95,7 +95,7 @@ function SessionCard({ session, active, onActivate, onRemove }: {
         </div>
         <button
           onClick={e => { e.stopPropagation(); onRemove() }}
-          className="opacity-0 group-hover/card:opacity-100 text-muted-foreground/40 hover:text-destructive transition-all mt-0.5 shrink-0 p-0.5 rounded"
+          className="text-muted-foreground/40 hover:text-destructive transition-colors mt-0.5 shrink-0 p-0.5 rounded hover:bg-destructive/10"
           title={t('removeSession')}
         >
           <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
