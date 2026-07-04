@@ -215,7 +215,7 @@ export default function Settings() {
                   disabled={loadStatus === 'loading'}
                   className="text-xs font-semibold px-4 py-2 rounded-lg bg-primary hover:bg-primary/90 text-primary-foreground transition-colors disabled:opacity-50"
                 >
-                  {loadStatus === 'loading' ? t('loadingModel') : t('apply')}
+                  {loadStatus === 'loading' ? t('loadingModel') : t('loadModel')}
                 </button>
                 {loadStatus === 'ready' && <span className="text-xs font-medium text-green-600">{t('modelReady')}</span>}
                 {loadStatus === 'error' && <span className="text-xs font-medium text-destructive">{t('failedToLoad')}</span>}
@@ -321,7 +321,7 @@ export default function Settings() {
         <div className="px-5 py-4 border-t border-border bg-secondary/20 flex items-center gap-3">
           <button
             onClick={handleSave}
-            className="bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-semibold px-4 py-2 rounded-lg transition-colors"
+            className="border border-border bg-secondary hover:bg-secondary/70 text-foreground text-xs font-semibold px-4 py-2 rounded-lg transition-colors"
           >
             {t('save')}
           </button>

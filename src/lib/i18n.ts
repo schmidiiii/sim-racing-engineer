@@ -5,6 +5,7 @@ const EN = {
   save: 'Save',
   saved: 'Saved ✓',
   apply: 'Apply & load model',
+  loadModel: 'Load model',
   // Status
   loading: 'Loading…',
   loadingModel: 'Loading model…',
@@ -90,7 +91,7 @@ type Dict = Partial<Record<TKey, string>>
 
 const DICT: Record<string, Dict> = {
   de: {
-    save: 'Speichern', saved: 'Gespeichert ✓', apply: 'Anwenden & Modell laden',
+    save: 'Speichern', saved: 'Gespeichert ✓', apply: 'Anwenden & Modell laden', loadModel: 'Modell laden',
     loading: 'Lädt…', loadingModel: 'Modell wird geladen…', modelReady: 'Modell bereit ✓',
     failedToLoad: 'Fehler beim Laden', ollamaNotReachable: 'Ollama nicht erreichbar', available: 'verfügbar',
     tabGeneral: 'Allgemein', tabRideHeight: 'Bodenfreiheit', tabRake: 'Neigung',
