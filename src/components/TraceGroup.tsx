@@ -6,6 +6,7 @@ import TraceChart, { LapTrace } from '@/components/TraceChart'
 import SetupView from '@/components/SetupView'
 import DeltaView from '@/components/DeltaView'
 import BrakeAnalysis from '@/components/BrakeAnalysis'
+import CornerSpeed from '@/components/CornerSpeed'
 import { useT, translateChannelLabel } from '@/lib/i18n'
 
 interface LapChannelData {
@@ -199,6 +200,7 @@ export default function TraceGroup() {
       {group.viewType === 'setup' && <SetupView />}
       {group.viewType === 'delta' && <DeltaView />}
       {group.viewType === 'braking' && <BrakeAnalysis />}
+      {group.viewType === 'cornerSpeed' && <CornerSpeed />}
 
       {!group.viewType && <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-background">
 

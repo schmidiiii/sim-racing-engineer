@@ -1,4 +1,5 @@
 import { open } from '@tauri-apps/plugin-dialog'
+import { invoke } from '@tauri-apps/api/core'
 import { useSessionStore, getLapColor, lapKey, type Session } from '@/store/session'
 import TrackMap from '@/components/TrackMap'
 import { useT } from '@/lib/i18n'
@@ -58,6 +59,11 @@ function SessionCard({ session, active, onActivate, onRemove }: {
   onRemove: () => void
 }) {
   const t = useT()
+  const openTrackGuide = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    const url = `https://www.youtube.com/results?search_query=${encodeURIComponent(`iRacing ${session.track} track guide onboard`)}`
+    invoke('open_url', { url })
+  }
   return (
     <div
       className={`group/card mx-2 mb-1 rounded-lg border transition-colors cursor-pointer ${
@@ -76,7 +82,16 @@ function SessionCard({ session, active, onActivate, onRemove }: {
             <span className="text-xs font-semibold text-foreground truncate leading-tight">{session.track}</span>
           </div>
           <span className="text-[11px] text-muted-foreground truncate block leading-tight">{session.car}</span>
-          <span className="text-[10px] text-muted-foreground/60">{session.date.slice(0, 10)}</span>
+          <div className="flex items-center justify-between mt-0.5">
+            <span className="text-[10px] text-muted-foreground/60">{session.date.slice(0, 10)}</span>
+            <button
+              onClick={openTrackGuide}
+              className="opacity-0 group-hover/card:opacity-100 text-[9px] font-medium text-muted-foreground/60 hover:text-primary transition-all flex items-center gap-0.5"
+              title={t('trackGuide')}
+            >
+              ▶ {t('trackGuide')}
+            </button>
+          </div>
         </div>
         <button
           onClick={e => { e.stopPropagation(); onRemove() }}
@@ -87,6 +102,69 @@ function SessionCard({ session, active, onActivate, onRemove }: {
             <path d="M2 2l8 8M10 2l-8 8"/>
           </svg>
         </button>
+      </div>
+    </div>
+  )
+}
+
+function fmtTime(t: number): string {
+  if (t <= 0 || !isFinite(t)) return '–'
+  const m = Math.floor(t / 60)
+  const s = (t % 60).toFixed(3).padStart(6, '0')
+  return `${m}:${s}`
+}
+
+function ConsistencyPanel() {
+  const t = useT()
+  const { sessions, selectedLapKeys } = useSessionStore()
+
+  const selectedLaps = selectedLapKeys
+    .map(key => {
+      const idx = key.lastIndexOf(':')
+      const sessionId = key.slice(0, idx)
+      const lapNum = parseInt(key.slice(idx + 1))
+      const sess = sessions.find(s => s.id === sessionId)
+      return sess?.laps.find(l => l.lap_number === lapNum)
+    })
+    .filter((l): l is NonNullable<typeof l> => !!l && l.is_valid && l.lap_time > 10)
+
+  if (selectedLaps.length < 2) return null
+
+  const times = selectedLaps.map(l => l.lap_time)
+  const mean = times.reduce((a, b) => a + b, 0) / times.length
+  const stddev = Math.sqrt(times.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / times.length)
+  const consistency = Math.max(0, Math.min(100, (1 - stddev / mean) * 100))
+  const spread = Math.max(...times) - Math.min(...times)
+  const best = Math.min(...times)
+
+  const scoreColor =
+    consistency >= 97 ? 'text-emerald-400' :
+    consistency >= 92 ? 'text-amber-400' :
+    'text-red-400'
+
+  const barColor =
+    consistency >= 97 ? 'bg-emerald-400' :
+    consistency >= 92 ? 'bg-amber-400' :
+    'bg-red-400'
+
+  return (
+    <div className="shrink-0 border-t border-border px-3 py-2.5 bg-secondary/20">
+      <div className="flex items-center justify-between mb-1.5">
+        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">{t('consistencyScore')}</p>
+        <p className={`text-sm font-bold tabular-nums ${scoreColor}`}>{consistency.toFixed(1)}%</p>
+      </div>
+      <div className="h-1 bg-secondary rounded-full mb-2 overflow-hidden">
+        <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${consistency}%` }} />
+      </div>
+      <div className="grid grid-cols-2 gap-x-3">
+        <div>
+          <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wide">Best</p>
+          <p className="text-[11px] font-mono text-foreground tabular-nums">{fmtTime(best)}</p>
+        </div>
+        <div>
+          <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wide">{t('lapSpread')}</p>
+          <p className="text-[11px] font-mono text-foreground tabular-nums">+{spread.toFixed(3)}s</p>
+        </div>
       </div>
     </div>
   )
@@ -172,6 +250,9 @@ export default function LapSidebar() {
           </div>
         ))}
       </div>
+
+      {/* Consistency score */}
+      <ConsistencyPanel />
 
       {/* Track map */}
       <div className="shrink-0 border-t border-border p-2" style={{ height: 280 }}>

@@ -90,6 +90,14 @@ export const CHANNEL_GROUPS: ChannelGroupDef[] = [
     yDomains: {},
   },
   {
+    label: 'Corner Speed',
+    viewType: 'cornerSpeed',
+    channels: [],
+    units: {},
+    transforms: {},
+    yDomains: {},
+  },
+  {
     label: 'Ride Height',
     channels: ['LFrideHeight', 'RFrideHeight', 'LRrideHeight', 'RRrideHeight'],
     units: { LFrideHeight: 'mm', RFrideHeight: 'mm', LRrideHeight: 'mm', RRrideHeight: 'mm' },
