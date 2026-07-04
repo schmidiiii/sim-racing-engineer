@@ -32,6 +32,7 @@ export default function TraceGroup() {
   const [activeGroup, setActiveGroup] = useState(0)
   const [traces, setTraces] = useState<Record<string, LapTrace[]>>({})
   const [fetchError, setFetchError] = useState<string | null>(null)
+  const [isFetching, setIsFetching] = useState(false)
   const [hasZoom, setHasZoom] = useState(false)
   const zoomRef = useRef<[number, number] | null>(null)
   const redrawsRef = useRef(new Set<() => void>())
@@ -75,6 +76,7 @@ export default function TraceGroup() {
     })
 
     const fetchId = ++fetchIdRef.current
+    setIsFetching(true)
 
     const fetchAll = async () => {
       const nextTraces: Record<string, LapTrace[]> = {}
@@ -132,6 +134,7 @@ export default function TraceGroup() {
 
       if (fetchId !== fetchIdRef.current) return
       setTraces(nextTraces)
+      setIsFetching(false)
     }
 
     fetchAll()
@@ -234,8 +237,17 @@ export default function TraceGroup() {
           </div>
         )}
 
+        {/* Loading state */}
+        {isFetching && (
+          <div className="bg-card rounded-xl border border-border shadow-sm px-4 py-8 flex items-center justify-center gap-2">
+            <div className="h-3 w-3 rounded-full bg-primary animate-bounce [animation-delay:-0.2s]" />
+            <div className="h-3 w-3 rounded-full bg-primary animate-bounce [animation-delay:-0.1s]" />
+            <div className="h-3 w-3 rounded-full bg-primary animate-bounce" />
+          </div>
+        )}
+
         {/* Chart cards — only render channels that have data */}
-        {selectedLapKeys.length > 0 && (() => {
+        {!isFetching && selectedLapKeys.length > 0 && (() => {
           const withData = group.channels.filter(ch => (traces[ch]?.length ?? 0) > 0)
           const fetched = group.channels.some(ch => traces[ch] !== undefined)
           if (fetched && withData.length === 0) {
