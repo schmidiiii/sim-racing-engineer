@@ -8,25 +8,25 @@ export default function TitleBar() {
   return (
     <div
       data-tauri-drag-region
-      className="h-8 shrink-0 flex items-center justify-end bg-[#181b21] select-none"
+      className="h-8 shrink-0 flex items-center justify-end bg-[#EAE7E8] dark:bg-[#181b21] select-none"
     >
       <button
         onClick={() => win.minimize()}
-        className="h-8 w-10 flex items-center justify-center text-zinc-400 hover:bg-zinc-800 hover:text-white transition-colors text-sm"
+        className="h-8 w-10 flex items-center justify-center text-zinc-500 dark:text-zinc-400 hover:bg-black/10 dark:hover:bg-zinc-800 hover:text-foreground dark:hover:text-white transition-colors text-sm"
         aria-label="Minimize"
       >
         ─
       </button>
       <button
         onClick={() => win.toggleMaximize()}
-        className="h-8 w-10 flex items-center justify-center text-zinc-400 hover:bg-zinc-800 hover:text-white transition-colors text-sm"
+        className="h-8 w-10 flex items-center justify-center text-zinc-500 dark:text-zinc-400 hover:bg-black/10 dark:hover:bg-zinc-800 hover:text-foreground dark:hover:text-white transition-colors text-sm"
         aria-label="Maximize"
       >
         □
       </button>
       <button
         onClick={() => win.close()}
-        className="h-8 w-10 flex items-center justify-center text-zinc-400 hover:bg-red-600 hover:text-white transition-colors text-sm"
+        className="h-8 w-10 flex items-center justify-center text-zinc-500 dark:text-zinc-400 hover:bg-red-500 hover:text-white transition-colors text-sm"
         aria-label="Close"
       >
         ✕

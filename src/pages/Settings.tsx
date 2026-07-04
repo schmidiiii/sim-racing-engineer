@@ -105,8 +105,12 @@ export default function Settings() {
   }
 
   const handleLoadModel = async () => {
-    if (draft.type !== 'Ollama') return
     setProvider(draft)
+    if (draft.type !== 'Ollama') {
+      setLoadStatus('ready')
+      setTimeout(() => setLoadStatus('idle'), 3000)
+      return
+    }
     setLoadStatus('loading')
     try {
       const res = await fetch(`${ollamaUrl}/api/generate`, {
@@ -255,6 +259,16 @@ export default function Settings() {
                   value={draft.type === 'OpenAI' ? draft.model : ''}
                   onChange={e => setDraft({ ...draft, type: 'OpenAI' as const, model: e.target.value })} />
               </div>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={handleLoadModel}
+                  disabled={loadStatus === 'loading'}
+                  className="text-xs font-semibold px-4 py-2 rounded-lg bg-primary hover:bg-primary/90 text-primary-foreground transition-colors disabled:opacity-50"
+                >
+                  {t('loadModel')}
+                </button>
+                {loadStatus === 'ready' && activeTab === 'OpenAI' && <span className="text-xs font-medium text-green-600">{t('modelReady')}</span>}
+              </div>
             </>
           )}
 
@@ -313,6 +327,16 @@ export default function Settings() {
                     value={draft.type === 'Gemini' ? draft.model : ''}
                     onChange={e => setDraft({ ...draft, type: 'Gemini' as const, model: e.target.value })} />
                 )}
+              </div>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={handleLoadModel}
+                  disabled={loadStatus === 'loading'}
+                  className="text-xs font-semibold px-4 py-2 rounded-lg bg-primary hover:bg-primary/90 text-primary-foreground transition-colors disabled:opacity-50"
+                >
+                  {t('loadModel')}
+                </button>
+                {loadStatus === 'ready' && activeTab === 'Gemini' && <span className="text-xs font-medium text-green-600">{t('modelReady')}</span>}
               </div>
             </>
           )}
