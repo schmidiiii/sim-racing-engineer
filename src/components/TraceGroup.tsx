@@ -34,7 +34,6 @@ export default function TraceGroup() {
   const [traces, setTraces] = useState<Record<string, LapTrace[]>>({})
   const [fetchError, setFetchError] = useState<string | null>(null)
   const [isFetching, setIsFetching] = useState(false)
-  const [hasZoom, setHasZoom] = useState(false)
   const zoomRef = useRef<[number, number] | null>(null)
   const redrawsRef = useRef(new Set<() => void>())
   // Cache: `${sessionId}:${lapNumber}:${channel}` → already-transformed samples+timestamps+lapDistPct
@@ -44,7 +43,6 @@ export default function TraceGroup() {
 
   const handleZoom = useCallback((domain: [number, number] | null) => {
     zoomRef.current = domain
-    setHasZoom(!!domain)
     redrawsRef.current.forEach(fn => fn())
   }, [])
 
@@ -171,7 +169,6 @@ export default function TraceGroup() {
               setActiveGroup(i)
               setActiveTabLabel(g.label)
               zoomRef.current = null
-              setHasZoom(false)
               redrawsRef.current.forEach(fn => fn())
             }}
             className={`px-3 py-2 text-xs font-semibold border-b-2 -mb-px transition-colors whitespace-nowrap shrink-0 ${
