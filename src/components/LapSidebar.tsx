@@ -227,6 +227,18 @@ export default function LapSidebar() {
   const keyColorIndex: Record<string, number> = {}
   selectedLapKeys.forEach((k, i) => { keyColorIndex[k] = i })
 
+  // Determine compatibility: a session is incompatible if track OR car differs
+  // from any already-selected session. Compatible sessions can be added manually.
+  const selectedSessionIds = new Set(selectedLapKeys.map(k => {
+    const idx = k.lastIndexOf(':')
+    return k.slice(0, idx)
+  }))
+  const selectedSessions = sessions.filter(s => selectedSessionIds.has(s.id))
+  const refTrack = selectedSessions[0]?.track ?? null
+  const refCar = selectedSessions[0]?.car ?? null
+  const isSessionCompatible = (s: typeof sessions[0]) =>
+    !refTrack || !refCar || (s.track === refTrack && s.car === refCar)
+
   return (
     <aside className="w-72 shrink-0 border-r border-border bg-card flex flex-col overflow-hidden">
 
@@ -250,26 +262,25 @@ export default function LapSidebar() {
               onActivate={() => setActiveSessionId(session.id)}
               onRemove={() => removeSession(session.id)}
             />
-            {activeSessionId === session.id && (
-              <div className="mb-1">
-                {session.laps.filter(lap => lap.is_valid).map(lap => {
-                  const k = lapKey(session.id, lap.lap_number)
-                  const ci = keyColorIndex[k] ?? -1
-                  return (
-                    <LapRow
-                      key={k}
-                      sessionId={session.id}
-                      lapNumber={lap.lap_number}
-                      lapTime={lap.lap_time}
-                      isValid={lap.is_valid}
-                      colorIndex={ci >= 0 ? ci : selectedLapKeys.length}
-                      fastestTime={fastestTime}
-                      disabled={false}
-                    />
-                  )
-                })}
-              </div>
-            )}
+            <div className="mb-1">
+              {activeSessionId === session.id && session.laps.filter(lap => lap.is_valid).map(lap => {
+                const k = lapKey(session.id, lap.lap_number)
+                const ci = keyColorIndex[k] ?? -1
+                const isSelected = selectedLapKeys.includes(k)
+                return (
+                  <LapRow
+                    key={k}
+                    sessionId={session.id}
+                    lapNumber={lap.lap_number}
+                    lapTime={lap.lap_time}
+                    isValid={lap.is_valid}
+                    colorIndex={ci >= 0 ? ci : selectedLapKeys.length}
+                    fastestTime={fastestTime}
+                    disabled={!isSelected && !isSessionCompatible(session)}
+                  />
+                )
+              })}
+            </div>
             {si < sessions.length - 1 && <div className="border-t border-border/50 mx-3 my-1" />}
           </div>
         ))}
