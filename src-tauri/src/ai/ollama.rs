@@ -35,7 +35,11 @@ pub async fn stream_ollama(
         .map_err(|e| e.to_string())?;
 
     if !response.status().is_success() {
-        return Err(format!("Ollama error {}", response.status()));
+        let status = response.status().as_u16();
+        return Err(match status {
+            404 => format!("Ollama model \"{}\" not found — run: ollama pull {}", model, model),
+            _ => format!("Ollama error {} — make sure ollama serve is running", status),
+        });
     }
 
     let mut stream = response.bytes_stream();
