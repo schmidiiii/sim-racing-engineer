@@ -36,7 +36,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDMwMUQ0QTIwMjQyNEYyQTMKUldTajhpUWtJRW9kTUw3TWY1SVhUam5WTTZXb3Q3VnRmdDdSOXVISWZqVExFL21qeWwrVWEvaXMK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENDNkVBRjhEQTUxMjYxQUYKUldTdllSS2xqYTl1ekd5dFRMNSs3RkVRMUZGNzgxTUN2TXYybzVSbkNHRHlZMzZ0Zzlmb1ZPNjYK",
       "endpoints": [
         "https://github.com/schmidiiii/sim-racing-engineer/releases/latest/download/latest.json"
       ]
