@@ -28,13 +28,6 @@ interface Transform {
 
 type MapChannel = 'Speed' | 'Throttle' | 'Brake' | 'Gear'
 
-const MAP_CHANNELS: { key: MapChannel; label: string }[] = [
-  { key: 'Speed', label: 'Speed' },
-  { key: 'Throttle', label: 'Gas' },
-  { key: 'Brake', label: 'Bremse' },
-  { key: 'Gear', label: 'Gang' },
-]
-
 const GEAR_COLORS = ['#888', '#6366f1', '#38bdf8', '#34d399', '#fbbf24', '#fb923c', '#ef4444', '#e879f9']
 
 function valueToColor(val: number, mode: MapChannel, lo: number, hi: number): string {
@@ -94,6 +87,13 @@ export default function TrackMap() {
   const [points, setPoints] = useState<Point[]>([])
   const [loading, setLoading] = useState(false)
   const [channel, setChannel] = useState<MapChannel>('Speed')
+
+  const mapChannels: { key: MapChannel; label: string }[] = [
+    { key: 'Speed', label: 'Speed' },
+    { key: 'Throttle', label: t('mapThrottle') },
+    { key: 'Brake', label: t('mapBrake') },
+    { key: 'Gear', label: t('mapGear') },
+  ]
 
   useEffect(() => {
     if (selectedLapKeys.length === 0 || sessions.length === 0) return
@@ -182,7 +182,7 @@ export default function TrackMap() {
     <div className="h-full flex flex-col">
       {/* Channel selector */}
       <div className="shrink-0 flex items-center justify-center gap-1 pt-1.5 pb-0.5">
-        {MAP_CHANNELS.map(opt => (
+        {mapChannels.map(opt => (
           <button
             key={opt.key}
             onClick={() => setChannel(opt.key)}
