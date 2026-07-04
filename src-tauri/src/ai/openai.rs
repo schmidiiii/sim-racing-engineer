@@ -18,6 +18,33 @@ struct ChatChunk {
     choices: Vec<Choice>,
 }
 
+#[derive(Deserialize)]
+struct OpenAiError {
+    error: OpenAiErrorDetail,
+}
+
+#[derive(Deserialize)]
+struct OpenAiErrorDetail {
+    message: String,
+    code: Option<String>,
+}
+
+fn friendly_openai_error(status: u16, body: &str) -> String {
+    if let Ok(e) = serde_json::from_str::<OpenAiError>(body) {
+        let code = e.error.code.as_deref().unwrap_or("");
+        return match code {
+            "insufficient_quota" =>
+                "OpenAI quota exceeded — add credits at platform.openai.com/settings/billing".to_string(),
+            "invalid_api_key" =>
+                "Invalid OpenAI API key — check your key at platform.openai.com/api-keys".to_string(),
+            "rate_limit_exceeded" =>
+                "OpenAI rate limit — wait a moment and try again".to_string(),
+            _ => format!("OpenAI error {}: {}", status, e.error.message),
+        };
+    }
+    format!("OpenAI error {} — check your API key and billing", status)
+}
+
 pub async fn stream_openai(
     api_key: &str,
     model: &str,
@@ -40,9 +67,9 @@ pub async fn stream_openai(
         .map_err(|e| e.to_string())?;
 
     if !response.status().is_success() {
-        let status = response.status();
+        let status = response.status().as_u16();
         let body = response.text().await.unwrap_or_default();
-        return Err(format!("OpenAI error {}: {}", status, body));
+        return Err(friendly_openai_error(status, &body));
     }
 
     let mut stream = response.bytes_stream();
