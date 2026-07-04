@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 import { useAiStore, ProviderConfig, ProviderType } from '@/store/ai'
 import { useT } from '@/lib/i18n'
 
@@ -44,11 +45,8 @@ export default function Settings() {
     const id = ++fetchRef.current
     setModelsStatus('loading')
     try {
-      const res = await fetch(`${baseUrl}/api/tags`)
-      if (!res.ok) throw new Error()
-      const data = await res.json()
+      const names = await invoke<string[]>('list_ollama_models', { baseUrl })
       if (id !== fetchRef.current) return
-      const names: string[] = (data.models ?? []).map((m: { name: string }) => m.name)
       setOllamaModels(names)
       setModelsStatus(names.length ? 'ok' : 'error')
       if (names.length && !names.includes((draft as { model: string }).model)) {
@@ -113,12 +111,7 @@ export default function Settings() {
     }
     setLoadStatus('loading')
     try {
-      const res = await fetch(`${ollamaUrl}/api/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: draft.model, keep_alive: '10m' }),
-      })
-      if (!res.ok) throw new Error()
+      await invoke('preload_ollama_model', { baseUrl: ollamaUrl, model: draft.model })
       setLoadStatus('ready')
       setTimeout(() => setLoadStatus('idle'), 4000)
     } catch {
