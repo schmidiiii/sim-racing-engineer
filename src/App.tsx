@@ -2,8 +2,18 @@ import { useState, useEffect } from 'react'
 import Viewer from '@/pages/Viewer'
 import Settings from '@/pages/Settings'
 import UpdateBanner from '@/components/UpdateBanner'
-import TitleBar from '@/components/TitleBar'
 import { useT } from '@/lib/i18n'
+
+const isTauri = '__TAURI_INTERNALS__' in window
+
+function winAction(action: 'minimize' | 'maximize' | 'close') {
+  import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
+    const win = getCurrentWindow()
+    if (action === 'minimize') win.minimize()
+    else if (action === 'maximize') win.toggleMaximize()
+    else win.close()
+  })
+}
 
 export default function App() {
   const t = useT()
@@ -12,7 +22,7 @@ export default function App() {
   const [version, setVersion] = useState('')
 
   useEffect(() => {
-    if ('__TAURI_INTERNALS__' in window) {
+    if (isTauri) {
       import('@tauri-apps/api/app').then(({ getVersion }) => getVersion().then(setVersion))
     }
   }, [])
@@ -21,7 +31,6 @@ export default function App() {
     document.documentElement.classList.toggle('dark', dark)
   }, [dark])
 
-  // Close on Escape
   useEffect(() => {
     if (!settingsOpen) return
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setSettingsOpen(false) }
@@ -31,10 +40,12 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen bg-background text-foreground overflow-hidden">
-      <TitleBar />
-      <header className="shrink-0 border-b border-border bg-card">
+      <header
+        data-tauri-drag-region
+        className="shrink-0 border-b border-border bg-card select-none"
+      >
         <div className="px-5 py-2.5 flex items-center gap-4">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3" data-tauri-drag-region>
             <img src="/LogoSRE.png" alt="logo" className="h-11 w-11 object-contain" />
             <div>
               <div className="font-bold text-lg text-foreground tracking-tight leading-tight">Sim Racing Engineer</div>
@@ -46,9 +57,9 @@ export default function App() {
               href="https://discord.gg/XASdj3SXC3"
               target="_blank"
               rel="noopener noreferrer"
-              className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-border text-muted-foreground hover:text-foreground transition-colors"
+              className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-red-600 text-white hover:bg-red-700 transition-colors"
             >
-              Discord
+              {t('joinDiscord')}
             </a>
             <button
               onClick={() => setSettingsOpen(true)}
@@ -63,6 +74,31 @@ export default function App() {
             >
               {dark ? `☀ ${t('light')}` : `☾ ${t('dark')}`}
             </button>
+            {isTauri && (
+              <div className="flex items-center ml-1 -mr-3 border-l border-border">
+                <button
+                  onClick={() => winAction('minimize')}
+                  className="h-9 w-10 flex items-center justify-center text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors text-sm"
+                  aria-label="Minimize"
+                >
+                  ─
+                </button>
+                <button
+                  onClick={() => winAction('maximize')}
+                  className="h-9 w-10 flex items-center justify-center text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors text-sm"
+                  aria-label="Maximize"
+                >
+                  □
+                </button>
+                <button
+                  onClick={() => winAction('close')}
+                  className="h-9 w-10 flex items-center justify-center text-muted-foreground hover:bg-red-500 hover:text-white transition-colors text-sm"
+                  aria-label="Close"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </header>
@@ -73,16 +109,12 @@ export default function App() {
 
       <UpdateBanner />
 
-      {/* Settings modal */}
       {settingsOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center"
           onClick={e => { if (e.target === e.currentTarget) setSettingsOpen(false) }}
         >
-          {/* Backdrop */}
           <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
-
-          {/* Panel */}
           <div className="relative z-10 bg-card border border-border rounded-2xl shadow-2xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-border">
               <h2 className="text-sm font-semibold text-foreground">{t('settings')}</h2>

@@ -77,6 +77,7 @@ const EN = {
   light: 'Light',
   toggleTheme: 'Toggle dark / light mode',
   aiCoach: 'AI Coach',
+  joinDiscord: 'Join Discord',
 }
 
 export type TKey = keyof typeof EN
@@ -109,7 +110,7 @@ const DICT: Record<string, Dict> = {
     removeSession: 'Session entfernen', resetZoom: 'Zoom zurücksetzen',
     navTelemetry: 'Telemetrie',
     dark: 'Dunkel', light: 'Hell', toggleTheme: 'Hell/Dunkel umschalten',
-    aiCoach: 'KI-Coach',
+    aiCoach: 'KI-Coach', joinDiscord: 'Discord beitreten',
     sectors: 'Sektoren', refLap: 'Referenzrunde',
     deltaHint: 'positiv = langsamer als Referenz',
     lapTotal: 'Gesamt', noLapDistData: 'Keine Streckendistanz-Daten verfügbar',
@@ -133,7 +134,7 @@ const DICT: Record<string, Dict> = {
     noMessages: 'Aucun message pour cette session',
     settings: 'Paramètres', configureProvider: 'Configurer le fournisseur de coaching IA.',
     model: 'Modèle', apiKey: 'Clé API',
-    navTelemetry: 'Télémétrie', dark: 'Sombre', light: 'Clair', aiCoach: 'Coach IA',
+    navTelemetry: 'Télémétrie', dark: 'Sombre', light: 'Clair', aiCoach: 'Coach IA', joinDiscord: 'Rejoindre Discord',
   },
   es: {
     save: 'Guardar', saved: 'Guardado ✓', apply: 'Aplicar & cargar modelo',
@@ -154,7 +155,7 @@ const DICT: Record<string, Dict> = {
     noMessages: 'Sin mensajes para esta sesión',
     settings: 'Configuración', configureProvider: 'Configura tu proveedor de coaching IA.',
     model: 'Modelo', apiKey: 'Clave API',
-    navTelemetry: 'Telemetría', dark: 'Oscuro', light: 'Claro', aiCoach: 'Coach IA',
+    navTelemetry: 'Telemetría', dark: 'Oscuro', light: 'Claro', aiCoach: 'Coach IA', joinDiscord: 'Unirse a Discord',
   },
   it: {
     save: 'Salva', saved: 'Salvato ✓', apply: 'Applica & carica modello',
@@ -175,7 +176,7 @@ const DICT: Record<string, Dict> = {
     noMessages: 'Nessun messaggio per questa sessione',
     settings: 'Impostazioni', configureProvider: 'Configura il provider di coaching IA.',
     model: 'Modello', apiKey: 'Chiave API',
-    navTelemetry: 'Telemetria', dark: 'Scuro', light: 'Chiaro', aiCoach: 'Coach IA',
+    navTelemetry: 'Telemetria', dark: 'Scuro', light: 'Chiaro', aiCoach: 'Coach IA', joinDiscord: 'Unisciti a Discord',
   },
   pt: {
     save: 'Guardar', saved: 'Guardado ✓', apply: 'Aplicar & carregar modelo',
@@ -196,7 +197,7 @@ const DICT: Record<string, Dict> = {
     noMessages: 'Sem mensagens para esta sessão',
     settings: 'Definições', configureProvider: 'Configura o teu fornecedor de coaching IA.',
     model: 'Modelo', apiKey: 'Chave API',
-    navTelemetry: 'Telemetria', dark: 'Escuro', light: 'Claro', aiCoach: 'Coach IA',
+    navTelemetry: 'Telemetria', dark: 'Escuro', light: 'Claro', aiCoach: 'Coach IA', joinDiscord: 'Entrar no Discord',
   },
   nl: {
     save: 'Opslaan', saved: 'Opgeslagen ✓', apply: 'Toepassen & model laden',
@@ -217,7 +218,7 @@ const DICT: Record<string, Dict> = {
     noMessages: 'Geen berichten voor deze sessie',
     settings: 'Instellingen', configureProvider: 'Configureer je AI-coachingprovider.',
     model: 'Model', apiKey: 'API-sleutel',
-    navTelemetry: 'Telemetrie', dark: 'Donker', light: 'Licht', aiCoach: 'AI-coach',
+    navTelemetry: 'Telemetrie', dark: 'Donker', light: 'Licht', aiCoach: 'AI-coach', joinDiscord: 'Discord joinen',
   },
   pl: {
     save: 'Zapisz', saved: 'Zapisano ✓', apply: 'Zastosuj & załaduj model',
@@ -238,7 +239,7 @@ const DICT: Record<string, Dict> = {
     noMessages: 'Brak wiadomości dla tej sesji',
     settings: 'Ustawienia', configureProvider: 'Skonfiguruj dostawcę coachingu AI.',
     model: 'Model', apiKey: 'Klucz API',
-    navTelemetry: 'Telemetria', dark: 'Ciemny', light: 'Jasny', aiCoach: 'Coach AI',
+    navTelemetry: 'Telemetria', dark: 'Ciemny', light: 'Jasny', aiCoach: 'Coach AI', joinDiscord: 'Dołącz do Discord',
   },
   ru: {
     save: 'Сохранить', saved: 'Сохранено ✓', apply: 'Применить и загрузить модель',
@@ -259,7 +260,7 @@ const DICT: Record<string, Dict> = {
     noMessages: 'Нет сообщений для этой сессии',
     settings: 'Настройки', configureProvider: 'Настройте провайдера коучинга ИИ.',
     model: 'Модель', apiKey: 'API-ключ',
-    navTelemetry: 'Телеметрия', dark: 'Тёмный', light: 'Светлый', aiCoach: 'ИИ-тренер',
+    navTelemetry: 'Телеметрия', dark: 'Тёмный', light: 'Светлый', aiCoach: 'ИИ-тренер', joinDiscord: 'Присоединиться к Discord',
   },
   ja: {
     save: '保存', saved: '保存済み ✓', apply: '適用してモデルを読み込む',
@@ -280,7 +281,7 @@ const DICT: Record<string, Dict> = {
     noMessages: 'このセッションにメッセージはありません',
     settings: '設定', configureProvider: 'AIコーチングプロバイダーを設定してください。',
     model: 'モデル', apiKey: 'APIキー',
-    navTelemetry: 'テレメトリー', dark: 'ダーク', light: 'ライト', aiCoach: 'AIコーチ',
+    navTelemetry: 'テレメトリー', dark: 'ダーク', light: 'ライト', aiCoach: 'AIコーチ', joinDiscord: 'Discordに参加',
   },
   zh: {
     save: '保存', saved: '已保存 ✓', apply: '应用并加载模型',
@@ -301,7 +302,7 @@ const DICT: Record<string, Dict> = {
     noMessages: '此会话暂无消息',
     settings: '设置', configureProvider: '配置您的AI教练提供商。',
     model: '模型', apiKey: 'API密钥',
-    navTelemetry: '遥测', dark: '深色', light: '浅色', aiCoach: 'AI教练',
+    navTelemetry: '遥测', dark: '深色', light: '浅色', aiCoach: 'AI教练', joinDiscord: '加入Discord',
   },
 }
 
