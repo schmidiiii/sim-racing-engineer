@@ -9,106 +9,180 @@ function fmtTime(t: number): string {
   return t >= 60 ? `${Math.floor(t / 60)}:${(t % 60).toFixed(3).padStart(6, '0')}` : t.toFixed(3)
 }
 
+// Channels that must be present for a tab to have meaningful data
+const TAB_CHANNELS: Record<string, string[]> = {
+  'Ride Height': ['RFrideHeight', 'LFrideHeight', 'RRrideHeight', 'LRrideHeight'],
+  'Rake':        ['Pitch', 'Roll', 'RFrideHeight', 'RRrideHeight'],
+  'Wheel Speed': ['RFspeed', 'LFspeed', 'RRspeed', 'LRspeed'],
+  'Wheel Spin':  ['RFslipAngle', 'LFslipAngle', 'RFslipRatio', 'LFslipRatio'],
+  'Shocks':      ['RFshockDefl', 'LFshockDefl', 'RRshockDefl', 'LRshockDefl'],
+  'Shocks Hist': ['RFshockVel', 'LFshockVel', 'RRshockVel', 'LRshockVel'],
+  'Tyre Temp':   ['LFtempL', 'LFtempM', 'LFtempR', 'RFtempL'],
+  'Tyre Pressure': ['LFpressure', 'RFpressure', 'LRpressure', 'RRpressure'],
+}
+
+function hasTabData(tabLabel: string, availableChannels: string[]): boolean {
+  const required = TAB_CHANNELS[tabLabel]
+  if (!required) return true // tabs like Delta/Setup/General always have something
+  return required.some(ch => availableChannels.includes(ch))
+}
+
+function buildSystemPrompt(langName: string): string {
+  const duNote = langName === 'Deutsch'
+    ? 'Spreche den Fahrer immer mit "du" an (informelle Form, niemals "Sie"). '
+    : ''
+  return (
+    `You are a personal race engineer analysing iRacing telemetry data. ` +
+    `${duNote}` +
+    `Rules you MUST follow:\n` +
+    `- Be direct, honest, and blunt. Zero filler phrases like "great job", "well done", "interesting". Start answers immediately with the point.\n` +
+    `- Reference ONLY the data provided in the user message. Numbers, lap times, deltas — always be specific.\n` +
+    `- If data is missing or insufficient for a question, say so explicitly and briefly. Do not invent data.\n` +
+    `- No hedging ("might", "could possibly", "it depends"). Give a concrete opinion.\n` +
+    `- Use motorsport vocabulary: trail-braking, apex, understeer, oversteer, throttle application, rotation, brake bias, minimum speed.\n` +
+    `- Respond ONLY in ${langName}. Never switch language.`
+  )
+}
+
+function buildNoDataMessage(tabLabel: string, langName: string): string {
+  if (langName === 'Deutsch') {
+    return `**${tabLabel}: Keine Daten verfügbar**\n\nDiese Session enthält keine Messdaten für die "${tabLabel}"-Ansicht. ` +
+      `Das passiert, wenn das Fahrzeug diese Sensoren nicht hat oder iRacing sie für dieses Auto nicht aufzeichnet. ` +
+      `Wechsle zu einem anderen Tab für verfügbare Telemetriedaten.`
+  }
+  return `**${tabLabel}: No data available**\n\nThis session contains no channel data for the "${tabLabel}" view. ` +
+    `This happens when the car doesn't have these sensors or iRacing doesn't record them for this car. ` +
+    `Switch to another tab for available telemetry data.`
+}
+
 function buildTabPrompt(
   tabLabel: string,
   track: string,
   car: string,
   selectedLaps: Lap[],
   langName: string,
-): string {
+  availableChannels: string[],
+): string | null {
+  // Return null → inject no-data message directly without calling AI
+  if (!hasTabData(tabLabel, availableChannels)) return null
+
   const validLaps = selectedLaps
     .filter(l => l.is_valid && l.lap_time > 10)
     .sort((a, b) => a.lap_time - b.lap_time)
-  const bestTime = validLaps[0]?.lap_time ?? 0
-  const lapLines = validLaps.length
-    ? validLaps.map((l, i) => {
-        const delta = l.lap_time - bestTime
-        return `L${l.lap_number}: ${fmtTime(l.lap_time)}${i === 0 ? ' (ref)' : ` (+${delta.toFixed(3)}s)`}`
-      }).join('\n')
-    : '(keine Runden ausgewählt)'
 
-  const header = `IMPORTANT: Respond ONLY in ${langName}. Never switch language.\n\n` +
-    `Context: ${car} at ${track}\nSelected laps:\n${lapLines}\n\n`
+  if (validLaps.length === 0) {
+    return langName === 'Deutsch'
+      ? `Auto: ${car} | Strecke: ${track}\n\nKeine gültigen Runden ausgewählt. Weise den Fahrer kurz darauf hin und sag, was er tun soll.`
+      : `Car: ${car} | Track: ${track}\n\nNo valid laps selected. Tell the driver briefly.`
+  }
+
+  const bestTime = validLaps[0].lap_time
+  const lapLines = validLaps.map((l, i) => {
+    const delta = l.lap_time - bestTime
+    return `L${l.lap_number}: ${fmtTime(l.lap_time)}${i === 0 ? ' [ref]' : ` (+${delta.toFixed(3)}s)`}`
+  }).join('\n')
+  const spread = validLaps.length > 1
+    ? ` | Spread: ${(validLaps[validLaps.length - 1].lap_time - bestTime).toFixed(3)}s`
+    : ''
+
+  const ctx = `Car: ${car} | Track: ${track}\nLaps:\n${lapLines}${spread}\n\n`
 
   switch (tabLabel) {
     case 'Delta':
-      return header +
-        `The driver switched to the Delta tab (lap time difference vs. reference across S1/S2/S3).\n\n` +
-        `Based on the time gap between selected laps, give:\n` +
-        `- Where on the lap the gap is most likely concentrated (which sector/corners)\n` +
-        `- 2–3 specific actions to close the gap\n` +
-        `Use turn numbers with names from your knowledge of ${track}. Direct, no filler.`
+      return ctx +
+        `The driver is on the Delta tab. ` +
+        `Fastest lap is ${fmtTime(bestTime)}. ` +
+        (validLaps.length > 1
+          ? `There are ${validLaps.length} laps selected with a spread of ${(validLaps[validLaps.length - 1].lap_time - bestTime).toFixed(3)}s. ` +
+            `Analyse where the time is likely being lost: name the specific corners at ${track} by number/name. ` +
+            `Give 2 concrete, actionable things to work on — not generic, specific to this track layout. ` +
+            `Be direct about what the driver is probably doing wrong.`
+          : `Only one lap selected — no delta comparison possible. ` +
+            `Critique the lap time ${fmtTime(bestTime)} for ${car} at ${track}: is it competitive, what is a realistic target, where are tenths most commonly lost on this track with this car?`
+        )
 
     case 'Setup':
-      return header +
-        `The driver switched to the Setup tab to review car setup parameters.\n\n` +
-        `Based on the lap times and spread, suggest 1–2 setup directions to explore for ${track}. ` +
-        `Reference suspension, aero, or differential as relevant. Concise and specific.`
+      return ctx +
+        `The driver is reviewing the car setup. ` +
+        `Based on the lap time of ${fmtTime(bestTime)} for ${car} at ${track}, ` +
+        `give 2 specific setup directions — not vague, pick actual parameters ` +
+        `(e.g. "increase front ARB by 2 clicks", "soften rear rebound", "lower rear ride height 2mm"). ` +
+        `Reference what balance issue the lap time spread suggests.`
 
     case 'Ride Height':
-      return header +
-        `The driver switched to the Ride Height view.\n\n` +
-        `Explain what ride height data reveals at ${track} and what patterns to look for. ` +
-        `Mention track-specific ground clearance challenges. One focused paragraph.`
+      return ctx +
+        `The driver is on the Ride Height view. ${car} at ${track}. ` +
+        `Explain what the ride height data on this track reveals about aero platform and ground clearance. ` +
+        `Name the specific corners where ride height is most critical at ${track}. ` +
+        `What values are too high/too low and what happens if they are? Be specific, no generics.`
 
     case 'Rake':
-      return header +
-        `The driver switched to the Pitch/Roll (Rake) view.\n\n` +
-        `Explain what pitch and roll data reveals about car balance and setup for ${track}. ` +
-        `What setup changes would pitch/roll patterns suggest? One focused paragraph.`
+      return ctx +
+        `The driver is on the Pitch/Roll (Rake) view. ${car} at ${track}. ` +
+        `Explain what the pitch and roll telemetry reveals about the car's balance. ` +
+        `What setup change does a front-heavy pitch pattern suggest vs. a rear-heavy one? ` +
+        `Reference ${track}'s specific braking and corner characteristics.`
 
     case 'Wheel Speed':
-      return header +
-        `The driver switched to the Wheel Speed view.\n\n` +
-        `Explain what wheel speed differential reveals about traction and lockup at ${track}. ` +
-        `Link to the lap time gap if applicable. One focused paragraph.`
+      return ctx +
+        `The driver is on the Wheel Speed view. ` +
+        `Analyse what wheel speed differential between front and rear reveals about traction and locking. ` +
+        `At ${track}, which corners are most critical for wheel speed management with ${car}? ` +
+        `Name them specifically. What does a lockup signature look like in this data?`
 
     case 'Wheel Spin':
-      return header +
-        `The driver switched to the Wheel Slip/Spin view.\n\n` +
-        `Explain what slip ratio data shows about over-driving traction zones at ${track}. ` +
-        `What values indicate problematic wheelspin or lockup? One focused paragraph.`
+      return ctx +
+        `The driver is on the Wheel Slip/Spin view. ` +
+        `Analyse the slip ratio data for ${car} at ${track}. ` +
+        `Which exit zones are most likely to cause wheelspin with this car? ` +
+        `What slip ratio range is acceptable vs. damaging lap time? Name specific corners at ${track}.`
 
     case 'Shocks':
-      return header +
-        `The driver switched to the Shock Deflection view.\n\n` +
-        `Explain what shock deflection data reveals about damper setup and bump/rebound balance at ${track}. ` +
-        `One focused paragraph with setup direction.`
+      return ctx +
+        `The driver is on the Shock Deflection view. ` +
+        `Analyse what the shock deflection patterns reveal about damper setup for ${car} at ${track}. ` +
+        `Is the car bottoming, is one corner working harder than others? ` +
+        `Give a specific damper setup direction (bump/rebound stiffness) based on what the data would show.`
 
     case 'Shocks Hist':
-      return header +
-        `The driver switched to the Shock Velocity (histogram) view.\n\n` +
-        `Explain what shock velocity distribution reveals about damper tuning at ${track}. ` +
-        `What velocity ranges indicate correctly tuned vs. over/underdamped behavior? One focused paragraph.`
+      return ctx +
+        `The driver is on the Shock Velocity histogram. ` +
+        `Explain the velocity distribution for ${car} at ${track}. ` +
+        `What does a histogram skewed to high velocities indicate vs. one clustered in low velocities? ` +
+        `Give a concrete damper adjustment based on what an over-damped or under-damped profile looks like.`
 
     case 'Tyre Temp':
-      return header +
-        `The driver switched to the Tyre Temperature view.\n\n` +
-        `Explain what temperature patterns (L/M/R distribution, cross-car balance) to look for at ${track}. ` +
-        `What causes uneven distribution and how to fix it? One focused paragraph.`
+      return ctx +
+        `The driver is on the Tyre Temperature view. ${car} at ${track}. ` +
+        `Analyse the L/M/R temperature distribution across all four corners. ` +
+        `What does outside-edge overheating indicate vs. inside-edge? ` +
+        `Give a specific setup correction for any imbalance — tyre pressures, camber, or aero.`
 
     case 'Tyre Pressure':
-      return header +
-        `The driver switched to the Tyre Pressure view.\n\n` +
-        `Explain what tyre pressure trends indicate during a stint at ${track} ` +
-        `and the typical optimal operating window for the ${car}. One focused paragraph.`
+      return ctx +
+        `The driver is on the Tyre Pressure view. ${car} at ${track}. ` +
+        `What is the optimal hot pressure window for ${car}? ` +
+        `If pressures are too high at the end of a stint, what causes it and how is it corrected? ` +
+        `Be specific with numbers where possible.`
 
     default:
-      return header +
-        `The driver switched to the ${tabLabel} telemetry view.\n\n` +
-        `Give one focused paragraph on what this data reveals at ${track} and what patterns to look for.`
+      return ctx +
+        `The driver is on the ${tabLabel} telemetry view for ${car} at ${track}. ` +
+        `Give specific, data-driven coaching on what this view reveals and what the driver should be looking for. ` +
+        `No generic explanations — focus on ${track} and ${car} specifically.`
   }
 }
 
 export default function AutoFeedback() {
   const { sessions, activeSessionId, selectedLapKeys, activeTabLabel } = useSessionStore()
   const session = sessions.find(s => s.id === activeSessionId) ?? sessions[0]
-  const { provider, language, addMessage, appendToLast, setStreaming, clearMessages } = useAiStore()
+  const { provider, isConfigured, language, addMessage, appendToLast, setStreaming, clearMessages } = useAiStore()
   const analyzedSessionRef = useRef<string | null>(null)
   const analyzedTabRef = useRef<string | null>(null)
 
-  // ── Existing: full session analysis on load ──────────────────────────────────
+  // Full session analysis on load (General tab)
   useEffect(() => {
+    if (!isConfigured) return
     const effectKey = session ? `${session.id}:${language}` : null
     if (!session || !effectKey || analyzedSessionRef.current === effectKey) return
     analyzedSessionRef.current = effectKey
@@ -150,28 +224,27 @@ export default function AutoFeedback() {
       unlistenToken?.()
       unlistenDone?.()
     }
-  }, [session?.id, language])
+  }, [session?.id, language, isConfigured])
 
-  // ── New: tab-specific feedback on tab switch (debounced 2 s) ────────────────
+  // Tab-specific feedback on tab switch (debounced 2s)
   useEffect(() => {
-    if (!session || activeTabLabel === 'General') return
+    if (!session || !isConfigured || activeTabLabel === 'General') return
 
     const lapKeyStr = selectedLapKeys.join(',')
     const tabKey = `${session.id}:${activeTabLabel}:${lapKeyStr}:${language}`
     if (analyzedTabRef.current === tabKey) return
 
-    // Wait 2 s — if the user keeps switching tabs, cancel and restart the timer
     const timer = setTimeout(() => {
-      // Re-check streaming after the delay
       if (useAiStore.getState().streaming) return
 
       analyzedTabRef.current = tabKey
 
       const sessionId = session.id
       const chatKey = `${sessionId}:${activeTabLabel}`
-      const eventId = crypto.randomUUID()
-
       const langName = LANGUAGES[language as Language] ?? 'English'
+
+      const availableChannels = session.available_channels.map(c => c.name)
+
       const selectedLaps = selectedLapKeys
         .map(k => {
           const idx = k.lastIndexOf(':')
@@ -180,17 +253,23 @@ export default function AutoFeedback() {
         })
         .filter((l): l is Lap => l !== undefined)
 
-      const prompt = buildTabPrompt(activeTabLabel, session.track, session.car, selectedLaps, langName)
+      const prompt = buildTabPrompt(activeTabLabel, session.track, session.car, selectedLaps, langName, availableChannels)
+
+      clearMessages(chatKey)
+
+      // No AI call needed — inject no-data message directly
+      if (prompt === null) {
+        addMessage(chatKey, { role: 'assistant', content: buildNoDataMessage(activeTabLabel, langName) })
+        return
+      }
 
       const systemMsg = {
         role: 'system' as const,
-        content:
-          `You are the driver's personal race engineer for iRacing sim-racing. ` +
-          `Tone: professional, direct, data-driven, constructively critical. No filler praise. ` +
-          `Use motorsport vocabulary. Respond ONLY in ${langName}.`,
+        content: buildSystemPrompt(langName),
       }
 
-      clearMessages(chatKey)
+      const eventId = crypto.randomUUID()
+
       addMessage(chatKey, { role: 'assistant', content: '' })
       setStreaming(true)
 
@@ -220,7 +299,7 @@ export default function AutoFeedback() {
     }, 2000)
 
     return () => clearTimeout(timer)
-  }, [session?.id, activeTabLabel, selectedLapKeys.join(','), language])
+  }, [session?.id, activeTabLabel, selectedLapKeys.join(','), language, isConfigured])
 
   return null
 }
