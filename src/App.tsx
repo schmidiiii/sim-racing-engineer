@@ -28,6 +28,12 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [settingsOpen])
 
+  useEffect(() => {
+    const handler = () => setSettingsOpen(true)
+    window.addEventListener('open-settings', handler)
+    return () => window.removeEventListener('open-settings', handler)
+  }, [])
+
   return (
     <div className="flex flex-col h-screen bg-background text-foreground overflow-hidden">
       <TitleBar />

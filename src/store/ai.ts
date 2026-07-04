@@ -32,8 +32,9 @@ export const LANGUAGES: Record<Language, string> = {
 
 interface AiStore {
   provider: ProviderConfig
+  isConfigured: boolean
   language: Language
-  chatHistory: Record<string, AiMessage[]>  // keyed by sessionId
+  chatHistory: Record<string, AiMessage[]>
   streaming: boolean
   setProvider: (p: ProviderConfig) => void
   setLanguage: (l: Language) => void
@@ -59,13 +60,14 @@ function loadProvider(): ProviderConfig {
 
 export const useAiStore = create<AiStore>((set) => ({
   provider: loadProvider(),
+  isConfigured: !!localStorage.getItem('ai_provider'),
   language: (localStorage.getItem('ai_language') as Language) ?? 'en',
   chatHistory: {},
   streaming: false,
 
   setProvider: (p) => {
     localStorage.setItem('ai_provider', JSON.stringify(p))
-    set({ provider: p })
+    set({ provider: p, isConfigured: true })
   },
 
   setLanguage: (l) => {
