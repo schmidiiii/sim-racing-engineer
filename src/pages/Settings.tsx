@@ -142,6 +142,24 @@ export default function Settings() {
         <div className="p-5 space-y-4">
           {activeTab === 'Ollama' && (
             <>
+              <div className="rounded-lg border border-border bg-secondary/30 px-4 py-3 space-y-1.5">
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">{t('setupGuide')}</p>
+                {[
+                  ['1', 'ollama.com', 'Download & install Ollama'],
+                  ['2', 'Terminal', 'ollama serve'],
+                  ['3', 'Terminal', 'ollama pull llama3'],
+                  ['4', '↻', 'Click the refresh button to detect models'],
+                ].map(([step, label, desc]) => (
+                  <div key={step} className="flex items-start gap-2.5">
+                    <span className="shrink-0 w-4 h-4 rounded-full bg-primary/20 text-primary text-[9px] font-bold flex items-center justify-center mt-px">{step}</span>
+                    <span className="text-xs text-muted-foreground">
+                      <span className="font-mono text-foreground/70 text-[10px] bg-secondary px-1 rounded mr-1">{label}</span>
+                      {desc}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
               <div>
                 <label className={labelCls}>{t('baseUrl')}</label>
                 <div className="flex gap-2">
@@ -189,13 +207,29 @@ export default function Settings() {
                 {loadStatus === 'ready' && <span className="text-xs font-medium text-green-600">{t('modelReady')}</span>}
                 {loadStatus === 'error' && <span className="text-xs font-medium text-destructive">{t('failedToLoad')}</span>}
               </div>
-
-              <p className="text-xs text-muted-foreground">{t('ollamaHint')}</p>
             </>
           )}
 
           {activeTab === 'OpenAI' && (
             <>
+              <div className="rounded-lg border border-border bg-secondary/30 px-4 py-3 space-y-1.5">
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">{t('setupGuide')}</p>
+                {[
+                  ['1', 'platform.openai.com/api-keys', 'Open in browser'],
+                  ['2', '+ Create', 'Create a new API key'],
+                  ['3', 'API Key', 'Paste key in the field below'],
+                  ['4', t('save'), 'Save & start chatting'],
+                ].map(([step, label, desc]) => (
+                  <div key={step} className="flex items-start gap-2.5">
+                    <span className="shrink-0 w-4 h-4 rounded-full bg-primary/20 text-primary text-[9px] font-bold flex items-center justify-center mt-px">{step}</span>
+                    <span className="text-xs text-muted-foreground">
+                      <span className="font-mono text-foreground/70 text-[10px] bg-secondary px-1 rounded mr-1">{label}</span>
+                      {desc}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
               <div>
                 <label className={labelCls}>{t('apiKey')}</label>
                 <input type="password" className={inputCls} placeholder="sk-..."
@@ -213,6 +247,24 @@ export default function Settings() {
 
           {activeTab === 'Gemini' && (
             <>
+              <div className="rounded-lg border border-border bg-secondary/30 px-4 py-3 space-y-1.5">
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">{t('setupGuide')}</p>
+                {[
+                  ['1', 'aistudio.google.com', 'Open in browser'],
+                  ['2', 'Get API key', 'Create a free API key'],
+                  ['3', 'API Key', 'Paste key below & click ↻'],
+                  ['4', t('save'), 'Choose a model & save'],
+                ].map(([step, label, desc]) => (
+                  <div key={step} className="flex items-start gap-2.5">
+                    <span className="shrink-0 w-4 h-4 rounded-full bg-primary/20 text-primary text-[9px] font-bold flex items-center justify-center mt-px">{step}</span>
+                    <span className="text-xs text-muted-foreground">
+                      <span className="font-mono text-foreground/70 text-[10px] bg-secondary px-1 rounded mr-1">{label}</span>
+                      {desc}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
               <div>
                 <label className={labelCls}>{t('apiKey')}</label>
                 <div className="flex gap-2">

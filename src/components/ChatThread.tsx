@@ -11,7 +11,7 @@ export default function ChatThread() {
   const t = useT()
   const { sessions, activeSessionId, activeTabLabel } = useSessionStore()
   const session = sessions.find(s => s.id === activeSessionId) ?? sessions[0]
-  const { provider, language, chatHistory, streaming, addMessage, appendToLast, setStreaming } = useAiStore()
+  const { provider, isConfigured, language, chatHistory, streaming, addMessage, appendToLast, setStreaming } = useAiStore()
   const chatKey = session ? `${session.id}:${activeTabLabel}` : ''
   const messages = chatHistory[chatKey] ?? []
   const [input, setInput] = useState('')
@@ -82,6 +82,33 @@ export default function ChatThread() {
       e.preventDefault()
       sendMessage()
     }
+  }
+
+  if (!isConfigured) {
+    return (
+      <>
+        <div className="flex-1 flex flex-col items-center justify-center gap-4 text-center px-4">
+          <div className="space-y-1">
+            <p className="text-sm font-semibold text-foreground">{t('configureAi')}</p>
+            <p className="text-xs text-muted-foreground leading-relaxed">{t('configureAiHint')}</p>
+          </div>
+          <button
+            onClick={() => window.dispatchEvent(new CustomEvent('open-settings'))}
+            className="text-xs font-semibold px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+          >
+            {t('configureAi')}
+          </button>
+        </div>
+        <div className="shrink-0 pt-2 border-t border-border">
+          <textarea
+            className="w-full bg-secondary/50 text-foreground text-xs rounded px-3 py-2 resize-none placeholder:text-muted-foreground/40 cursor-not-allowed"
+            placeholder={t('configureAi')}
+            rows={2}
+            disabled
+          />
+        </div>
+      </>
+    )
   }
 
   return (

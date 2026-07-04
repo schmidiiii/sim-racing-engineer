@@ -78,6 +78,10 @@ const EN = {
   toggleTheme: 'Toggle dark / light mode',
   aiCoach: 'AI Coach',
   joinDiscord: 'Join Discord',
+  // AI onboarding
+  configureAi: 'Configure AI Model',
+  configureAiHint: 'Connect an AI provider to get personalized coaching feedback on your laps.',
+  setupGuide: 'Setup Guide',
 }
 
 export type TKey = keyof typeof EN
@@ -111,6 +115,7 @@ const DICT: Record<string, Dict> = {
     navTelemetry: 'Telemetrie',
     dark: 'Dunkel', light: 'Hell', toggleTheme: 'Hell/Dunkel umschalten',
     aiCoach: 'KI-Coach', joinDiscord: 'Discord beitreten',
+    configureAi: 'KI-Modell konfigurieren', configureAiHint: 'Verbinde einen KI-Anbieter um persönliches Coaching-Feedback zu deinen Runden zu erhalten.', setupGuide: 'Einrichtung',
     sectors: 'Sektoren', refLap: 'Referenzrunde',
     deltaHint: 'positiv = langsamer als Referenz',
     lapTotal: 'Gesamt', noLapDistData: 'Keine Streckendistanz-Daten verfügbar',

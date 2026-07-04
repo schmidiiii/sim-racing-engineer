@@ -8,7 +8,7 @@ export default function TitleBar() {
   return (
     <div
       data-tauri-drag-region
-      className="h-8 shrink-0 flex items-center justify-end bg-zinc-950 select-none"
+      className="h-8 shrink-0 flex items-center justify-end bg-[#1c1824] select-none"
     >
       <button
         onClick={() => win.minimize()}
