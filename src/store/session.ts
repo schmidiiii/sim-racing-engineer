@@ -73,10 +73,13 @@ interface SessionStore {
   lapColorIndex: (key: string) => number
 }
 
+export const MAX_ACTIVE_SESSIONS = 5
+
 function pickDefaultLaps(sessions: Session[], existingKeys: string[]): string[] {
-  // Pick the 2 fastest valid laps per newly loaded session
+  // Pick the 2 fastest valid laps from the last MAX_ACTIVE_SESSIONS sessions
   const keys: string[] = []
-  for (const session of [...sessions].reverse()) {
+  const recent = sessions.slice(-MAX_ACTIVE_SESSIONS)
+  for (const session of recent) {
     const best2 = session.laps
       .filter(l => l.is_valid && l.lap_time > 10)
       .sort((a, b) => a.lap_time - b.lap_time)
@@ -142,11 +145,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   loadFiles: async (paths: string[]) => {
     set({ loading: true, error: null })
     try {
-      const loaded: Session[] = []
-      for (const path of paths) {
-        const session = await invoke<Session>('load_session', { path })
-        loaded.push(session)
-      }
+      const loaded = await Promise.all(
+        paths.map(path => invoke<Session>('load_session', { path }))
+      )
       set(s => {
         const existingIds = new Set(s.sessions.map(x => x.id))
         const merged = [...s.sessions, ...loaded.filter(x => !existingIds.has(x.id))]
@@ -170,6 +171,14 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     const { selectedLapKeys, sessions } = get()
     if (selectedLapKeys.includes(key)) {
       set({ selectedLapKeys: selectedLapKeys.filter(k => k !== key) })
+      return
+    }
+    // Cap active sessions at MAX_ACTIVE_SESSIONS — adding a lap from a new session drops the oldest session's laps
+    const activeSessionIds = [...new Set(selectedLapKeys.map(k => parseLapKey(k).sessionId))]
+    if (!activeSessionIds.includes(sessionId) && activeSessionIds.length >= MAX_ACTIVE_SESSIONS) {
+      const oldest = activeSessionIds[0]
+      const trimmed = selectedLapKeys.filter(k => parseLapKey(k).sessionId !== oldest)
+      set({ selectedLapKeys: [...trimmed, key] })
       return
     }
     // Cross-session guard: only allow if track AND car match all already-selected sessions
