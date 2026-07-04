@@ -4,7 +4,6 @@ A desktop app for iRacing telemetry analysis — built with Tauri, React, and Ru
 
 Load your `.ibt` session files and get a clear picture of every lap: overlaid telemetry traces, a live track map, braking analysis, lap deltas, and AI-powered coaching feedback. The app watches your iRacing telemetry folder and picks up new sessions automatically.
 
-![Sim Racing Engineer](public/app%20icon.png)
 
 ---
 
