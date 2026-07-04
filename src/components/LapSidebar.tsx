@@ -190,12 +190,12 @@ function ConsistencyPanel() {
         <div>
           <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wide">{t('idealLap')}</p>
           {idealTime != null ? (
-            <p className="text-[11px] font-mono tabular-nums">
-              <span className="text-foreground">{fmtTime(idealTime)}</span>
+            <>
+              <p className="text-[11px] font-mono text-foreground tabular-nums">{fmtTime(idealTime)}</p>
               {idealDelta != null && Math.abs(idealDelta) > 0.01 && (
-                <span className="text-amber-400 ml-0.5">(-{Math.abs(idealDelta).toFixed(3)}s)</span>
+                <p className="text-[9px] font-mono text-amber-400 tabular-nums">-{Math.abs(idealDelta).toFixed(3)}s</p>
               )}
-            </p>
+            </>
           ) : (
             <p className="text-[11px] font-mono text-muted-foreground/40">–</p>
           )}
