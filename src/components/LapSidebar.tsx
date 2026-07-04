@@ -86,7 +86,7 @@ function SessionCard({ session, active, onActivate, onRemove }: {
             <span className="text-[10px] text-muted-foreground/60">{session.date.slice(0, 10)}</span>
             <button
               onClick={openTrackGuide}
-              className="opacity-0 group-hover/card:opacity-100 text-[9px] font-medium text-muted-foreground/60 hover:text-primary transition-all flex items-center gap-0.5"
+              className="text-[10px] font-medium text-muted-foreground hover:text-primary transition-colors flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-primary/10"
               title={t('trackGuide')}
             >
               ▶ {t('trackGuide')}
