@@ -8,6 +8,13 @@ export default function App() {
   const t = useT()
   const [dark, setDark] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [version, setVersion] = useState('')
+
+  useEffect(() => {
+    if ('__TAURI_INTERNALS__' in window) {
+      import('@tauri-apps/api/app').then(({ getVersion }) => getVersion().then(setVersion))
+    }
+  }, [])
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', dark)
@@ -27,7 +34,10 @@ export default function App() {
         <div className="px-5 py-2.5 flex items-center gap-4">
           <div className="flex items-center gap-3">
             <img src="/LogoSRE.png" alt="logo" className="h-11 w-11 object-contain" />
-            <span className="font-bold text-lg text-foreground tracking-tight">Sim Racing Engineer</span>
+            <div>
+              <div className="font-bold text-lg text-foreground tracking-tight leading-tight">Sim Racing Engineer</div>
+              {version && <div className="text-xs text-muted-foreground leading-tight">v{version}</div>}
+            </div>
           </div>
           <div className="ml-auto flex items-center gap-2">
             <button
