@@ -180,24 +180,24 @@ function ConsistencyPanel() {
       </div>
       <div className="grid grid-cols-3 gap-x-2">
         <div>
-          <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wide">Best</p>
-          <p className="text-[11px] font-mono text-foreground tabular-nums">{fmtTime(best)}</p>
+          <p className="text-[10px] text-muted-foreground/60 uppercase tracking-wide">Best</p>
+          <p className="text-xs font-mono text-foreground tabular-nums">{fmtTime(best)}</p>
         </div>
         <div>
-          <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wide">{t('lapSpread')}</p>
-          <p className="text-[11px] font-mono text-foreground tabular-nums">+{spread.toFixed(3)}s</p>
+          <p className="text-[10px] text-muted-foreground/60 uppercase tracking-wide">{t('lapSpread')}</p>
+          <p className="text-xs font-mono text-foreground tabular-nums">+{spread.toFixed(3)}s</p>
         </div>
         <div>
-          <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wide">{t('idealLap')}</p>
+          <p className="text-[10px] text-muted-foreground/60 uppercase tracking-wide">{t('idealLap')}</p>
           {idealTime != null ? (
             <>
-              <p className="text-[11px] font-mono text-foreground tabular-nums">{fmtTime(idealTime)}</p>
+              <p className="text-xs font-mono text-foreground tabular-nums">{fmtTime(idealTime)}</p>
               {idealDelta != null && Math.abs(idealDelta) > 0.01 && (
-                <p className="text-[9px] font-mono text-amber-400 tabular-nums">-{Math.abs(idealDelta).toFixed(3)}s</p>
+                <p className="text-[10px] font-mono text-amber-400 tabular-nums">-{Math.abs(idealDelta).toFixed(3)}s</p>
               )}
             </>
           ) : (
-            <p className="text-[11px] font-mono text-muted-foreground/40">–</p>
+            <p className="text-xs font-mono text-muted-foreground/40">–</p>
           )}
         </div>
       </div>
