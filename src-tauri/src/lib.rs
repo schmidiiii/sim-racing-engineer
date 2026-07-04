@@ -67,6 +67,7 @@ pub fn run() {
             session::manager::get_lap_channel_data,
             session::manager::get_telemetry_folder,
             session::manager::get_session_yaml,
+            session::manager::compute_ideal_lap,
             ai::commands::query_ai,
             ai::commands::auto_analyze,
             open_url,
