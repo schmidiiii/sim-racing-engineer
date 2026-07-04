@@ -82,7 +82,7 @@ export default function Settings() {
 
   useEffect(() => {
     if (activeTab !== 'Ollama') return
-    fetchOllamaModels(ollamaUrl)
+    setModelsStatus('idle')
   }, [activeTab])
 
   const handleSave = () => {
@@ -160,7 +160,7 @@ export default function Settings() {
                 <label className={labelCls}>
                   {t('model')}
                   {modelsStatus === 'ok' && <span className="ml-2 text-[10px] text-muted-foreground font-normal">{ollamaModels.length} {t('available')}</span>}
-                  {modelsStatus === 'error' && <span className="ml-2 text-[10px] text-destructive font-normal">{t('ollamaNotReachable')}</span>}
+                  {modelsStatus === 'error' && <span className="ml-2 text-[10px] text-muted-foreground font-normal">{t('ollamaNotReachable')}</span>}
                 </label>
                 {ollamaModels.length > 0 ? (
                   <select
