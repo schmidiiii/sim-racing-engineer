@@ -41,6 +41,7 @@ function buildSystemPrompt(langName: string): string {
     `- Reference ONLY the data provided. Numbers, lap times, deltas — always be specific.\n` +
     `- If data is missing or insufficient, say so explicitly and briefly. Do not invent data.\n` +
     `- No hedging ("might", "could possibly", "it depends"). Give a concrete opinion.\n` +
+    `- NEVER invent or guess lap time targets, world records, or benchmark times. You do not have reliable iRacing-specific lap time data. If asked, say so and focus on technique instead.\n` +
     `- Use motorsport vocabulary: trail-braking, apex, understeer, oversteer, throttle application, rotation, brake bias, minimum speed.\n` +
     `- Respond ONLY in ${langName}. Never switch language.`
   )
@@ -115,7 +116,9 @@ function buildTabPrompt(
             `Give 2 concrete, actionable things to fix — not generic, specific to this track layout. ` +
             `Be blunt about what you are probably doing wrong.`
           : `Only one lap selected — no delta comparison possible. ` +
-            `Critique my lap time ${fmtTime(bestTime)} in the ${car} at ${track}: is it competitive, what is a realistic target, where are tenths most commonly lost on this track with this car?`
+            `My lap time is ${fmtTime(bestTime)} in the ${car} at ${track}. ` +
+            `Do NOT invent or guess a target lap time — you do not have reliable data for that. ` +
+            `Instead: identify the 2-3 most likely areas where time is lost on this track layout with this car, based on track characteristics. Be specific about corners and techniques.`
         )
 
     case 'Setup':
