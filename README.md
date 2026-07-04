@@ -18,12 +18,13 @@ Windows only. Just install and run — no Python, no Node, no setup required. Th
 ## Features
 
 ### Telemetry Viewer
-Multi-lap overlays for 11 channel groups, each color-coded by lap:
+Multi-lap overlays for 12 channel groups, each color-coded by lap:
 
-| Tab | Channels |
-|-----|----------|
+| Tab | What you see |
+|-----|-------------|
 | General | Throttle, Brake, Speed, Gear, G-Forces, Steering |
 | Braking | Brake zone detection, entry speed, pressure profile |
+| Corner Speed | Minimum speed per corner, grouped bar chart across laps |
 | Ride Height | All 4 corners (mm) |
 | Rake | Pitch & Roll |
 | Wheel Speed | All 4 wheels |
@@ -40,6 +41,15 @@ Live SVG circuit map generated from GPS data. The cursor syncs to the chart cros
 ### Brake Analysis
 Detects all brake zones per lap and overlays them on the track map. A comparison table shows the exact entry position (% of lap) and entry speed for each zone across all selected laps — with Δ showing whether you brake earlier or later than the reference lap.
 
+### Corner Speed
+Automatically detects every corner on the circuit and shows the minimum speed through each one across all selected laps. A grouped bar chart and detail table with Δ km/h make it easy to spot where you're losing speed in the middle of corners.
+
+### Consistency Score
+Shown in the sidebar when two or more laps are selected. Calculates a consistency percentage from the lap time standard deviation — green (≥95%), amber (≥85%), red (<85%) — with best lap time and total spread.
+
+### Track Guide
+Each session card has a **▶ Track Guide** button that opens a YouTube search for onboard footage of your specific car and track combination with one click.
+
 ### Lap Delta
 Time delta chart across the full lap distance. See exactly where time is gained or lost between any two laps, with sector time breakdown.
 
@@ -52,7 +62,7 @@ An AI race engineer that analyzes your data and gives you direct, honest feedbac
 **Supported AI providers:**
 - **Ollama** (local, free) — runs models on your own PC
 - **OpenAI** — GPT-4o and others via API key
-- **Google Gemini** — Gemini 1.5 Pro and others via API key
+- **Google Gemini** — Gemini 2.5 Flash and others via API key
 
 **10 languages:** English, Deutsch, Français, Español, Italiano, Português, Nederlands, Polski, Русский, 日本語, 中文
 
