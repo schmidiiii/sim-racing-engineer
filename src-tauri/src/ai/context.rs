@@ -96,11 +96,10 @@ pub fn build_analysis_prompt(session: &Session, stats: &[LapStats], language: &s
          combined with the corner name — e.g. \"T3 (Raidillon)\", \"T1 (La Source)\", \"T10 (Bruxelles)\". \
          If the official turn number is uncertain for a corner, use the corner name only.\n\
          \n\
-         Respond in this exact structure — keep it tight and punchy:\n\
+         NEVER invent or guess lap time targets or benchmark times — you do not have reliable iRacing lap time data. \
+         Focus exclusively on the driver's actual data.\n\
          \n\
-         ## Reference Benchmark\n\
-         Based ONLY on iRacing knowledge (not real-world), state the approximate fastest achievable lap \
-         for a {car} at {track}. Note if uncertain. State the gap to your best ({best}).\n\
+         Respond in this exact structure — keep it tight and punchy:\n\
          \n\
          ## Session Snapshot\n\
          One sentence: your overall pace and biggest consistency weakness from the numbers.\n\
