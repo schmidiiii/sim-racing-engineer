@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import Viewer from '@/pages/Viewer'
 import Settings from '@/pages/Settings'
 import UpdateBanner from '@/components/UpdateBanner'
+import TitleBar from '@/components/TitleBar'
 import { useT } from '@/lib/i18n'
 
 export default function App() {
@@ -30,6 +31,7 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen bg-background text-foreground overflow-hidden">
+      <TitleBar />
       <header className="shrink-0 border-b border-border bg-card">
         <div className="px-5 py-2.5 flex items-center gap-4">
           <div className="flex items-center gap-3">
@@ -40,6 +42,14 @@ export default function App() {
             </div>
           </div>
           <div className="ml-auto flex items-center gap-2">
+            <a
+              href="https://discord.gg/XASdj3SXC3"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-border text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Discord
+            </a>
             <button
               onClick={() => setSettingsOpen(true)}
               className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-border text-muted-foreground hover:text-foreground transition-colors"
