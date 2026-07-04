@@ -8,15 +8,28 @@ export default function Settings() {
   const t = useT()
   const { provider, setProvider } = useAiStore()
   const [activeTab, setActiveTab] = useState<ProviderType>(provider.type)
-  // One draft per provider so switching tabs never discards unsaved changes
-  const [drafts, setDrafts] = useState<Record<ProviderType, ProviderConfig>>({
-    Ollama: provider.type === 'Ollama' ? provider : { type: 'Ollama', base_url: 'http://localhost:11434', model: 'llama3' },
-    OpenAI: provider.type === 'OpenAI' ? provider : { type: 'OpenAI', api_key: '', model: 'gpt-4o-mini' },
-    Gemini: provider.type === 'Gemini' ? provider : { type: 'Gemini', api_key: '', model: 'gemini-2.5-flash' },
+
+  // Load persisted drafts so API keys survive app restarts and provider switches
+  const [drafts, setDrafts] = useState<Record<ProviderType, ProviderConfig>>(() => {
+    const defaults: Record<ProviderType, ProviderConfig> = {
+      Ollama: { type: 'Ollama', base_url: 'http://localhost:11434', model: 'llama3' },
+      OpenAI: { type: 'OpenAI', api_key: '', model: 'gpt-4o-mini' },
+      Gemini: { type: 'Gemini', api_key: '', model: 'gemini-2.5-flash' },
+    }
+    try {
+      const raw = localStorage.getItem('ai_provider_drafts')
+      if (raw) return { ...defaults, ...JSON.parse(raw) }
+    } catch {}
+    return { ...defaults, [provider.type]: provider }
   })
+
   const draft = drafts[activeTab]
   const setDraft = (cfg: ProviderConfig | ((prev: ProviderConfig) => ProviderConfig)) =>
-    setDrafts(d => ({ ...d, [activeTab]: typeof cfg === 'function' ? cfg(d[activeTab]) : cfg }))
+    setDrafts(d => {
+      const next = { ...d, [activeTab]: typeof cfg === 'function' ? cfg(d[activeTab]) : cfg }
+      localStorage.setItem('ai_provider_drafts', JSON.stringify(next))
+      return next
+    })
   const [saved, setSaved] = useState(false)
   const [ollamaModels, setOllamaModels] = useState<string[]>([])
   const [geminiModels, setGeminiModels] = useState<string[]>([])
