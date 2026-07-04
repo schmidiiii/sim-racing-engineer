@@ -183,18 +183,6 @@ export default function TraceGroup() {
             {translateChannelLabel(g.label, t)}
           </button>
         ))}
-        {hasZoom && (
-          <button
-            onClick={() => {
-              zoomRef.current = null
-              setHasZoom(false)
-              redrawsRef.current.forEach(fn => fn())
-            }}
-            className="ml-auto mb-1 mr-0 px-2.5 py-1 text-[10px] font-semibold rounded-md bg-secondary text-secondary-foreground hover:bg-accent transition-colors"
-          >
-            {t('resetZoom')}
-          </button>
-        )}
       </div>
 
       {group.viewType === 'setup' && <SetupView />}

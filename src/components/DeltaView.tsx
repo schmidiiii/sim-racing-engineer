@@ -411,14 +411,6 @@ export default function DeltaView() {
               L{e.lap.lapNumber}{i === refIdx ? ' ★' : ''}
             </span>
           ))}
-          {zoom && (
-            <button
-              onClick={() => setZoom(null)}
-              className="text-[10px] font-semibold px-2 py-0.5 rounded bg-secondary text-secondary-foreground hover:bg-accent transition-colors"
-            >
-              {t('resetZoom')}
-            </button>
-          )}
         </div>
         <div className="px-3 py-2">
           <DeltaChart
