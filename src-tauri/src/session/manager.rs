@@ -95,3 +95,47 @@ pub fn get_session_yaml(state: State<AppState>, session_id: String) -> Result<St
 pub fn get_telemetry_folder() -> String {
     iracing_telemetry_dir().to_string_lossy().to_string()
 }
+
+#[tauri::command]
+pub fn compute_ideal_lap(
+    state: State<AppState>,
+    session_id: String,
+    lap_numbers: Vec<i32>,
+) -> Result<f64, String> {
+    const N: usize = 50;
+
+    let (session, raw) = {
+        let sessions = state.sessions.lock().unwrap();
+        let (s, r) = sessions.get(&session_id)
+            .ok_or_else(|| format!("Session {} not found", session_id))?;
+        (s.clone(), r.clone())
+    };
+
+    let ibt = IbtFile::from_bytes(raw)?;
+    let mut min_sector_times = vec![f64::INFINITY; N];
+    let mut found = false;
+
+    for lap in session.laps.iter().filter(|l| lap_numbers.contains(&l.lap_number) && l.is_valid && l.lap_time > 10.0) {
+        let Some(data) = ibt.get_lap_channel_data(lap, "Speed") else { continue };
+
+        let mut t_start = vec![f64::INFINITY; N];
+        let mut t_end   = vec![f64::NEG_INFINITY; N];
+
+        for (&dist, &t) in data.lap_dist_pct.iter().zip(data.timestamps.iter()) {
+            let s = ((dist * N as f64).floor() as usize).min(N - 1);
+            if t < t_start[s] { t_start[s] = t; }
+            if t > t_end[s]   { t_end[s]   = t; }
+        }
+
+        if t_start.iter().any(|v| !v.is_finite()) { continue; }
+
+        found = true;
+        for s in 0..N {
+            let dt = t_end[s] - t_start[s];
+            if dt < min_sector_times[s] { min_sector_times[s] = dt; }
+        }
+    }
+
+    if !found { return Err("No valid laps".to_string()); }
+    Ok(min_sector_times.iter().sum())
+}

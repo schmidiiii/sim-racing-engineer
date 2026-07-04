@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react'
 import { open } from '@tauri-apps/plugin-dialog'
 import { invoke } from '@tauri-apps/api/core'
 import { useSessionStore, getLapColor, lapKey, type Session } from '@/store/session'
@@ -116,6 +117,7 @@ function fmtTime(t: number): string {
 function ConsistencyPanel() {
   const t = useT()
   const { sessions, selectedLapKeys } = useSessionStore()
+  const [idealTime, setIdealTime] = useState<number | null>(null)
 
   const selectedLaps = selectedLapKeys
     .map(key => {
@@ -126,6 +128,24 @@ function ConsistencyPanel() {
       return sess?.laps.find(l => l.lap_number === lapNum)
     })
     .filter((l): l is NonNullable<typeof l> => !!l && l.is_valid && l.lap_time > 10)
+
+  // Compute ideal lap when selection changes (only within a single session)
+  useEffect(() => {
+    setIdealTime(null)
+    if (selectedLapKeys.length < 2) return
+    const bySession: Record<string, number[]> = {}
+    selectedLapKeys.forEach(key => {
+      const idx = key.lastIndexOf(':')
+      const sid = key.slice(0, idx)
+      const num = parseInt(key.slice(idx + 1))
+      ;(bySession[sid] ??= []).push(num)
+    })
+    const sids = Object.keys(bySession)
+    if (sids.length !== 1 || bySession[sids[0]].length < 2) return
+    invoke<number>('compute_ideal_lap', { sessionId: sids[0], lapNumbers: bySession[sids[0]] })
+      .then(setIdealTime)
+      .catch(() => setIdealTime(null))
+  }, [selectedLapKeys.join(',')])
 
   if (selectedLaps.length < 2) return null
 
@@ -147,6 +167,8 @@ function ConsistencyPanel() {
     consistency >= 85 ? 'bg-amber-400' :
     'bg-red-400'
 
+  const idealDelta = idealTime != null ? best - idealTime : null
+
   return (
     <div className="shrink-0 border-t border-border px-3 py-2.5 bg-secondary/20">
       <div className="flex items-center justify-between mb-1.5">
@@ -156,7 +178,7 @@ function ConsistencyPanel() {
       <div className="h-1 bg-secondary rounded-full mb-2 overflow-hidden">
         <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${consistency}%` }} />
       </div>
-      <div className="grid grid-cols-2 gap-x-3">
+      <div className="grid grid-cols-3 gap-x-2">
         <div>
           <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wide">Best</p>
           <p className="text-[11px] font-mono text-foreground tabular-nums">{fmtTime(best)}</p>
@@ -164,6 +186,19 @@ function ConsistencyPanel() {
         <div>
           <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wide">{t('lapSpread')}</p>
           <p className="text-[11px] font-mono text-foreground tabular-nums">+{spread.toFixed(3)}s</p>
+        </div>
+        <div>
+          <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wide">{t('idealLap')}</p>
+          {idealTime != null ? (
+            <p className="text-[11px] font-mono tabular-nums">
+              <span className="text-foreground">{fmtTime(idealTime)}</span>
+              {idealDelta != null && Math.abs(idealDelta) > 0.01 && (
+                <span className="text-amber-400 ml-0.5">(-{Math.abs(idealDelta).toFixed(3)}s)</span>
+              )}
+            </p>
+          ) : (
+            <p className="text-[11px] font-mono text-muted-foreground/40">–</p>
+          )}
         </div>
       </div>
     </div>
