@@ -131,20 +131,21 @@ function ConsistencyPanel() {
   if (selectedLaps.length < 2) return null
 
   const times = selectedLaps.map(l => l.lap_time)
+  const best = Math.min(...times)
   const mean = times.reduce((a, b) => a + b, 0) / times.length
   const stddev = Math.sqrt(times.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / times.length)
-  const consistency = Math.max(0, Math.min(100, (1 - stddev / mean) * 100))
-  const spread = Math.max(...times) - Math.min(...times)
-  const best = Math.min(...times)
+  // Scale: stddev of 0.1s on an 82s lap → ~97.6%, stddev of 1.5s → ~63%. Motorsport-meaningful.
+  const consistency = Math.max(0, Math.min(100, 100 - (stddev / best) * 2000))
+  const spread = Math.max(...times) - best
 
   const scoreColor =
-    consistency >= 97 ? 'text-emerald-400' :
-    consistency >= 92 ? 'text-amber-400' :
+    consistency >= 95 ? 'text-emerald-400' :
+    consistency >= 85 ? 'text-amber-400' :
     'text-red-400'
 
   const barColor =
-    consistency >= 97 ? 'bg-emerald-400' :
-    consistency >= 92 ? 'bg-amber-400' :
+    consistency >= 95 ? 'bg-emerald-400' :
+    consistency >= 85 ? 'bg-amber-400' :
     'bg-red-400'
 
   return (
