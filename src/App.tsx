@@ -2,18 +2,8 @@ import { useState, useEffect } from 'react'
 import Viewer from '@/pages/Viewer'
 import Settings from '@/pages/Settings'
 import UpdateBanner from '@/components/UpdateBanner'
+import TitleBar from '@/components/TitleBar'
 import { useT } from '@/lib/i18n'
-
-const isTauri = '__TAURI_INTERNALS__' in window
-
-function winAction(action: 'minimize' | 'maximize' | 'close') {
-  import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
-    const win = getCurrentWindow()
-    if (action === 'minimize') win.minimize()
-    else if (action === 'maximize') win.toggleMaximize()
-    else win.close()
-  })
-}
 
 export default function App() {
   const t = useT()
@@ -22,7 +12,7 @@ export default function App() {
   const [version, setVersion] = useState('')
 
   useEffect(() => {
-    if (isTauri) {
+    if ('__TAURI_INTERNALS__' in window) {
       import('@tauri-apps/api/app').then(({ getVersion }) => getVersion().then(setVersion))
     }
   }, [])
@@ -40,12 +30,10 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen bg-background text-foreground overflow-hidden">
-      <header
-        data-tauri-drag-region
-        className="shrink-0 border-b border-border bg-card select-none"
-      >
+      <TitleBar />
+      <header className="shrink-0 border-b border-border bg-card">
         <div className="px-5 py-2.5 flex items-center gap-4">
-          <div className="flex items-center gap-3" data-tauri-drag-region>
+          <div className="flex items-center gap-3">
             <img src="/LogoSRE.png" alt="logo" className="h-11 w-11 object-contain" />
             <div>
               <div className="font-bold text-lg text-foreground tracking-tight leading-tight">Sim Racing Engineer</div>
@@ -74,31 +62,6 @@ export default function App() {
             >
               {dark ? `☀ ${t('light')}` : `☾ ${t('dark')}`}
             </button>
-            {isTauri && (
-              <div className="flex items-center ml-1 -mr-3 border-l border-border">
-                <button
-                  onClick={() => winAction('minimize')}
-                  className="h-9 w-10 flex items-center justify-center text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors text-sm"
-                  aria-label="Minimize"
-                >
-                  ─
-                </button>
-                <button
-                  onClick={() => winAction('maximize')}
-                  className="h-9 w-10 flex items-center justify-center text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors text-sm"
-                  aria-label="Maximize"
-                >
-                  □
-                </button>
-                <button
-                  onClick={() => winAction('close')}
-                  className="h-9 w-10 flex items-center justify-center text-muted-foreground hover:bg-red-500 hover:text-white transition-colors text-sm"
-                  aria-label="Close"
-                >
-                  ✕
-                </button>
-              </div>
-            )}
           </div>
         </div>
       </header>
