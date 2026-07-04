@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useSessionStore, parseLapKey, getLapColor } from '@/store/session'
+import { useT } from '@/lib/i18n'
 
 interface LapChannelData {
   lap_number: number
@@ -90,6 +91,7 @@ function project(lat: number, lon: number, tf: ReturnType<typeof computeTransfor
 }
 
 export default function BrakeAnalysis() {
+  const t = useT()
   const { sessions, selectedLapKeys } = useSessionStore()
   const [lapDataArr, setLapDataArr] = useState<LapData[]>([])
   const [loading, setLoading] = useState(false)
@@ -144,12 +146,12 @@ export default function BrakeAnalysis() {
 
   if (loading) return (
     <div className="flex-1 flex items-center justify-center">
-      <p className="text-sm text-muted-foreground">Lade Bremsdaten…</p>
+      <p className="text-sm text-muted-foreground">{t('loadingBrakes')}</p>
     </div>
   )
   if (lapDataArr.length === 0) return (
     <div className="flex-1 flex items-center justify-center">
-      <p className="text-sm text-muted-foreground">Keine Bremsdaten verfügbar</p>
+      <p className="text-sm text-muted-foreground">{t('noBrakeData')}</p>
     </div>
   )
 
@@ -163,7 +165,7 @@ export default function BrakeAnalysis() {
 
       {/* Bremsdruckverlauf strips — one zone rect per detected zone (fast) */}
       <div className="bg-card rounded-xl border border-border shadow-sm p-4">
-        <h3 className="text-sm font-semibold text-foreground mb-3">Bremsdruckverlauf</h3>
+        <h3 className="text-sm font-semibold text-foreground mb-3">{t('brakeTrace')}</h3>
         <div className="space-y-2">
           {lapDataArr.map(ld => (
             <div key={ld.lapKey} className="flex items-center gap-2">
@@ -189,7 +191,7 @@ export default function BrakeAnalysis() {
                 </svg>
               </div>
               <span className="text-[10px] text-muted-foreground w-14 text-right shrink-0">
-                {ld.zones.length} Zonen
+                {ld.zones.length} {t('brakeZones')}
               </span>
             </div>
           ))}
@@ -199,7 +201,7 @@ export default function BrakeAnalysis() {
           <div className="flex-1 h-1 rounded" style={{
             background: 'linear-gradient(to right, hsl(var(--secondary)) 0%, rgba(239,68,68,0.4) 40%, rgba(239,68,68,1) 100%)'
           }} />
-          <span className="text-[10px] text-muted-foreground">100% Strecke</span>
+          <span className="text-[10px] text-muted-foreground">{t('trackEnd')}</span>
         </div>
       </div>
 
@@ -208,7 +210,7 @@ export default function BrakeAnalysis() {
 
         {tf && gpsLap && (
           <div className="bg-card rounded-xl border border-border shadow-sm p-3">
-            <h3 className="text-xs font-semibold text-foreground mb-2">Bremspunkte</h3>
+            <h3 className="text-xs font-semibold text-foreground mb-2">{t('brakePoints')}</h3>
             <svg viewBox="0 0 200 200" className="w-full" style={{ aspectRatio: '1' }}>
               {/* Downsampled track outline */}
               {Array.from({ length: Math.floor((gpsLap.lat.length - 1) / STEP) }, (_, k) => {
@@ -249,7 +251,7 @@ export default function BrakeAnalysis() {
 
         {/* Zone comparison table */}
         <div className="bg-card rounded-xl border border-border shadow-sm p-4 min-w-0">
-          <h3 className="text-sm font-semibold text-foreground mb-3">Zonevergleich</h3>
+          <h3 className="text-sm font-semibold text-foreground mb-3">{t('zoneComparison')}</h3>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
@@ -312,9 +314,7 @@ export default function BrakeAnalysis() {
               </tbody>
             </table>
           </div>
-          <p className="text-[10px] text-muted-foreground/40 mt-3">
-            Δ = Differenz Bremspunkt in % der Rundenlänge · positiv = früher · negativ = später gebremst
-          </p>
+          <p className="text-[10px] text-muted-foreground/40 mt-3">{t('brakeZoneDeltaHint')}</p>
         </div>
       </div>
     </div>
