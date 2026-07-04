@@ -39,7 +39,6 @@ function LapRow({ sessionId, lapNumber, lapTime, isValid, colorIndex, fastestTim
           backgroundColor: selected ? color : 'transparent',
           borderColor: selected ? color : 'hsl(var(--border))',
         }}
-        onClick={() => !disabled && toggleLap(sessionId, lapNumber)}
       />
       <input type="checkbox" className="sr-only" checked={selected} disabled={disabled} onChange={() => !disabled && toggleLap(sessionId, lapNumber)} />
       <span className="text-xs font-mono text-muted-foreground w-6 shrink-0">L{lapNumber}</span>
