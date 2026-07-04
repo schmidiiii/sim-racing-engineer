@@ -193,7 +193,7 @@ function ConsistencyPanel() {
             <>
               <p className="text-xs font-mono text-foreground tabular-nums">{fmtTime(idealTime)}</p>
               {idealDelta != null && Math.abs(idealDelta) > 0.01 && (
-                <p className="text-[10px] font-mono text-amber-400 tabular-nums">-{Math.abs(idealDelta).toFixed(3)}s</p>
+                <p className="text-[10px] font-mono text-sky-500 tabular-nums">-{Math.abs(idealDelta).toFixed(3)}s</p>
               )}
             </>
           ) : (
