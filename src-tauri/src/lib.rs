@@ -10,6 +10,7 @@ pub fn run() {
         .manage(AppState::new())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let dir = session::manager::iracing_telemetry_dir();
             session::watcher::start_watcher(app.handle().clone(), dir);

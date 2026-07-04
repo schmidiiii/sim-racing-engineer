@@ -53,6 +53,7 @@ pub async fn auto_analyze(
     state: State<'_, AppState>,
     session_id: String,
     provider: ProviderConfig,
+    language: String,
     event_id: String,
 ) -> Result<(), String> {
     let (session, raw) = {
@@ -68,8 +69,41 @@ pub async fn auto_analyze(
         .map(|lap| ibt.compute_lap_stats(lap, ANALYSIS_CHANNELS))
         .collect();
 
-    let prompt = build_analysis_prompt(&session, &stats);
-    let messages = vec![AiMessage { role: "user".into(), content: prompt }];
+    let lang_name = match language.as_str() {
+        "de" => "German (Deutsch)",
+        "fr" => "French (Français)",
+        "es" => "Spanish (Español)",
+        "it" => "Italian (Italiano)",
+        "pt" => "Portuguese (Português)",
+        "nl" => "Dutch (Nederlands)",
+        "pl" => "Polish (Polski)",
+        "ru" => "Russian (Русский)",
+        "ja" => "Japanese (日本語)",
+        "zh" => "Chinese (中文)",
+        _ => "English",
+    };
+
+    let system_msg = AiMessage {
+        role: "system".into(),
+        content: format!(
+            "You are the driver's personal race engineer for iRacing sim-racing. \
+             Your tone is professional, direct, data-driven, and constructively critical — \
+             no filler praise, no hedging. You hunt for tenths left on track. \
+             Use motorsport vocabulary: trail-braking, apex, throttle application, rotation, \
+             understeer, oversteer, track limits, minimum speed, brake bias. \
+             When referencing corners, use the OFFICIAL turn numbers from your knowledge of the circuit, \
+             combined with the corner name: e.g. T3 (Raidillon), T1 (La Source), T10 (Bruxelles). \
+             Only use the corner name if you are uncertain about the official turn number. \
+             You MUST respond ONLY in {lang_name}. \
+             Never switch language regardless of what language the data is written in.",
+        ),
+    };
+
+    let prompt = build_analysis_prompt(&session, &stats, &language);
+    let messages = vec![
+        system_msg,
+        AiMessage { role: "user".into(), content: prompt },
+    ];
 
     dispatch_stream(provider, messages, app, event_id).await
 }

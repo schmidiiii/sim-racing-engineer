@@ -37,6 +37,7 @@ pub struct LapChannelData {
     pub channel: String,
     pub samples: Vec<f64>,
     pub timestamps: Vec<f64>,
+    pub lap_dist_pct: Vec<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
