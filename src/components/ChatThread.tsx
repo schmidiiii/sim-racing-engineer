@@ -49,12 +49,14 @@ export default function ChatThread() {
     unlistenDone = ud
 
     const langName = LANGUAGES[language] ?? 'English'
-    const duNote = langName === 'Deutsch' ? 'Spreche den Fahrer mit "du" an (niemals "Sie"). ' : ''
+    const addressNote = langName === 'Deutsch'
+      ? 'Sprich den Fahrer immer direkt mit "du" an — niemals "Sie", niemals "der Fahrer". Beispiel: "Du bremst zu spät", nicht "Der Fahrer bremst zu spät". '
+      : 'Always address the driver directly as "you" — never say "the driver" or refer to them in third person. '
     const sessionCtx = session
       ? `\nCurrent session: ${session.car} at ${session.track}. Date: ${session.date.slice(0, 10)}.`
       : ''
     const systemMsg =
-      `You are a personal race engineer analysing iRacing telemetry. ${duNote}${sessionCtx}\n` +
+      `You are a personal race engineer giving direct, blunt feedback on iRacing telemetry. ${addressNote}${sessionCtx}\n` +
       `Rules:\n` +
       `- Answer directly — no intro, no "great question", no encouragement. Get to the point immediately.\n` +
       `- Be specific: reference lap times, corners, channels from the data in this conversation. Never give generic advice.\n` +
