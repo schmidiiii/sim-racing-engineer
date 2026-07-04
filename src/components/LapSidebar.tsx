@@ -133,8 +133,8 @@ function ConsistencyPanel() {
   const best = Math.min(...times)
   const mean = times.reduce((a, b) => a + b, 0) / times.length
   const stddev = Math.sqrt(times.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / times.length)
-  // Scale: stddev of 0.1s on an 82s lap → ~97.6%, stddev of 1.5s → ~63%. Motorsport-meaningful.
-  const consistency = Math.max(0, Math.min(100, 100 - (stddev / best) * 2000))
+  // Scale: 0.3s spread → ~98%, 1s spread → ~95%, 3s spread → ~85%, 5s spread → ~76%
+  const consistency = Math.max(0, Math.min(100, 100 - (stddev / best) * 800))
   const spread = Math.max(...times) - best
 
   const scoreColor =
