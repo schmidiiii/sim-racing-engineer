@@ -30,17 +30,64 @@ function StatCard({ label, value, sub }: { label: string; value: string; sub?: s
 
 export default function TraceGroup() {
   const t = useT()
-  const { sessions, selectedLapKeys, crosshairTime, setCrosshairTime, activeSessionId, setActiveTabLabel } = useSessionStore()
+  const { sessions, selectedLapKeys, crosshairTime, setCrosshairTime, activeSessionId, setActiveTabLabel, lapMapFullscreen, setLapMapFullscreen } = useSessionStore()
   const [activeGroup, setActiveGroup] = useState(0)
   const [traces, setTraces] = useState<Record<string, LapTrace[]>>({})
   const [fetchError, setFetchError] = useState<string | null>(null)
   const [isFetching, setIsFetching] = useState(false)
   const zoomRef = useRef<[number, number] | null>(null)
   const redrawsRef = useRef(new Set<() => void>())
+  const activeGroupRef = useRef(activeGroup)
+  useEffect(() => { activeGroupRef.current = activeGroup }, [activeGroup])
+  const fullscreenRef = useRef(lapMapFullscreen)
+  useEffect(() => { fullscreenRef.current = lapMapFullscreen }, [lapMapFullscreen])
+  const crosshairTimeRef = useRef(crosshairTime)
+  useEffect(() => { crosshairTimeRef.current = crosshairTime }, [crosshairTime])
   // Cache: `${sessionId}:${lapNumber}:${channel}` → already-transformed samples+timestamps+lapDistPct
   const lapCache = useRef<Record<string, { samples: number[], timestamps: number[], lapDistPct: number[] }>>({})
   const prevGroupRef = useRef<number>(-1)
   const fetchIdRef = useRef(0)
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement)?.isContentEditable) return
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+
+      // L — open Lap Analyse
+      if (e.key === 'l' || e.key === 'L') {
+        if (!fullscreenRef.current) { setLapMapFullscreen(true); e.preventDefault() }
+        return
+      }
+
+      if (fullscreenRef.current) return
+
+      if (e.key === '[') {
+        const next = (activeGroupRef.current - 1 + CHANNEL_GROUPS.length) % CHANNEL_GROUPS.length
+        setActiveGroup(next); setActiveTabLabel(CHANNEL_GROUPS[next].label)
+        zoomRef.current = null; redrawsRef.current.forEach(fn => fn())
+        e.preventDefault()
+      } else if (e.key === ']') {
+        const next = (activeGroupRef.current + 1) % CHANNEL_GROUPS.length
+        setActiveGroup(next); setActiveTabLabel(CHANNEL_GROUPS[next].label)
+        zoomRef.current = null; redrawsRef.current.forEach(fn => fn())
+        e.preventDefault()
+      } else if (e.key === 'r' || e.key === 'R') {
+        zoomRef.current = null; redrawsRef.current.forEach(fn => fn())
+        e.preventDefault()
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        const current = crosshairTimeRef.current
+        if (current === null) return
+        const zoom = zoomRef.current
+        const step = zoom ? (zoom[1] - zoom[0]) / 100 : 0.5
+        const dir = e.key === 'ArrowLeft' ? -1 : 1
+        setCrosshairTime(current + dir * step)
+        e.preventDefault()
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, []) // reads all state via refs
 
   const handleZoom = useCallback((domain: [number, number] | null) => {
     zoomRef.current = domain
@@ -237,12 +284,29 @@ export default function TraceGroup() {
 
         {/* Chart cards — only render channels that have data */}
         {!isFetching && selectedLapKeys.length > 0 && (() => {
-          const withData = group.channels.filter(ch => (traces[ch]?.length ?? 0) > 0)
+          const channelsWithData = group.channels.filter(ch => (traces[ch]?.length ?? 0) > 0)
+
+          // Filter out channels that are flat (max-min below threshold) — some car models
+          // report constant values for channels they don't simulate (e.g. tyre temps)
+          const minVar = group.minVarianceToShow
+          const withData = minVar == null ? channelsWithData : channelsWithData.filter(ch => {
+            // Check variance across ALL laps combined — tyre temps often vary between laps
+            // but not within a single lap (slow-updating channels)
+            let min = Infinity, max = -Infinity
+            for (const trace of traces[ch]) {
+              for (const v of trace.samples) { if (v < min) min = v; if (v > max) max = v }
+            }
+            return max - min >= minVar
+          })
+
           const fetched = group.channels.some(ch => traces[ch] !== undefined)
           if (fetched && withData.length === 0) {
             return (
-              <div className="bg-card rounded-xl border border-border shadow-sm px-4 py-8 flex items-center justify-center">
+              <div className="bg-card rounded-xl border border-border shadow-sm px-4 py-8 flex items-center justify-center flex-col gap-1">
                 <p className="text-sm text-muted-foreground">{t('noDataSession').replace('%label%', translateChannelLabel(group.label, t))}</p>
+                {channelsWithData.length > 0 && (
+                  <p className="text-xs text-muted-foreground/60">{t('noDataVariance').replace('%label%', translateChannelLabel(group.label, t).toLowerCase())}</p>
+                )}
               </div>
             )
           }

@@ -10,11 +10,15 @@ const SUFFIX: Record<string, string> = {
   wheelSlip: 'Slip',
   slip: 'Slip Angle',
   slipRatio: 'Slip Ratio',
+  tempL: 'Temp (L)',
+  tempM: 'Temp (M)',
+  tempR: 'Temp (R)',
   tempCL: 'Temp (L)',
   tempCM: 'Temp (M)',
   tempCR: 'Temp (R)',
   temp: 'Temperature',
   press: 'Pressure',
+  pressure: 'Pressure',
 }
 
 const EXPLICIT: Record<string, string> = {
@@ -50,6 +54,7 @@ export interface ChannelGroupDef {
   units: Record<string, string>
   transforms: Record<string, (v: number) => number>
   yDomains: Record<string, [number | 'auto', number | 'auto']>
+  minVarianceToShow?: number  // skip channels with max-min below this threshold
 }
 
 const mps2kph = (v: number) => v * 3.6
@@ -58,6 +63,7 @@ const rad2deg = (v: number) => v * (180 / Math.PI)
 const m2mm = (v: number) => v * 1000
 
 export const CHANNEL_GROUPS: ChannelGroupDef[] = [
+  // ── Driving analysis ──────────────────────────────────────────────────────
   {
     label: 'General',
     channels: ['Speed', 'Throttle', 'Brake', 'Gear'],
@@ -66,32 +72,8 @@ export const CHANNEL_GROUPS: ChannelGroupDef[] = [
     yDomains: { Throttle: [0, 100], Brake: [0, 100], Speed: [0, 'auto'], Gear: [0, 'auto'] },
   },
   {
-    label: 'Setup',
-    viewType: 'setup',
-    channels: [],
-    units: {},
-    transforms: {},
-    yDomains: {},
-  },
-  {
-    label: 'Delta',
-    viewType: 'delta',
-    channels: [],
-    units: {},
-    transforms: {},
-    yDomains: {},
-  },
-  {
     label: 'Braking',
     viewType: 'braking',
-    channels: [],
-    units: {},
-    transforms: {},
-    yDomains: {},
-  },
-  {
-    label: 'Lap Analyser',
-    viewType: 'lapMap',
     channels: [],
     units: {},
     transforms: {},
@@ -106,17 +88,39 @@ export const CHANNEL_GROUPS: ChannelGroupDef[] = [
     yDomains: {},
   },
   {
-    label: 'Ride Height',
-    channels: ['LFrideHeight', 'RFrideHeight', 'LRrideHeight', 'RRrideHeight'],
-    units: { LFrideHeight: 'mm', RFrideHeight: 'mm', LRrideHeight: 'mm', RRrideHeight: 'mm' },
-    transforms: { LFrideHeight: m2mm, RFrideHeight: m2mm, LRrideHeight: m2mm, RRrideHeight: m2mm },
+    label: 'Delta',
+    viewType: 'delta',
+    channels: [],
+    units: {},
+    transforms: {},
     yDomains: {},
   },
+  // ── Tyres ─────────────────────────────────────────────────────────────────
   {
-    label: 'Rake',
-    channels: ['Pitch', 'Roll'],
-    units: { Pitch: 'deg', Roll: 'deg' },
-    transforms: { Pitch: rad2deg, Roll: rad2deg },
+    label: 'Tyre Temp',
+    // LFtempL/M/R = instantaneous surface temps (dynamic, vary during lap)
+    // LFtempCL/CM/CR = static averaged/baseline values (always constant in IBT)
+    channels: [
+      'LFtempL', 'LFtempM', 'LFtempR',
+      'RFtempL', 'RFtempM', 'RFtempR',
+      'LRtempL', 'LRtempM', 'LRtempR',
+      'RRtempL', 'RRtempM', 'RRtempR',
+    ],
+    units: Object.fromEntries([
+      'LFtempL', 'LFtempM', 'LFtempR',
+      'RFtempL', 'RFtempM', 'RFtempR',
+      'LRtempL', 'LRtempM', 'LRtempR',
+      'RRtempL', 'RRtempM', 'RRtempR',
+    ].map(c => [c, '°C'])),
+    transforms: {},
+    yDomains: {},
+    minVarianceToShow: 1,
+  },
+  {
+    label: 'Tyre Pressure',
+    channels: ['LFpressure', 'RFpressure', 'LRpressure', 'RRpressure'],
+    units: { LFpressure: 'kPa', RFpressure: 'kPa', LRpressure: 'kPa', RRpressure: 'kPa' },
+    transforms: {},
     yDomains: {},
   },
   {
@@ -138,6 +142,21 @@ export const CHANNEL_GROUPS: ChannelGroupDef[] = [
     transforms: { LFwheelSlip: ratio2pct, RFwheelSlip: ratio2pct, LRwheelSlip: ratio2pct, RRwheelSlip: ratio2pct },
     yDomains: {},
   },
+  // ── Suspension ────────────────────────────────────────────────────────────
+  {
+    label: 'Ride Height',
+    channels: ['LFrideHeight', 'RFrideHeight', 'LRrideHeight', 'RRrideHeight'],
+    units: { LFrideHeight: 'mm', RFrideHeight: 'mm', LRrideHeight: 'mm', RRrideHeight: 'mm' },
+    transforms: { LFrideHeight: m2mm, RFrideHeight: m2mm, LRrideHeight: m2mm, RRrideHeight: m2mm },
+    yDomains: {},
+  },
+  {
+    label: 'Rake',
+    channels: ['Pitch', 'Roll'],
+    units: { Pitch: 'deg', Roll: 'deg' },
+    transforms: { Pitch: rad2deg, Roll: rad2deg },
+    yDomains: {},
+  },
   {
     label: 'Shocks',
     channels: ['LFshockDefl', 'RFshockDefl', 'LRshockDefl', 'RRshockDefl'],
@@ -152,30 +171,12 @@ export const CHANNEL_GROUPS: ChannelGroupDef[] = [
     transforms: {},
     yDomains: {},
   },
+  // ── Car ───────────────────────────────────────────────────────────────────
   {
-    label: 'Tyre Temp',
-    channels: [
-      'LFtempCL', 'LFtempCM', 'LFtempCR',
-      'RFtempCL', 'RFtempCM', 'RFtempCR',
-      'LRtempCL', 'LRtempCM', 'LRtempCR',
-      'RRtempCL', 'RRtempCM', 'RRtempCR',
-      // fallback names used by some iRacing cars
-      'LFtemp', 'RFtemp', 'LRtemp', 'RRtemp',
-    ],
-    units: Object.fromEntries([
-      'LFtempCL', 'LFtempCM', 'LFtempCR',
-      'RFtempCL', 'RFtempCM', 'RFtempCR',
-      'LRtempCL', 'LRtempCM', 'LRtempCR',
-      'RRtempCL', 'RRtempCM', 'RRtempCR',
-      'LFtemp', 'RFtemp', 'LRtemp', 'RRtemp',
-    ].map(c => [c, '°C'])),
-    transforms: {},
-    yDomains: {},
-  },
-  {
-    label: 'Tyre Pressure',
-    channels: ['LFpress', 'RFpress', 'LRpress', 'RRpress'],
-    units: { LFpress: 'kPa', RFpress: 'kPa', LRpress: 'kPa', RRpress: 'kPa' },
+    label: 'Setup',
+    viewType: 'setup',
+    channels: [],
+    units: {},
     transforms: {},
     yDomains: {},
   },

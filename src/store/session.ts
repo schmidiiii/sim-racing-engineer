@@ -69,6 +69,8 @@ interface SessionStore {
   setActiveTabLabel: (label: string) => void
   autoLoad: boolean
   setAutoLoad: (v: boolean) => void
+  lapMapFullscreen: boolean
+  setLapMapFullscreen: (v: boolean) => void
   loadLatest: () => Promise<void>
   loadFiles: (paths: string[]) => Promise<void>
   toggleLap: (sessionId: string, lapNumber: number) => void
@@ -108,6 +110,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
   autoLoad: localStorage.getItem('srAutoLoad') !== 'false',
   setAutoLoad: (v) => { localStorage.setItem('srAutoLoad', String(v)); set({ autoLoad: v }) },
+
+  lapMapFullscreen: false,
+  setLapMapFullscreen: (v) => set({ lapMapFullscreen: v }),
 
   setActiveSessionId: (id) => {
     const { sessions } = get()

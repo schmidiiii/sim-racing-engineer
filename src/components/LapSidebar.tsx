@@ -207,7 +207,7 @@ function ConsistencyPanel() {
 
 export default function LapSidebar() {
   const t = useT()
-  const { sessions, activeSessionId, setActiveSessionId, removeSession, loading, error, loadFiles, autoLoad, setAutoLoad } = useSessionStore()
+  const { sessions, activeSessionId, setActiveSessionId, removeSession, loading, error, loadFiles, autoLoad, setAutoLoad, lapMapFullscreen, setLapMapFullscreen } = useSessionStore()
 
   const fastestTime = sessions.flatMap(s => s.laps)
     .filter(l => l.is_valid && l.lap_time > 10)
@@ -292,6 +292,23 @@ export default function LapSidebar() {
       {/* Track map */}
       <div className="shrink-0 border-t border-border p-2" style={{ height: 280 }}>
         <TrackMap />
+      </div>
+
+      {/* Lap Analyse button */}
+      <div className="shrink-0 border-t border-border px-3 py-2">
+        <button
+          onClick={() => setLapMapFullscreen(true)}
+          className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg border border-border hover:border-primary/40 hover:bg-primary/5 text-xs font-medium text-muted-foreground hover:text-primary transition-colors"
+        >
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M2 13 L5 8 L8 10 L11 5 L14 7" />
+            <rect x="1" y="1" width="14" height="14" rx="2" strokeWidth="1.4" />
+          </svg>
+          {t('lapAnalyse')}
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="ml-auto opacity-50">
+            <path d="M1 5h8M6 2l3 3-3 3" />
+          </svg>
+        </button>
       </div>
 
       {/* Load button + auto-load toggle */}
