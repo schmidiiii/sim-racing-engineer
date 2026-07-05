@@ -106,6 +106,7 @@ const EN = {
   toggleTheme: 'Toggle dark / light mode',
   aiCoach: 'Race Engineer',
   joinDiscord: 'Join Discord',
+  autoLoadFiles: 'Auto-open new files',
   // AI onboarding
   configureAi: 'Connect Engineer',
   configureAiHint: 'Connect a model to get your personal race engineer — direct, data-driven feedback on every lap.',
@@ -138,6 +139,7 @@ const DICT: Record<string, Dict> = {
     model: 'Modell', baseUrl: 'Basis-URL', apiKey: 'API-Schlüssel',
     ollamaHint: 'ollama serve lokal ausführen und zuerst ein Modell laden.',
     sessions: 'Sessions', noSessionLoaded: 'Keine Session geladen',
+    autoLoadFiles: 'Neue Dateien automatisch öffnen',
     loadFiles: '+ Datei(en) laden…', errorLoadingFile: 'Fehler beim Laden',
     removeSession: 'Session entfernen', resetZoom: 'Zoom zurücksetzen',
     tabDelta: 'Delta', sectors: 'Sektoren', refLap: 'Referenzrunde',
