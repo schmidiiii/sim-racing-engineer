@@ -307,14 +307,68 @@ export default function TraceChart({
       if (lo < fullMin) { hi = Math.min(fullMax, hi + fullMin - lo); lo = fullMin }
       if (hi > fullMax) { lo = Math.max(fullMin, lo - (hi - fullMax)); hi = fullMax }
       const domain: [number, number] | null = hi - lo >= (fullMax - fullMin) * 0.999 ? null : [lo, hi]
-      onZoom(domain) // updates zoomRef.current, then calls all registered redraws
+      onZoom(domain)
+      // Update cursor hint: grab = zoomed-in and pannable
+      el.style.cursor = domain ? 'grab' : 'crosshair'
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
   }, [zoomRef, onZoom])
 
-  // Mouse → shared crosshair time
+  // Left-click drag → pan when zoomed in
+  const isDraggingRef = useRef(false)
+  useEffect(() => {
+    const el = wrapperRef.current
+    if (!el) return
+
+    let drag: { x: number; lo: number; hi: number } | null = null
+
+    const down = (e: MouseEvent) => {
+      if (e.button !== 0 || !zoomRef.current) return
+      e.preventDefault()
+      drag = { x: e.clientX, lo: zoomRef.current[0], hi: zoomRef.current[1] }
+      isDraggingRef.current = true
+      el.style.cursor = 'grabbing'
+      document.addEventListener('mousemove', move)
+      document.addEventListener('mouseup', up)
+    }
+
+    const move = (e: MouseEvent) => {
+      if (!drag) return
+      const d = dataRef.current
+      if (d.length < 2) return
+      const fullMin = d[0].t, fullMax = d[d.length - 1].t
+      const span = drag.hi - drag.lo
+      const rect = el.getBoundingClientRect()
+      const W = rect.width - PAD.l - PAD.r
+      if (W <= 0) return
+      const dt = -(e.clientX - drag.x) / W * span
+      let lo = drag.lo + dt, hi = drag.hi + dt
+      if (lo < fullMin) { lo = fullMin; hi = Math.min(fullMax, fullMin + span) }
+      if (hi > fullMax) { hi = fullMax; lo = Math.max(fullMin, fullMax - span) }
+      const domain: [number, number] | null = hi - lo >= (fullMax - fullMin) * 0.999 ? null : [lo, hi]
+      onZoom(domain)
+    }
+
+    const up = () => {
+      drag = null
+      isDraggingRef.current = false
+      el.style.cursor = zoomRef.current ? 'grab' : 'crosshair'
+      document.removeEventListener('mousemove', move)
+      document.removeEventListener('mouseup', up)
+    }
+
+    el.addEventListener('mousedown', down)
+    return () => {
+      el.removeEventListener('mousedown', down)
+      document.removeEventListener('mousemove', move)
+      document.removeEventListener('mouseup', up)
+    }
+  }, [zoomRef, onZoom])
+
+  // Mouse → shared crosshair time (suppressed while dragging)
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (isDraggingRef.current) return
     const dc = dataCanvasRef.current
     if (!dc) return
     const rect = dc.getBoundingClientRect()
@@ -354,7 +408,7 @@ export default function TraceChart({
         ref={wrapperRef}
         style={{ position: 'relative', height, userSelect: 'none', cursor: 'crosshair' }}
         onMouseMove={handleMouseMove}
-        onMouseLeave={() => onMouseMove(null)}
+        onMouseLeave={() => { if (!isDraggingRef.current) onMouseMove(null) }}
       >
         <canvas ref={dataCanvasRef} style={{ position: 'absolute', top: 0, left: 0, display: 'block' }} />
         <canvas ref={xhairCanvasRef} style={{ position: 'absolute', top: 0, left: 0, display: 'block' }} />
