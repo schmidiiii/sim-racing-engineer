@@ -78,7 +78,7 @@ function buildChartData(
       dist: refCorner.dist,
     }
     for (const lap of allLaps) {
-      const match = lap.corners.find(c => Math.abs(c.dist - refCorner.dist) < 0.05)
+      const match = lap.corners.find(c => Math.abs(c.dist - refCorner.dist) < 0.08)
       if (match) row[lap.lapKey] = Math.round(match.minSpeed)
     }
     return row
