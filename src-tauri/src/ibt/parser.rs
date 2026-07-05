@@ -176,7 +176,7 @@ impl IbtFile {
             .unwrap_or_else(|| "Unknown".into());
 
         Ok(Session {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, file_path.as_bytes()).to_string(),
             file_path,
             track,
             car,
