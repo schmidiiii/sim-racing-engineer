@@ -90,7 +90,7 @@ export const CHANNEL_GROUPS: ChannelGroupDef[] = [
     yDomains: {},
   },
   {
-    label: 'Track Map',
+    label: 'Lap Analyser',
     viewType: 'lapMap',
     channels: [],
     units: {},
