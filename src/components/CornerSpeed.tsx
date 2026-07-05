@@ -56,31 +56,46 @@ function matchDatabaseCorners(
   }).sort((a, b) => a.dist - b.dist)
 }
 
-// Detects corners from speed local minima, then enforces the known corner count
-// from the track database by trimming excess detections (keeping deepest minima).
+// Detects corners using an inclusive threshold, then trims to the known count
+// using greedy spread-selection so corners are distributed across the whole lap.
 function detectCornersFromGPS(
   _lat: number[], _lon: number[], _gpsDistPct: number[],
   speedKmh: number[], speedDistPct: number[],
   targetCount: number | null
 ): Corner[] {
-  // Use a fine MIN_SEP so closely-spaced real corners (e.g. T1/T2 at Summit Point)
-  // are not accidentally merged, then trim down to targetCount if needed.
-  const corners = detectCornersFromSpeed(speedKmh, speedDistPct, 0.010)
-
+  // 0.97 threshold catches fast sweepers; fine MIN_SEP keeps closely-spaced real turns
+  const corners = detectCornersFromSpeed(speedKmh, speedDistPct, 0.008, 0.97)
   if (!targetCount || corners.length <= targetCount) return corners
 
-  // Too many detected — keep the N with the deepest speed dip (most pronounced corners)
+  // Trim to N: greedy — always pick the deepest unselected corner that is
+  // at least MIN_SPREAD away from every already-selected corner.
+  // This spreads selection across the whole track rather than clustering.
   const maxSpeed = Math.max(...speedKmh)
-  const scored = corners.map(c => ({ ...c, depth: maxSpeed - c.minSpeed }))
-  scored.sort((a, b) => b.depth - a.depth)
-  return scored.slice(0, targetCount).sort((a, b) => a.dist - b.dist)
+  const MIN_SPREAD = 0.5 / targetCount   // half the average spacing
+  const pool = corners.map(c => ({ ...c, depth: maxSpeed - c.minSpeed }))
+    .sort((a, b) => b.depth - a.depth)
+  const selected: typeof pool = []
+
+  for (const c of pool) {
+    if (selected.length >= targetCount) break
+    const tooClose = selected.some(s => Math.abs(s.dist - c.dist) < MIN_SPREAD)
+    if (!tooClose) selected.push(c)
+  }
+  // If greedy was too strict, fill remaining slots with whatever is left
+  if (selected.length < targetCount) {
+    for (const c of pool) {
+      if (selected.length >= targetCount) break
+      if (!selected.includes(c)) selected.push(c)
+    }
+  }
+  return selected.sort((a, b) => a.dist - b.dist)
 }
 
 // Speed-based corner detection — local minima below threshold, merged within MIN_SEP.
-function detectCornersFromSpeed(speedKmh: number[], lapDist: number[], minSep = 0.02): Corner[] {
+function detectCornersFromSpeed(speedKmh: number[], lapDist: number[], minSep = 0.02, threshPct = 0.91): Corner[] {
   if (speedKmh.length < 10) return []
   const maxSpeed = Math.max(...speedKmh)
-  const threshold = maxSpeed * 0.91
+  const threshold = maxSpeed * threshPct
   const MIN_SEP = minSep
   const WINDOW = 5
   const smooth = speedKmh.map((_, i) => {
