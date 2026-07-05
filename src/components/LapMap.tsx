@@ -356,27 +356,28 @@ export default function LapMap() {
             </svg>
           ) : null}
 
-          {/* Minimap: full track overview with viewport indicator when zoomed */}
+          {/* Minimap: full track overview with dashed viewport rect */}
           {isZoomed && polylines && (
-            <div className="absolute bottom-10 right-2 pointer-events-none rounded-xl overflow-hidden"
-              style={{ width: 130, height: 130, background: 'rgba(10,10,10,0.72)' }}>
-              <svg viewBox={`${fitVb.x} ${fitVb.y} ${fitVb.w} ${fitVb.h}`} className="w-full h-full" style={{ padding: 6 }}>
-                {/* Shadow/glow under lap lines */}
+            <div className="absolute bottom-10 right-2 pointer-events-none rounded-lg border border-border bg-card shadow-md overflow-hidden"
+              style={{ width: 150, height: 150 }}>
+              <svg viewBox={`${fitVb.x} ${fitVb.y} ${fitVb.w} ${fitVb.h}`} className="w-full h-full">
+                {/* Thick halo for track body */}
                 <polyline points={polylines.base} fill="none"
-                  stroke="rgba(255,255,255,0.07)" strokeWidth={18}
+                  stroke="currentColor" strokeWidth={20} opacity={0.08}
                   strokeLinecap="round" strokeLinejoin="round"
                   vectorEffect="non-scaling-stroke" />
-                {polylines.laps.map(({ key, pts, color }) => (
+                {/* Track outline — single neutral color */}
+                {polylines.laps.slice(0, 1).map(({ key, pts }) => (
                   <polyline key={key} points={pts} fill="none"
-                    stroke={color} strokeWidth={5} opacity={0.65}
+                    stroke="currentColor" strokeWidth={5} opacity={0.55}
                     strokeLinecap="round" strokeLinejoin="round"
                     vectorEffect="non-scaling-stroke" />
                 ))}
-                {/* Viewport indicator: filled tint + bright solid border */}
+                {/* Zoomed viewport — dashed rect */}
                 <rect x={vb.x} y={vb.y} width={vb.w} height={vb.h}
-                  fill="rgba(255,255,255,0.10)"
-                  stroke="rgba(255,255,255,0.9)"
-                  strokeWidth={11}
+                  fill="currentColor" fillOpacity={0.06}
+                  stroke="currentColor" strokeWidth={10} strokeOpacity={0.5}
+                  strokeDasharray="24 14"
                   vectorEffect="non-scaling-stroke" />
               </svg>
             </div>
