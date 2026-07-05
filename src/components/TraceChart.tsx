@@ -329,6 +329,7 @@ export default function TraceChart({
       drag = { x: e.clientX, lo: zoomRef.current[0], hi: zoomRef.current[1] }
       isDraggingRef.current = true
       el.style.cursor = 'grabbing'
+      document.body.style.userSelect = 'none'
       document.addEventListener('mousemove', move)
       document.addEventListener('mouseup', up)
     }
@@ -354,6 +355,7 @@ export default function TraceChart({
       drag = null
       isDraggingRef.current = false
       el.style.cursor = zoomRef.current ? 'grab' : 'crosshair'
+      document.body.style.userSelect = ''
       document.removeEventListener('mousemove', move)
       document.removeEventListener('mouseup', up)
     }
