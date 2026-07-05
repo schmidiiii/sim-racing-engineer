@@ -24,46 +24,89 @@ interface LapCorners {
   corners: Corner[]
   lat: number[]
   lon: number[]
-  lapDistPct: number[] // lap_dist_pct from Speed channel
+  lapDistPct: number[]    // lap_dist_pct from Speed channel
+  gpsDistPct: number[]    // lap_dist_pct from Lat channel (same timing as lat/lon)
 }
 
-// Find local speed minima — these are the corners
-function detectCorners(speedKmh: number[], lapDist: number[]): Corner[] {
+// GPS curvature-based corner detection — uses actual track shape, not car speed.
+// Computes turning angle at each GPS sample; local maxima above threshold = corners.
+// Falls back to speed-based detection when GPS is unavailable.
+function detectCornersFromGPS(
+  lat: number[], lon: number[], gpsDistPct: number[],
+  speedKmh: number[], speedDistPct: number[]
+): Corner[] {
+  if (lat.length < 40) return detectCornersFromSpeed(speedKmh, speedDistPct)
+
+  const R = 6371000
+  const latRef = lat[0] * Math.PI / 180
+  const x = lon.map(l => (l - lon[0]) * (Math.PI / 180) * R * Math.cos(latRef))
+  const y = lat.map(l => (l - lat[0]) * (Math.PI / 180) * R)
+
+  const W = 20  // samples ahead/behind for angle vector
+  const angles: number[] = new Array(lat.length).fill(0)
+  for (let i = W; i < lat.length - W; i++) {
+    const dx1 = x[i] - x[i - W], dy1 = y[i] - y[i - W]
+    const dx2 = x[i + W] - x[i], dy2 = y[i + W] - y[i]
+    const len1 = Math.hypot(dx1, dy1), len2 = Math.hypot(dx2, dy2)
+    if (len1 < 0.5 || len2 < 0.5) continue
+    const cosA = Math.max(-1, Math.min(1, (dx1 * dx2 + dy1 * dy2) / (len1 * len2)))
+    angles[i] = Math.acos(cosA) * 180 / Math.PI
+  }
+
+  const MIN_ANGLE = 10  // degrees — real corners bend more than this
+  const MIN_SEP = 0.018
+
+  const candidates: { dist: number; angle: number; gpsIdx: number }[] = []
+  for (let i = W + 1; i < lat.length - W - 1; i++) {
+    if (angles[i] > MIN_ANGLE && angles[i] > angles[i - 1] && angles[i] > angles[i + 1]) {
+      candidates.push({ dist: gpsDistPct[i] ?? 0, angle: angles[i], gpsIdx: i })
+    }
+  }
+
+  // Merge nearby — keep the sharpest bend per corner
+  const merged: { dist: number; angle: number; gpsIdx: number }[] = []
+  for (const c of candidates) {
+    const ei = merged.findIndex(e => Math.abs(e.dist - c.dist) < MIN_SEP)
+    if (ei >= 0) { if (c.angle > merged[ei].angle) merged[ei] = c }
+    else merged.push(c)
+  }
+
+  // For each corner position, find the minimum speed within ±6% of that dist
+  return merged.sort((a, b) => a.dist - b.dist).map(c => {
+    let minSpeed = Infinity
+    for (let i = 0; i < speedDistPct.length; i++) {
+      if (Math.abs(speedDistPct[i] - c.dist) < 0.06 && speedKmh[i] < minSpeed) {
+        minSpeed = speedKmh[i]
+      }
+    }
+    return { dist: c.dist, minSpeed: minSpeed === Infinity ? 0 : minSpeed, sampleIdx: c.gpsIdx }
+  })
+}
+
+// Speed-based fallback when no GPS data is available
+function detectCornersFromSpeed(speedKmh: number[], lapDist: number[]): Corner[] {
   if (speedKmh.length < 10) return []
-
   const maxSpeed = Math.max(...speedKmh)
-  const threshold = maxSpeed * 0.91  // balance: catches sweepers but filters straight wiggles
-  const MIN_SEP = 0.02               // 2% lap distance minimum between corners
-  const WINDOW = 5                   // smaller window → sharper peaks survive smoothing
-
-  // Smooth speed with simple moving average
+  const threshold = maxSpeed * 0.91
+  const MIN_SEP = 0.02
+  const WINDOW = 5
   const smooth = speedKmh.map((_, i) => {
-    const start = Math.max(0, i - WINDOW)
-    const end = Math.min(speedKmh.length - 1, i + WINDOW)
+    const start = Math.max(0, i - WINDOW), end = Math.min(speedKmh.length - 1, i + WINDOW)
     let sum = 0
     for (let j = start; j <= end; j++) sum += speedKmh[j]
     return sum / (end - start + 1)
   })
-
-  // Collect every true local minimum below threshold
   const candidates: Corner[] = []
   for (let i = 1; i < smooth.length - 1; i++) {
-    if (smooth[i] < threshold && smooth[i] <= smooth[i - 1] && smooth[i] <= smooth[i + 1]) {
+    if (smooth[i] < threshold && smooth[i] <= smooth[i - 1] && smooth[i] <= smooth[i + 1])
       candidates.push({ dist: lapDist[i] ?? 0, minSpeed: smooth[i], sampleIdx: i })
-    }
   }
-
-  // Merge candidates within MIN_SEP — keep the deepest (slowest) one
   const corners: Corner[] = []
   for (const c of candidates) {
     const idx = corners.findIndex(e => Math.abs(e.dist - c.dist) < MIN_SEP)
-    if (idx >= 0) {
-      if (c.minSpeed < corners[idx].minSpeed) corners[idx] = c
-    } else {
-      corners.push(c)
-    }
+    if (idx >= 0) { if (c.minSpeed < corners[idx].minSpeed) corners[idx] = c }
+    else corners.push(c)
   }
-
   return corners.sort((a, b) => a.dist - b.dist)
 }
 
@@ -162,16 +205,22 @@ export default function CornerSpeed() {
           if (!speedData) continue
 
           const speedKmh = speedData.samples.map(v => v * 3.6)
-          const corners = detectCorners(speedKmh, speedData.lap_dist_pct)
+          const latData = byChannel['Lat']
+          const lonData = byChannel['Lon']
+          const lat = latData?.samples ?? []
+          const lon = lonData?.samples ?? []
+          const gpsDistPct = latData?.lap_dist_pct ?? speedData.lap_dist_pct
+          const corners = detectCornersFromGPS(lat, lon, gpsDistPct, speedKmh, speedData.lap_dist_pct)
 
           results.push({
             lapKey: key,
             lapNumber,
             colorIndex: ci,
             corners,
-            lat: byChannel['Lat']?.samples ?? [],
-            lon: byChannel['Lon']?.samples ?? [],
+            lat,
+            lon,
             lapDistPct: speedData.lap_dist_pct,
+            gpsDistPct,
           })
         } catch { continue }
       }
