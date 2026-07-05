@@ -146,7 +146,6 @@ export default function LapMap() {
       setLaps(gpsOut)
       setTraces(tmap)
       setLoading(false)
-      setVb(INITIAL_VB)
       zoomRef.current = null
       redrawsRef.current.forEach(fn => fn())
     }
@@ -183,6 +182,22 @@ export default function LapMap() {
     })
   }, [crosshairTime, laps, tf])
 
+  // Tight viewport that fits the track — resets whenever laps change
+  const fitVb = useMemo((): ViewBox => {
+    if (!tf) return INITIAL_VB
+    // Track occupies x:[tf.ox, SIZE-tf.ox], y:[tf.oy, SIZE-tf.oy]
+    // Use the smaller padding to make a square VB that encloses the track
+    const minPad = Math.min(tf.ox, tf.oy)
+    const dim = SIZE - 2 * minPad
+    const cx = SIZE / 2
+    return { x: cx - dim / 2, y: cx - dim / 2, w: dim, h: dim }
+  }, [tf])
+
+  const fitVbRef = useRef<ViewBox>(INITIAL_VB)
+  useEffect(() => { fitVbRef.current = fitVb }, [fitVb])
+  // Auto-reset viewport when track data changes
+  useEffect(() => { setVb(fitVb) }, [fitVb])
+
   // Zoomed telemetry segment — GPS section matching the chart zoom window
   const zoomedSegments = useMemo(() => {
     if (!zoomDomain || !tf || laps.length === 0) return null
@@ -216,14 +231,15 @@ export default function LapMap() {
     const rect = svg.getBoundingClientRect()
     if (!rect.width || !rect.height) return
     setVb(prev => {
+      const fvb = fitVbRef.current
       const factor = e.deltaY > 0 ? 1.22 : 1 / 1.22
       const mx = prev.x + (e.clientX - rect.left) / rect.width * prev.w
       const my = prev.y + (e.clientY - rect.top) / rect.height * prev.h
       if (!isFinite(mx) || !isFinite(my)) return prev
-      const nw = Math.min(SIZE, Math.max(30, prev.w * factor))
-      const nh = Math.min(SIZE, Math.max(30, prev.h * factor))
-      const nx = Math.max(0, Math.min(SIZE - nw, mx - (mx - prev.x) / prev.w * nw))
-      const ny = Math.max(0, Math.min(SIZE - nh, my - (my - prev.y) / prev.h * nh))
+      const nw = Math.min(fvb.w, Math.max(30, prev.w * factor))
+      const nh = Math.min(fvb.h, Math.max(30, prev.h * factor))
+      const nx = Math.max(fvb.x, Math.min(fvb.x + fvb.w - nw, mx - (mx - prev.x) / prev.w * nw))
+      const ny = Math.max(fvb.y, Math.min(fvb.y + fvb.h - nh, my - (my - prev.y) / prev.h * nh))
       return isFinite(nx) && isFinite(ny) ? { x: nx, y: ny, w: nw, h: nh } : prev
     })
   }, [])
@@ -246,17 +262,17 @@ export default function LapMap() {
     const dx = (e.clientX - drag.sx) / rect.width * vb.w
     const dy = (e.clientY - drag.sy) / rect.height * vb.h
     if (!isFinite(dx) || !isFinite(dy)) return
-    // Capture ox/oy into closure BEFORE setVb — dragRef may be null when updater runs
     const ox = drag.ox, oy = drag.oy
+    const fvb = fitVbRef.current
     setVb(prev => ({
       ...prev,
-      x: Math.max(0, Math.min(SIZE - prev.w, ox - dx)),
-      y: Math.max(0, Math.min(SIZE - prev.h, oy - dy)),
+      x: Math.max(fvb.x, Math.min(fvb.x + fvb.w - prev.w, ox - dx)),
+      y: Math.max(fvb.y, Math.min(fvb.y + fvb.h - prev.h, oy - dy)),
     }))
   }
   const onMouseUp = () => { dragRef.current = null }
 
-  const isZoomed  = vb.w < SIZE * 0.99
+  const isZoomed  = vb.w < fitVb.w * 0.99
   const gScale    = SIZE / vb.w
   const gTransform = `scale(${gScale.toFixed(6)}) translate(${(-vb.x).toFixed(4)} ${(-vb.y).toFixed(4)})`
 
@@ -278,7 +294,7 @@ export default function LapMap() {
               </span>
             ))}
             {isZoomed && (
-              <button onClick={() => setVb(INITIAL_VB)}
+              <button onClick={() => setVb(fitVb)}
                 className="text-[10px] border border-border rounded px-2 py-0.5 text-muted-foreground hover:text-foreground transition-colors">
                 Reset
               </button>
@@ -303,7 +319,7 @@ export default function LapMap() {
               className="absolute inset-0 w-full h-full" overflow="hidden"
               onMouseDown={onMouseDown} onMouseMove={onMouseMove}
               onMouseUp={onMouseUp} onMouseLeave={onMouseUp}
-              onDoubleClick={() => setVb(INITIAL_VB)}>
+              onDoubleClick={() => setVb(fitVb)}>
               <g transform={gTransform}>
                 <polyline points={polylines.base} fill="none"
                   stroke="rgba(150,150,150,0.18)" strokeWidth={16}
@@ -344,7 +360,7 @@ export default function LapMap() {
           {isZoomed && polylines && (
             <div className="absolute bottom-10 right-2 pointer-events-none rounded border border-border overflow-hidden bg-card"
               style={{ width: 88, height: 88, opacity: 0.88 }}>
-              <svg viewBox="0 0 1000 1000" className="w-full h-full">
+              <svg viewBox={`${fitVb.x} ${fitVb.y} ${fitVb.w} ${fitVb.h}`} className="w-full h-full">
                 <polyline points={polylines.base} fill="none"
                   stroke="rgba(150,150,150,0.2)" strokeWidth={22}
                   strokeLinecap="round" strokeLinejoin="round"
