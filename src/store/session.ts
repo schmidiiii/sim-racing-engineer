@@ -67,6 +67,8 @@ interface SessionStore {
   setCrosshairTime: (t: number | null) => void
   activeTabLabel: string
   setActiveTabLabel: (label: string) => void
+  autoLoad: boolean
+  setAutoLoad: (v: boolean) => void
   loadLatest: () => Promise<void>
   loadFiles: (paths: string[]) => Promise<void>
   toggleLap: (sessionId: string, lapNumber: number) => void
@@ -103,6 +105,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
   activeTabLabel: 'General',
   setActiveTabLabel: (label) => set({ activeTabLabel: label }),
+
+  autoLoad: localStorage.getItem('srAutoLoad') !== 'false',
+  setAutoLoad: (v) => { localStorage.setItem('srAutoLoad', String(v)); set({ autoLoad: v }) },
 
   setActiveSessionId: (id) => {
     const { sessions } = get()

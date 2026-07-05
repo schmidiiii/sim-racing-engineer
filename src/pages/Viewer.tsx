@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { listen } from '@tauri-apps/api/event'
 import { useSessionStore } from '@/store/session'
 import LapSidebar from '@/components/LapSidebar'
@@ -6,7 +6,9 @@ import TraceGroup from '@/components/TraceGroup'
 import AiPanel from '@/components/AiPanel'
 
 export default function Viewer() {
-  const { loadLatest, loadFiles } = useSessionStore()
+  const { loadLatest, loadFiles, autoLoad } = useSessionStore()
+  const autoLoadRef = useRef(autoLoad)
+  useEffect(() => { autoLoadRef.current = autoLoad }, [autoLoad])
 
   useEffect(() => {
     loadLatest()
@@ -15,7 +17,7 @@ export default function Viewer() {
   useEffect(() => {
     let unlisten: (() => void) | undefined
     listen<string>('new-ibt-file', (event) => {
-      loadFiles([event.payload])
+      if (autoLoadRef.current) loadFiles([event.payload])
     }).then(fn => { unlisten = fn })
     return () => { unlisten?.() }
   }, [])

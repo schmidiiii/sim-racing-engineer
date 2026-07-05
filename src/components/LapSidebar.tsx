@@ -207,7 +207,7 @@ function ConsistencyPanel() {
 
 export default function LapSidebar() {
   const t = useT()
-  const { sessions, activeSessionId, setActiveSessionId, removeSession, loading, error, loadFiles } = useSessionStore()
+  const { sessions, activeSessionId, setActiveSessionId, removeSession, loading, error, loadFiles, autoLoad, setAutoLoad } = useSessionStore()
 
   const fastestTime = sessions.flatMap(s => s.laps)
     .filter(l => l.is_valid && l.lap_time > 10)
@@ -294,8 +294,21 @@ export default function LapSidebar() {
         <TrackMap />
       </div>
 
-      {/* Load button */}
-      <div className="px-3 py-3 border-t border-border shrink-0">
+      {/* Load button + auto-load toggle */}
+      <div className="px-3 py-3 border-t border-border shrink-0 flex flex-col gap-2">
+        <button
+          onClick={() => setAutoLoad(!autoLoad)}
+          className={`w-full flex items-center justify-between text-xs px-3 py-2 rounded-lg border transition-colors ${
+            autoLoad
+              ? 'bg-primary/10 border-primary/30 text-primary'
+              : 'border-border text-muted-foreground hover:text-foreground'
+          }`}
+        >
+          <span>{t('autoLoadFiles')}</span>
+          <span className={`relative inline-flex w-8 h-4 rounded-full transition-colors shrink-0 ml-2 ${autoLoad ? 'bg-primary' : 'bg-muted'}`}>
+            <span className={`absolute top-0.5 w-3 h-3 rounded-full bg-white shadow transition-transform ${autoLoad ? 'translate-x-4' : 'translate-x-0.5'}`} />
+          </span>
+        </button>
         <button
           onClick={handleOpen}
           className="w-full text-xs text-muted-foreground hover:text-foreground border border-border hover:border-foreground/30 rounded-lg px-3 py-2 text-center transition-colors"
