@@ -28,9 +28,9 @@ function detectCorners(speedKmh: number[], lapDist: number[]): Corner[] {
   if (speedKmh.length < 10) return []
 
   const maxSpeed = Math.max(...speedKmh)
-  const threshold = maxSpeed * 0.90  // catch corners up to 90% of max speed (incl. fast sweepers)
-  const MIN_SEP = 0.015 // minimum 1.5% lap distance between corners (catches tight sequences)
-  const WINDOW = 8      // smooth over 8 samples
+  const threshold = maxSpeed * 0.95  // exclude pure straights; catch fast sweepers too
+  const MIN_SEP = 0.012              // 1.2% lap distance minimum between corners
+  const WINDOW = 5                   // smaller window → sharper peaks survive smoothing
 
   // Smooth speed with simple moving average
   const smooth = speedKmh.map((_, i) => {
@@ -41,26 +41,26 @@ function detectCorners(speedKmh: number[], lapDist: number[]): Corner[] {
     return sum / (end - start + 1)
   })
 
-  const corners: Corner[] = []
-  let inValley = false
-  let valleyMin = Infinity
-  let valleyMinIdx = 0
-
+  // Collect every true local minimum below threshold
+  const candidates: Corner[] = []
   for (let i = 1; i < smooth.length - 1; i++) {
-    const s = smooth[i]
-    if (s < threshold) {
-      if (!inValley) { inValley = true; valleyMin = s; valleyMinIdx = i }
-      else if (s < valleyMin) { valleyMin = s; valleyMinIdx = i }
-    } else if (inValley) {
-      inValley = false
-      const dist = lapDist[valleyMinIdx] ?? 0
-      const last = corners[corners.length - 1]
-      if (!last || Math.abs(dist - last.dist) > MIN_SEP) {
-        corners.push({ dist, minSpeed: valleyMin })
-      }
+    if (smooth[i] < threshold && smooth[i] <= smooth[i - 1] && smooth[i] <= smooth[i + 1]) {
+      candidates.push({ dist: lapDist[i] ?? 0, minSpeed: smooth[i] })
     }
   }
-  return corners
+
+  // Merge candidates within MIN_SEP — keep the deepest (slowest) one
+  const corners: Corner[] = []
+  for (const c of candidates) {
+    const idx = corners.findIndex(e => Math.abs(e.dist - c.dist) < MIN_SEP)
+    if (idx >= 0) {
+      if (c.minSpeed < corners[idx].minSpeed) corners[idx] = c
+    } else {
+      corners.push(c)
+    }
+  }
+
+  return corners.sort((a, b) => a.dist - b.dist)
 }
 
 // Match corners across laps by proximity
