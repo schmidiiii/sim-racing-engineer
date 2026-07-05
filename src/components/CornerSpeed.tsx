@@ -32,7 +32,7 @@ function detectCorners(speedKmh: number[], lapDist: number[]): Corner[] {
   if (speedKmh.length < 10) return []
 
   const maxSpeed = Math.max(...speedKmh)
-  const threshold = maxSpeed * 0.92  // balance: catches sweepers but filters straight wiggles
+  const threshold = maxSpeed * 0.91  // balance: catches sweepers but filters straight wiggles
   const MIN_SEP = 0.02               // 2% lap distance minimum between corners
   const WINDOW = 5                   // smaller window → sharper peaks survive smoothing
 
