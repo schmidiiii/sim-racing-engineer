@@ -56,39 +56,111 @@ function matchDatabaseCorners(
   }).sort((a, b) => a.dist - b.dist)
 }
 
-// Detects corners using an inclusive threshold, then trims to the known count
-// using greedy spread-selection so corners are distributed across the whole lap.
+// GPS curvature-based corner detection.
+// Measures the geometric turning angle at each point using neighbours ±ARM lap-distance away,
+// then finds curvature peaks and selects the N most prominent well-spaced ones.
+// This gives correct physical corner locations independent of car speed.
 function detectCornersFromGPS(
-  _lat: number[], _lon: number[], _gpsDistPct: number[],
+  lat: number[], lon: number[], gpsDistPct: number[],
   speedKmh: number[], speedDistPct: number[],
   targetCount: number | null
 ): Corner[] {
-  // 0.97 threshold catches fast sweepers; fine MIN_SEP keeps closely-spaced real turns
-  const corners = detectCornersFromSpeed(speedKmh, speedDistPct, 0.008, 0.97)
-  if (!targetCount || corners.length <= targetCount) return corners
-
-  // Trim to N: greedy — always pick the deepest unselected corner that is
-  // at least MIN_SPREAD away from every already-selected corner.
-  // This spreads selection across the whole track rather than clustering.
-  const maxSpeed = Math.max(...speedKmh)
-  const MIN_SPREAD = 0.5 / targetCount   // half the average spacing
-  const pool = corners.map(c => ({ ...c, depth: maxSpeed - c.minSpeed }))
-    .sort((a, b) => b.depth - a.depth)
-  const selected: typeof pool = []
-
-  for (const c of pool) {
-    if (selected.length >= targetCount) break
-    const tooClose = selected.some(s => Math.abs(s.dist - c.dist) < MIN_SPREAD)
-    if (!tooClose) selected.push(c)
+  // Fall back to speed-based when no GPS data
+  if (lat.length < 50) {
+    return detectCornersFromSpeed(speedKmh, speedDistPct, 0.008, 0.97)
   }
-  // If greedy was too strict, fill remaining slots with whatever is left
-  if (selected.length < targetCount) {
-    for (const c of pool) {
+
+  const n = lat.length
+  // ARM: look ±2.5% of lap away = ~50 m on a 2 km track
+  const ARM = 0.025
+  // Average latitude for lon→distance scaling
+  const avgLatRad = (lat.reduce((a, b) => a + b, 0) / n) * (Math.PI / 180)
+  const lonScale = Math.cos(avgLatRad)
+
+  const curvatures = new Float32Array(n)
+
+  for (let i = 0; i < n; i++) {
+    const d = gpsDistPct[i]
+
+    // Find neighbour ~ARM behind in lap distance
+    let iBehind = -1
+    for (let j = i - 1; j >= 0; j--) {
+      if (d - gpsDistPct[j] >= ARM) { iBehind = j; break }
+    }
+
+    // Find neighbour ~ARM ahead in lap distance
+    let iAhead = -1
+    for (let j = i + 1; j < n; j++) {
+      if (gpsDistPct[j] - d >= ARM) { iAhead = j; break }
+    }
+
+    if (iBehind < 0 || iAhead < 0) continue
+
+    // Vectors in a locally-flat coordinate frame
+    const v1x = lat[i] - lat[iBehind]
+    const v1y = (lon[i] - lon[iBehind]) * lonScale
+    const v2x = lat[iAhead] - lat[i]
+    const v2y = (lon[iAhead] - lon[i]) * lonScale
+
+    const cross = Math.abs(v1x * v2y - v1y * v2x)
+    const dot   = v1x * v2x + v1y * v2y
+    curvatures[i] = Math.atan2(cross, dot)   // 0 = straight, π/2 = 90° turn
+  }
+
+  // Smooth with a 20-sample box filter
+  const SMOOTH = 20
+  const smoothed = new Float32Array(n)
+  for (let i = 0; i < n; i++) {
+    const s = Math.max(0, i - SMOOTH), e = Math.min(n - 1, i + SMOOTH)
+    let sum = 0
+    for (let j = s; j <= e; j++) sum += curvatures[j]
+    smoothed[i] = sum / (e - s + 1)
+  }
+
+  // Minimum separation between selected corners
+  const MIN_SEP = targetCount ? Math.max(0.03, 0.7 / targetCount) : 0.04
+
+  // Collect local maxima above a noise floor
+  const peaks: { dist: number; curv: number; idx: number }[] = []
+  for (let i = 1; i < n - 1; i++) {
+    if (smoothed[i] > smoothed[i - 1] && smoothed[i] > smoothed[i + 1] && smoothed[i] > 0.002)
+      peaks.push({ dist: gpsDistPct[i], curv: smoothed[i], idx: i })
+  }
+
+  // Merge peaks that are closer than MIN_SEP (keep sharpest)
+  const merged: typeof peaks = []
+  for (const p of peaks.sort((a, b) => a.dist - b.dist)) {
+    const existing = merged.find(m => Math.abs(m.dist - p.dist) < MIN_SEP)
+    if (existing) { if (p.curv > existing.curv) { existing.dist = p.dist; existing.curv = p.curv; existing.idx = p.idx } }
+    else merged.push({ ...p })
+  }
+
+  // Greedy spread-aware selection: pick sharpest corners spread across the full lap
+  let selected = merged
+  if (targetCount && merged.length > targetCount) {
+    const pool = [...merged].sort((a, b) => b.curv - a.curv)
+    selected = []
+    for (const p of pool) {
       if (selected.length >= targetCount) break
-      if (!selected.includes(c)) selected.push(c)
+      if (!selected.some(s => Math.abs(s.dist - p.dist) < MIN_SEP)) selected.push(p)
+    }
+    // Fill any remaining slots (greedy was too strict)
+    for (const p of pool) {
+      if (selected.length >= targetCount) break
+      if (!selected.includes(p)) selected.push(p)
     }
   }
-  return selected.sort((a, b) => a.dist - b.dist)
+
+  // Map peaks to Corner: find actual minimum speed near each corner apex
+  return selected.sort((a, b) => a.dist - b.dist).map(p => {
+    let minSpeed = Infinity, bestIdx = p.idx
+    for (let i = 0; i < speedDistPct.length; i++) {
+      if (Math.abs(speedDistPct[i] - p.dist) < 0.04 && speedKmh[i] < minSpeed) {
+        minSpeed = speedKmh[i]; bestIdx = i
+      }
+    }
+    return { dist: p.dist, minSpeed: minSpeed === Infinity ? 0 : minSpeed, sampleIdx: bestIdx }
+  })
 }
 
 // Speed-based corner detection — local minima below threshold, merged within MIN_SEP.
