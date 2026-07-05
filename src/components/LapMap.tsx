@@ -74,6 +74,7 @@ const TELE_CHANNELS = [
   { ch: 'Speed',    unit: 'km/h', domain: [0, 'auto'] as [number | 'auto', number | 'auto'], xform: (v: number) => v * 3.6 },
   { ch: 'Throttle', unit: '%',    domain: [0, 100]    as [number | 'auto', number | 'auto'], xform: (v: number) => v * 100 },
   { ch: 'Brake',    unit: '%',    domain: [0, 100]    as [number | 'auto', number | 'auto'], xform: (v: number) => v * 100 },
+  { ch: 'Gear',     unit: '',     domain: [0, 'auto'] as [number | 'auto', number | 'auto'], xform: (v: number) => v },
 ]
 
 export default function LapMap() {
@@ -235,18 +236,18 @@ export default function LapMap() {
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
-    <div className="flex-1 overflow-hidden flex gap-3 p-4 bg-background min-h-0">
+    <div className="flex-1 overflow-hidden flex min-h-0 bg-background">
 
-      {/* Track map — left column */}
-      <div className="flex flex-col bg-card rounded-xl border border-border shadow-sm" style={{ width: '44%', minWidth: 180 }}>
+      {/* ── Left column: track map, full height, no padding ────────────────── */}
+      <div className="flex flex-col border-r border-border bg-card" style={{ width: '40%', minWidth: 160 }}>
 
-        {/* Header */}
-        <div className="flex items-center justify-between px-3 pt-3 pb-2 shrink-0">
-          <h3 className="text-xs font-semibold text-foreground">Track Map</h3>
+        {/* Header bar */}
+        <div className="flex items-center justify-between px-3 py-2 border-b border-border shrink-0">
+          <span className="text-[11px] font-semibold text-foreground">Track Map</span>
           <div className="flex items-center gap-3">
             {laps.map(l => (
-              <span key={l.lapKey} className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                <span className="inline-block w-5 h-1.5 rounded-full" style={{ background: getLapColor(l.colorIndex) }} />
+              <span key={l.lapKey} className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                <span className="inline-block w-4 h-1 rounded-full" style={{ background: getLapColor(l.colorIndex) }} />
                 L{l.lapNumber}
               </span>
             ))}
@@ -259,7 +260,7 @@ export default function LapMap() {
           </div>
         </div>
 
-        {/* Map area */}
+        {/* Map — fills all remaining height */}
         <div ref={containerRef} className="flex-1 relative min-h-0"
           style={{ cursor: dragRef.current ? 'grabbing' : 'grab' }}>
 
@@ -268,45 +269,36 @@ export default function LapMap() {
               <p className="text-sm text-muted-foreground">Loading…</p>
             </div>
           ) : laps.length === 0 ? (
-            <div className="absolute inset-0 flex items-center justify-center px-4 text-center">
+            <div className="absolute inset-0 flex items-center justify-center px-6 text-center">
               <p className="text-sm text-muted-foreground">Select laps with GPS data</p>
             </div>
           ) : polylines ? (
-            <svg ref={svgRef} viewBox="0 0 1000 1000" className="absolute inset-0 w-full h-full"
-              overflow="hidden"
+            <svg ref={svgRef} viewBox="0 0 1000 1000"
+              className="absolute inset-0 w-full h-full" overflow="hidden"
               onMouseDown={onMouseDown} onMouseMove={onMouseMove}
               onMouseUp={onMouseUp} onMouseLeave={onMouseUp}
               onDoubleClick={() => setVb(INITIAL_VB)}>
-
-              {/* Single <g> handles all zoom/pan — viewBox never changes */}
               <g transform={gTransform}>
-                {/* Grey track base */}
                 <polyline points={polylines.base} fill="none"
-                  stroke="rgba(130,130,130,0.22)" strokeWidth={16}
+                  stroke="rgba(150,150,150,0.18)" strokeWidth={16}
                   strokeLinecap="round" strokeLinejoin="round"
                   vectorEffect="non-scaling-stroke" />
-
-                {/* Racing lines */}
                 {polylines.laps.map(({ key, pts, color }) => (
                   <polyline key={key} points={pts} fill="none"
-                    stroke={color} strokeWidth={4} opacity={0.88}
+                    stroke={color} strokeWidth={4} opacity={0.9}
                     strokeLinecap="round" strokeLinejoin="round"
                     vectorEffect="non-scaling-stroke" />
                 ))}
-
-                {/* Start/finish marker */}
                 {polylines.start && (
                   <circle cx={polylines.start.x} cy={polylines.start.y} r={8}
                     fill="white" stroke={getLapColor(0)} strokeWidth={3}
                     vectorEffect="non-scaling-stroke" />
                 )}
-
-                {/* Crosshair position dots — one per lap */}
                 {trackDots.map(({ pt, color }, i) => (
                   <g key={i}>
-                    <circle cx={pt.x} cy={pt.y} r={11}
-                      fill="white" strokeWidth={0}
-                      vectorEffect="non-scaling-stroke" opacity={0.7} />
+                    <circle cx={pt.x} cy={pt.y} r={12}
+                      fill="white" opacity={0.65} strokeWidth={0}
+                      vectorEffect="non-scaling-stroke" />
                     <circle cx={pt.x} cy={pt.y} r={8}
                       fill={color} stroke="white" strokeWidth={3}
                       vectorEffect="non-scaling-stroke" />
@@ -317,34 +309,33 @@ export default function LapMap() {
           ) : null}
         </div>
 
-        {!loading && laps.length > 0 && (
-          <p className="text-[9px] text-muted-foreground/35 text-center py-1 shrink-0">
+        {/* Zoom hint */}
+        <div className="border-t border-border text-center py-1 shrink-0">
+          <span className="text-[9px] text-muted-foreground/35">
             Scroll to zoom · Drag to pan · Double-click to reset
-          </p>
-        )}
+          </span>
+        </div>
       </div>
 
-      {/* Telemetry charts — right column */}
-      <div className="flex-1 flex flex-col gap-2 overflow-y-auto min-w-0">
-        {loading ? (
-          <div className="flex-1 flex items-center justify-center bg-card rounded-xl border border-border shadow-sm">
-            <p className="text-sm text-muted-foreground">Loading…</p>
-          </div>
-        ) : selectedLapKeys.length === 0 ? (
-          <div className="flex-1 flex items-center justify-center bg-card rounded-xl border border-border shadow-sm">
-            <p className="text-sm text-muted-foreground">Select laps to compare</p>
+      {/* ── Right column: telemetry channels, no gap, border dividers ──────── */}
+      <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-y-auto divide-y divide-border">
+        {loading || selectedLapKeys.length === 0 ? (
+          <div className="flex-1 flex items-center justify-center">
+            <p className="text-sm text-muted-foreground">
+              {loading ? 'Loading…' : 'Select laps to compare'}
+            </p>
           </div>
         ) : TELE_CHANNELS.map(({ ch, unit, domain }) => {
           const lapTraces = traces[ch] ?? []
           if (!lapTraces.length) return null
           return (
-            <div key={ch} className="bg-card rounded-xl border border-border shadow-sm overflow-hidden">
+            <div key={ch} className="bg-card shrink-0">
               <TraceChart
                 channel={ch} unit={unit} yDomain={domain}
                 traces={lapTraces}
                 crosshairTime={crosshairTime} onMouseMove={setCrosshairTime}
                 zoomRef={zoomRef} onZoom={handleZoom} registerRedraw={registerRedraw}
-                height={140}
+                height={128}
               />
             </div>
           )
