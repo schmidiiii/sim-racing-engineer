@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 import { useSessionStore, parseLapKey, getLapColor } from '@/store/session'
 import { useT } from '@/lib/i18n'
+import { getCornersForTrack, getTrackCornerCount, type CornerDef } from '@/lib/trackCorners'
 
 interface LapChannelData {
   lap_number: number
@@ -28,13 +29,39 @@ interface LapCorners {
   gpsDistPct: number[]    // lap_dist_pct from Lat channel (same timing as lat/lon)
 }
 
-// GPS curvature-based corner detection using distance-normalised arms.
-// Measures the direction change over a fixed ±ARM_M metres (not ±N samples),
-// so slow hairpins and fast sweepers are treated equally.
-// Falls back to speed-based detection when GPS is unavailable.
-function detectCornersFromGPS(
+// Match GPS corner database entries against the lap trace.
+// Finds the lap_dist_pct closest to each corner's real-world coordinates.
+function matchDatabaseCorners(
+  dbCorners: CornerDef[],
   lat: number[], lon: number[], gpsDistPct: number[],
   speedKmh: number[], speedDistPct: number[]
+): Corner[] {
+  return dbCorners.map(c => {
+    // Find GPS sample closest to the corner's real coordinates
+    let bestIdx = 0, bestDist = Infinity
+    for (let i = 0; i < lat.length; i++) {
+      const dlat = lat[i] - c.lat, dlon = lon[i] - c.lon
+      const d = dlat * dlat + dlon * dlon
+      if (d < bestDist) { bestDist = d; bestIdx = i }
+    }
+    const dist = gpsDistPct[bestIdx] ?? 0
+
+    // Minimum speed within ±6% of that position
+    let minSpeed = Infinity
+    for (let i = 0; i < speedDistPct.length; i++) {
+      if (Math.abs(speedDistPct[i] - dist) < 0.06 && speedKmh[i] < minSpeed)
+        minSpeed = speedKmh[i]
+    }
+    return { dist, minSpeed: minSpeed === Infinity ? 0 : minSpeed, sampleIdx: bestIdx }
+  }).sort((a, b) => a.dist - b.dist)
+}
+
+// GPS curvature — finds all prominent bends. If targetCount is given,
+// keeps only the N sharpest (by angle) to match the known corner count.
+function detectCornersFromGPS(
+  lat: number[], lon: number[], gpsDistPct: number[],
+  speedKmh: number[], speedDistPct: number[],
+  targetCount: number | null
 ): Corner[] {
   if (lat.length < 40) return detectCornersFromSpeed(speedKmh, speedDistPct)
 
@@ -43,30 +70,23 @@ function detectCornersFromGPS(
   const x = lon.map(l => (l - lon[0]) * (Math.PI / 180) * R * Math.cos(latRef))
   const y = lat.map(l => (l - lat[0]) * (Math.PI / 180) * R)
 
-  // Cumulative arc length in metres
   const arc: number[] = [0]
   for (let i = 1; i < lat.length; i++)
     arc.push(arc[i - 1] + Math.hypot(x[i] - x[i - 1], y[i] - y[i - 1]))
   const totalArc = arc[arc.length - 1]
   if (totalArc < 200) return detectCornersFromSpeed(speedKmh, speedDistPct)
 
-  // Arm length: 30 m, capped at 3% of track so very short tracks still work
   const ARM = Math.min(30, totalArc * 0.03)
-
   const angles: number[] = new Array(lat.length).fill(0)
   for (let i = 0; i < lat.length; i++) {
     const aI = arc[i]
     if (aI < ARM || aI > totalArc - ARM) continue
-
-    // Binary search for back/forward sample at ±ARM metres
     let lo = 0, hi = i
     while (lo < hi - 1) { const m = (lo + hi) >> 1; if (arc[m] < aI - ARM) lo = m; else hi = m }
     const ib = lo
-
     lo = i; hi = lat.length - 1
     while (lo < hi - 1) { const m = (lo + hi) >> 1; if (arc[m] < aI + ARM) lo = m; else hi = m }
     const iF = hi
-
     const dx1 = x[i] - x[ib], dy1 = y[i] - y[ib]
     const dx2 = x[iF] - x[i], dy2 = y[iF] - y[i]
     const len1 = Math.hypot(dx1, dy1), len2 = Math.hypot(dx2, dy2)
@@ -75,16 +95,13 @@ function detectCornersFromGPS(
     angles[i] = Math.acos(cosA) * 180 / Math.PI
   }
 
-  const MIN_ANGLE = 8   // degrees over ±ARM metres → real corners only
-  const MIN_SEP = 0.015 // 1.5% lap distance minimum between distinct corners
-
+  const MIN_ANGLE = 8, MIN_SEP = 0.015
   const candidates: { dist: number; angle: number; gpsIdx: number }[] = []
   for (let i = 1; i < lat.length - 1; i++) {
     if (angles[i] > MIN_ANGLE && angles[i] >= angles[i - 1] && angles[i] >= angles[i + 1])
       candidates.push({ dist: gpsDistPct[i] ?? 0, angle: angles[i], gpsIdx: i })
   }
 
-  // Merge nearby — keep the sharpest bend per corner
   const merged: { dist: number; angle: number; gpsIdx: number }[] = []
   for (const c of candidates) {
     const ei = merged.findIndex(e => Math.abs(e.dist - c.dist) < MIN_SEP)
@@ -92,8 +109,13 @@ function detectCornersFromGPS(
     else merged.push(c)
   }
 
-  // Look up minimum speed within ±6% lap distance of each GPS corner
-  return merged.sort((a, b) => a.dist - b.dist).map(c => {
+  // If we know how many corners this track has, keep only the N sharpest
+  let selected = merged
+  if (targetCount && merged.length > targetCount) {
+    selected = [...merged].sort((a, b) => b.angle - a.angle).slice(0, targetCount)
+  }
+
+  return selected.sort((a, b) => a.dist - b.dist).map(c => {
     let minSpeed = Infinity
     for (let i = 0; i < speedDistPct.length; i++) {
       if (Math.abs(speedDistPct[i] - c.dist) < 0.06 && speedKmh[i] < minSpeed)
@@ -230,7 +252,15 @@ export default function CornerSpeed() {
           const lat = latData?.samples ?? []
           const lon = lonData?.samples ?? []
           const gpsDistPct = latData?.lap_dist_pct ?? speedData.lap_dist_pct
-          const corners = detectCornersFromGPS(lat, lon, gpsDistPct, speedKmh, speedData.lap_dist_pct)
+          const trackName = sess.track ?? ''
+
+          // Priority 1: GPS database match (known corners by real-world coordinates)
+          const dbCorners: CornerDef[] | null = lat.length > 10 ? getCornersForTrack(trackName) : null
+          // Priority 2: curvature with known count; Priority 3: pure curvature
+          const targetCount = dbCorners ? null : getTrackCornerCount(trackName)
+          const corners = dbCorners
+            ? matchDatabaseCorners(dbCorners, lat, lon, gpsDistPct, speedKmh, speedData.lap_dist_pct)
+            : detectCornersFromGPS(lat, lon, gpsDistPct, speedKmh, speedData.lap_dist_pct, targetCount)
 
           results.push({
             lapKey: key,
