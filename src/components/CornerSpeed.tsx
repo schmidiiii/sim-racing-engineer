@@ -23,11 +23,11 @@ interface LapCorners {
   corners: Corner[]
 }
 
-// Prominence-based corner detection — no global threshold needed.
-// A corner is a local speed minimum where speed rises by ≥ MIN_PROM km/h on both sides.
+// Threshold + local-minima corner detection.
+// 93% of max speed catches fast sweepers without false positives on straights.
 function detectCorners(speedKmh: number[], lapDist: number[]): Corner[] {
   if (speedKmh.length < 20) return []
-  const WINDOW = 5; const MIN_SEP = 0.02; const MIN_PROM = 15; const WIN = 80
+  const WINDOW = 5, MIN_SEP = 0.02
 
   const smooth = speedKmh.map((_, i) => {
     const s = Math.max(0, i - WINDOW), e = Math.min(speedKmh.length - 1, i + WINDOW)
@@ -35,15 +35,12 @@ function detectCorners(speedKmh: number[], lapDist: number[]): Corner[] {
     return sum / (e - s + 1)
   })
 
+  const threshold = Math.max(...smooth) * 0.93
   const candidates: Corner[] = []
   for (let i = 1; i < smooth.length - 1; i++) {
+    if (smooth[i] >= threshold) continue
     if (smooth[i] > smooth[i - 1] || smooth[i] > smooth[i + 1]) continue
-    const sl = smooth.slice(Math.max(0, i - WIN), i)
-    const sr = smooth.slice(i + 1, Math.min(smooth.length, i + WIN + 1))
-    if (!sl.length || !sr.length) continue
-    if (Math.min(Math.max(...sl) - smooth[i], Math.max(...sr) - smooth[i]) >= MIN_PROM) {
-      candidates.push({ dist: lapDist[i] ?? 0, minSpeed: smooth[i] })
-    }
+    candidates.push({ dist: lapDist[i] ?? 0, minSpeed: smooth[i] })
   }
 
   const corners: Corner[] = []
