@@ -28,8 +28,8 @@ function detectCorners(speedKmh: number[], lapDist: number[]): Corner[] {
   if (speedKmh.length < 10) return []
 
   const maxSpeed = Math.max(...speedKmh)
-  const threshold = maxSpeed * 0.82  // only count sub-82% as a corner entry
-  const MIN_SEP = 0.03  // minimum 3% lap distance between corners
+  const threshold = maxSpeed * 0.90  // catch corners up to 90% of max speed (incl. fast sweepers)
+  const MIN_SEP = 0.015 // minimum 1.5% lap distance between corners (catches tight sequences)
   const WINDOW = 8      // smooth over 8 samples
 
   // Smooth speed with simple moving average
@@ -74,7 +74,7 @@ function buildChartData(
 
   return ref.corners.map((refCorner, idx) => {
     const row: { label: string; dist: number; [key: string]: number | string } = {
-      label: `C${idx + 1}`,
+      label: `T${idx + 1}`,
       dist: refCorner.dist,
     }
     for (const lap of allLaps) {

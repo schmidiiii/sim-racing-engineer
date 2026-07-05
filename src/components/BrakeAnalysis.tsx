@@ -26,6 +26,7 @@ interface LapData {
   zones: BrakeZone[]
   lat: number[]
   lon: number[]
+  trackLengthM: number
 }
 
 const BRAKE_THRESHOLD = 3
@@ -125,14 +126,24 @@ export default function BrakeAnalysis() {
 
           const brake = brakeData.samples.map(v => v * 100)
           const lapDistPct = brakeData.lap_dist_pct
-          const speed = (byChannel['Speed']?.samples ?? []).map(v => v * 3.6)
+          const speedData = byChannel['Speed']
+          const speed = (speedData?.samples ?? []).map(v => v * 3.6)
           const zones = detectBrakeZones(brake, lapDistPct, speed)
+
+          // Integrate speed (m/s) over time to get track length
+          let trackLengthM = 0
+          if (speedData) {
+            const ts = speedData.timestamps
+            const sp = speedData.samples
+            for (let i = 1; i < sp.length; i++) trackLengthM += sp[i] * (ts[i] - ts[i - 1])
+          }
 
           results.push({
             lapKey: key, lapNumber: lapNum, colorIndex: ci,
             zones,
             lat: byChannel['Lat']?.samples ?? [],
             lon: byChannel['Lon']?.samples ?? [],
+            trackLengthM,
           })
         } catch { continue }
       }
@@ -156,6 +167,8 @@ export default function BrakeAnalysis() {
   )
 
   const matched = matchZones(lapDataArr)
+  const avgTrackLengthM = lapDataArr.reduce((s, l) => s + l.trackLengthM, 0) / (lapDataArr.length || 1)
+  const fmtM = (pct: number) => `${Math.round(pct * avgTrackLengthM)} m`
   const gpsLap = lapDataArr.find(l => l.lat.length > 10)
   const tf = gpsLap ? computeTransform(gpsLap.lat, gpsLap.lon) : null
   const STEP = 8  // downsample track outline
@@ -273,14 +286,14 @@ export default function BrakeAnalysis() {
                 {matched.map((mz, zi) => {
                   const entries = lapDataArr.map(ld => mz.entries.find(e => e.lapKey === ld.lapKey)?.zone ?? null)
                   const delta = entries[0] && entries[1]
-                    ? ((entries[0].entryDist - entries[1].entryDist) * 100)
+                    ? Math.round((entries[0].entryDist - entries[1].entryDist) * avgTrackLengthM)
                     : null
 
                   return (
                     <tr key={zi} className="border-b border-border/40 last:border-0">
                       <td className="py-1.5 pr-3 text-muted-foreground font-mono">#{zi + 1}</td>
                       <td className="py-1.5 pr-4 text-muted-foreground font-mono">
-                        {(mz.refDist * 100).toFixed(1)}%
+                        {fmtM(mz.refDist)}
                       </td>
                       {lapDataArr.map(ld => {
                         const e = mz.entries.find(l => l.lapKey === ld.lapKey)?.zone
@@ -289,7 +302,7 @@ export default function BrakeAnalysis() {
                             {e ? (
                               <span className="space-x-1">
                                 <span style={{ color: getLapColor(ld.colorIndex) }}>
-                                  {(e.entryDist * 100).toFixed(1)}%
+                                  {fmtM(e.entryDist)}
                                 </span>
                                 <span className="text-muted-foreground/50">
                                   {e.speedAtEntry.toFixed(0)}&thinsp;km/h
@@ -303,9 +316,9 @@ export default function BrakeAnalysis() {
                       })}
                       {lapDataArr.length >= 2 && delta !== null && (
                         <td className={`py-1.5 text-right font-mono tabular-nums text-xs ${
-                          delta > 0.05 ? 'text-amber-400' : delta < -0.05 ? 'text-emerald-400' : 'text-muted-foreground'
+                          delta > 5 ? 'text-amber-400' : delta < -5 ? 'text-emerald-400' : 'text-muted-foreground'
                         }`}>
-                          {delta > 0 ? '+' : ''}{delta.toFixed(2)}%
+                          {delta > 0 ? '+' : ''}{delta} m
                         </td>
                       )}
                     </tr>
