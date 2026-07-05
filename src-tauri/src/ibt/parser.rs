@@ -441,6 +441,8 @@ mod tests {
         r"C:\Users\schmi\Documents\iRacing\telemetry\porsche9922cup_imola gp 2026-07-01 19-08-35.ibt";
     const FV_FILE: &str =
         r"C:\Users\schmi\Documents\iRacing\telemetry\formulavee_winton national 2025-06-28 06-12-46.ibt";
+    const F4_FILE: &str =
+        r"C:\Users\schmi\Documents\iRacing\telemetry\formulair04_silverstone 2019 gp 2026-07-04 10-55-42.ibt";
 
     #[test]
     fn debug_fv_car_name() {
@@ -485,8 +487,27 @@ mod tests {
     }
 
     #[test]
+    fn print_tyre_temp_ranges() {
+        for path in &[PORSCHE_FILE, F4_FILE, TEST_FILE] {
+            if !Path::new(path).exists() { continue }
+            let f = IbtFile::open(path).expect("open");
+            let s = f.parse_session(path.to_string()).unwrap();
+            let lap = s.laps.iter().find(|l| l.is_valid && l.lap_time > 10.0);
+            let Some(lap) = lap else { println!("FILE: {} — no valid lap", path); continue };
+            println!("FILE: {}", path);
+            for ch in &["LFtempL","LFtempM","LFtempR","LFtempCL","LFtempCM","LFtempCR"] {
+                if let Some(data) = f.get_lap_channel_data(lap, ch) {
+                    let min = data.samples.iter().cloned().fold(f64::INFINITY, f64::min);
+                    let max = data.samples.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                    println!("  {}: min={:.2} max={:.2} range={:.2}", ch, min, max, max-min);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn print_wheel_channels() {
-        for path in &[PORSCHE_FILE, FV_FILE, TEST_FILE] {
+        for path in &[PORSCHE_FILE, FV_FILE, F4_FILE, TEST_FILE] {
             if !Path::new(path).exists() { continue }
             let f = IbtFile::open(path).expect("open");
             let chs = f.channels();

@@ -42,6 +42,8 @@ function buildSystemPrompt(langName: string): string {
     `- If data is missing or insufficient, say so explicitly and briefly. Do not invent data.\n` +
     `- No hedging ("might", "could possibly", "it depends"). Give a concrete opinion.\n` +
     `- NEVER invent or guess lap time targets, world records, or benchmark times. You do not have reliable iRacing-specific lap time data. If asked, say so and focus on technique instead.\n` +
+    `- NEVER use corner names or turn labels from your training data memory (e.g. "Raidillon", "Parabolica", "Stowe", "Acque Minerali"). You have no real-time track map data. Reference corners only as positional descriptions: "the first heavy braking zone", "the fast right-hander mid-sector", "the final chicane". If the user's message explicitly names a corner, you may use it.\n` +
+    `- NEVER invent specific numbers (speeds in km/h, time gaps in seconds, percentages) that were not explicitly given to you in this prompt. If the data is not in the prompt, say you cannot see it — do not estimate or fabricate.\n` +
     `- Use motorsport vocabulary: trail-braking, apex, understeer, oversteer, throttle application, rotation, brake bias, minimum speed.\n` +
     `- Respond ONLY in ${langName}. Never switch language.`
   )
@@ -93,32 +95,37 @@ function buildTabPrompt(
   switch (tabLabel) {
     case 'Corner Speed':
       return ctx +
-        `You are on the Corner Speed tab showing minimum speed through each corner. ` +
-        `Tell me specifically which corners I'm losing the most speed in at ${track} with the ${car}. ` +
-        `What is the minimum speed target for the key corners? ` +
-        `Is it better to sacrifice entry speed for a better exit, or is there a corner where I can carry more speed through? ` +
-        `Name the corners by turn number and name. Be direct and specific.`
+        `You are on the Corner Speed tab. The time gap between fastest and slowest selected lap is ${
+          validLaps.length > 1
+            ? `${(validLaps[validLaps.length - 1].lap_time - bestTime).toFixed(3)}s`
+            : '–'
+        }. ` +
+        `IMPORTANT: You do NOT have the actual corner-by-corner speed breakdown in this prompt. ` +
+        `Do NOT invent specific speed values (km/h) or per-corner time losses — you will fabricate wrong numbers. ` +
+        `Instead: based on the lap time spread and the general character of ${track} with the ${car}, ` +
+        `give technique advice on where to prioritize momentum, when to sacrifice entry for a clean exit, ` +
+        `and what the spread suggests about consistency. ` +
+        `If you cannot give specific data-driven feedback without the corner speed numbers, say so directly.`
 
     case 'Braking':
       return ctx +
         `You are on the Brake Analysis tab. Your fastest lap is ${fmtTime(bestTime)}. ` +
         `Tell me specifically about my braking technique at ${track} with the ${car}. ` +
-        `Which corners require the most aggressive braking? Where am I likely losing time under braking? ` +
-        `What is the ideal brake point for the key heavy braking zones at ${track}? ` +
-        `Give concrete, specific advice — name the turn numbers and corners.`
+        `Which types of corners require the most aggressive braking on this track? Where am I likely losing time under braking? ` +
+        `What is the ideal braking technique for the key heavy braking zones — describe them by character (e.g. "the end-of-straight hairpin", "the downhill braking zone") not by invented names. ` +
+        `Give concrete, actionable advice.`
 
     case 'Delta':
       return ctx +
         `You are looking at the Delta tab. Your fastest lap is ${fmtTime(bestTime)}. ` +
         (validLaps.length > 1
           ? `You have ${validLaps.length} laps selected with a spread of ${(validLaps[validLaps.length - 1].lap_time - bestTime).toFixed(3)}s. ` +
-            `Tell me directly where you are losing time — name the specific corners at ${track} by number/name. ` +
-            `Give 2 concrete, actionable things to fix — not generic, specific to this track layout. ` +
-            `Be blunt about what you are probably doing wrong.`
+            `Tell me directly where I am likely losing time — describe corner types by their character, not by invented names. ` +
+            `Give 2 concrete, actionable things to fix. Be blunt about what I am probably doing wrong.`
           : `Only one lap selected — no delta comparison possible. ` +
             `My lap time is ${fmtTime(bestTime)} in the ${car} at ${track}. ` +
             `Do NOT invent or guess a target lap time — you do not have reliable data for that. ` +
-            `Instead: identify the 2-3 most likely areas where time is lost on this track layout with this car, based on track characteristics. Be specific about corners and techniques.`
+            `Instead: identify the 2-3 most likely areas where time is lost on this track, based on track character and this car. Describe them by type, not by invented corner names.`
         )
 
     case 'Setup':
@@ -133,7 +140,7 @@ function buildTabPrompt(
       return ctx +
         `You are on the Ride Height view. ${car} at ${track}. ` +
         `Tell me what my ride height data reveals about aero platform and ground clearance on this track. ` +
-        `Name the specific corners where ride height is most critical at ${track}. ` +
+        `Describe where ride height is most critical by corner type/character — do not invent corner names. ` +
         `What values are too high/too low and what happens if they are? Be specific, no generics.`
 
     case 'Rake':
@@ -141,21 +148,21 @@ function buildTabPrompt(
         `You are on the Pitch/Roll (Rake) view. ${car} at ${track}. ` +
         `Tell me what my pitch and roll telemetry reveals about the car's balance. ` +
         `What setup change does a front-heavy pitch pattern suggest vs. a rear-heavy one? ` +
-        `Reference ${track}'s specific braking and corner characteristics.`
+        `Reference ${track}'s general character (high-speed, technical, stop-and-go) — do not invent specific corner names.`
 
     case 'Wheel Speed':
       return ctx +
         `You are on the Wheel Speed view. ` +
         `Analyse what my wheel speed differential between front and rear reveals about traction and locking. ` +
-        `At ${track}, which corners are most critical for wheel speed management with ${car}? ` +
-        `Name them specifically. What does a lockup signature look like in this data?`
+        `At ${track}, which corner types are most critical for wheel speed management with ${car}? ` +
+        `Describe them by character (e.g. "end-of-straight braking", "slow hairpin exit") — do not invent names. What does a lockup signature look like in this data?`
 
     case 'Wheel Spin':
       return ctx +
         `You are on the Wheel Slip/Spin view. ` +
         `Analyse my slip ratio data for the ${car} at ${track}. ` +
         `Which exit zones are most likely to cause wheelspin with this car? ` +
-        `What slip ratio range is acceptable vs. damaging lap time? Name specific corners at ${track}.`
+        `What slip ratio range is acceptable vs. damaging lap time? Describe the relevant corner types by character, not by invented names.`
 
     case 'Shocks':
       return ctx +

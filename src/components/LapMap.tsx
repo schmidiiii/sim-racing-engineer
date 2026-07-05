@@ -224,6 +224,22 @@ export default function LapMap() {
   // Auto-reset viewport when track data changes
   useEffect(() => { setVb(fitVb) }, [fitVb])
 
+  // Auto-pan: keep crosshair dot centered when map is zoomed
+  useEffect(() => {
+    if (crosshairTime === null || !tf || laps.length === 0 || dragRef.current) return
+    const fvb = fitVbRef.current
+    setVb(prev => {
+      if (prev.w >= fvb.w * 0.99) return prev // not zoomed, skip
+      const lap = laps[0]
+      if (!lap.timestamps.length) return prev
+      const i = Math.min(nearestTimeIdx(lap.timestamps, crosshairTime), lap.lat.length - 1)
+      const pt = project(lap.lat[i], lap.lon[i], tf)
+      const nx = Math.max(fvb.x, Math.min(fvb.x + fvb.w - prev.w, pt.x - prev.w / 2))
+      const ny = Math.max(fvb.y, Math.min(fvb.y + fvb.h - prev.h, pt.y - prev.h / 2))
+      return { ...prev, x: nx, y: ny }
+    })
+  }, [crosshairTime, tf, laps])
+
   // Zoomed telemetry segment — GPS section matching the chart zoom window
   const zoomedSegments = useMemo(() => {
     if (!zoomDomain || !tf || laps.length === 0) return null

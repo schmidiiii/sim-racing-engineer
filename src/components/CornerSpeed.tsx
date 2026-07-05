@@ -216,7 +216,8 @@ function computeTransform(lats: number[], lons: number[]) {
   const minLat = Math.min(...lats), maxLat = Math.max(...lats)
   const minLon = Math.min(...lons), maxLon = Math.max(...lons)
   const latRange = maxLat - minLat || 1, lonRange = maxLon - minLon || 1
-  const scale = Math.min(200 / lonRange, 200 / latRange)
+  // 0.80 leaves 20% margin so corner labels don't get clipped
+  const scale = Math.min(200 / lonRange, 200 / latRange) * 0.80
   const ox = (200 - lonRange * scale) / 2, oy = (200 - latRange * scale) / 2
   return { minLat, minLon, scale, ox, oy }
 }
@@ -389,7 +390,7 @@ export default function CornerSpeed() {
       </div>
 
       {/* Track map + detail table */}
-      <div className={`grid gap-4 ${tf ? 'grid-cols-[220px_1fr]' : 'grid-cols-1'}`}>
+      <div className={`grid gap-4 ${tf ? 'grid-cols-[300px_1fr]' : 'grid-cols-1'}`}>
 
         {/* Track map with turn markers */}
         {tf && gpsLap && (
@@ -413,13 +414,13 @@ export default function CornerSpeed() {
                   <g key={idx}>
                     <circle cx={pt.x} cy={pt.y} r={5} fill="hsl(var(--primary))" opacity={0.9} />
                     <text
-                      x={pt.x} y={pt.y - 7}
+                      x={pt.x} y={pt.y - 8}
                       textAnchor="middle"
-                      fontSize={6}
+                      fontSize={8}
                       fontWeight="bold"
                       fill="hsl(var(--foreground))"
                       stroke="hsl(var(--background))"
-                      strokeWidth={2}
+                      strokeWidth={2.5}
                       paintOrder="stroke"
                     >
                       T{idx + 1}
@@ -428,6 +429,7 @@ export default function CornerSpeed() {
                 )
               })}
             </svg>
+            <p className="text-xs text-muted-foreground/70 mt-2 leading-snug">{t('cornersApproximate')}</p>
           </div>
         )}
 
