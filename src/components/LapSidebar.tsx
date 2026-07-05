@@ -207,7 +207,7 @@ function ConsistencyPanel() {
 
 export default function LapSidebar() {
   const t = useT()
-  const { sessions, activeSessionId, setActiveSessionId, removeSession, loading, error, loadFiles, autoLoad, setAutoLoad, lapMapFullscreen, setLapMapFullscreen } = useSessionStore()
+  const { sessions, activeSessionId, setActiveSessionId, removeSession, loading, error, loadFiles, autoLoad, setAutoLoad, setLapMapFullscreen } = useSessionStore()
 
   const fastestTime = sessions.flatMap(s => s.laps)
     .filter(l => l.is_valid && l.lap_time > 10)
