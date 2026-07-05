@@ -93,9 +93,11 @@ export default function LapMap() {
   const zoomRef     = useRef<[number, number] | null>(null)
   const redrawsRef  = useRef(new Set<() => void>())
   const [crosshairTime, setCrosshairTime] = useState<number | null>(null)
+  const [zoomDomain, setZoomDomain] = useState<[number, number] | null>(null)
 
   const handleZoom = useCallback((domain: [number, number] | null) => {
     zoomRef.current = domain
+    setZoomDomain(domain)
     redrawsRef.current.forEach(fn => fn())
   }, [])
   const registerRedraw = useCallback((fn: () => void) => {
@@ -180,6 +182,30 @@ export default function LapMap() {
       return [{ pt: project(lap.lat[i], lap.lon[i], tf), color: getLapColor(lap.colorIndex) }]
     })
   }, [crosshairTime, laps, tf])
+
+  // Zoomed telemetry segment — GPS section matching the chart zoom window
+  const zoomedSegments = useMemo(() => {
+    if (!zoomDomain || !tf || laps.length === 0) return null
+    const [tLo, tHi] = zoomDomain
+    return laps.map(lap => {
+      if (!lap.timestamps.length || !lap.lat.length) return null
+      let lo = 0, hi = lap.timestamps.length - 1
+      while (lo < hi) { const m = (lo + hi) >> 1; if (lap.timestamps[m] < tLo) lo = m + 1; else hi = m }
+      const startIdx = lo
+      lo = 0; hi = lap.timestamps.length - 1
+      while (lo < hi) { const m = (lo + hi + 1) >> 1; if (lap.timestamps[m] > tHi) hi = m - 1; else lo = m }
+      const endIdx = lo
+      if (startIdx >= endIdx) return null
+      const pts: string[] = []
+      for (let i = startIdx; i <= endIdx; i += 2) {
+        if (i >= lap.lat.length) break
+        const p = project(lap.lat[i], lap.lon[i], tf)
+        pts.push(`${p.x.toFixed(1)},${p.y.toFixed(1)}`)
+      }
+      if (pts.length < 2) return null
+      return { key: lap.lapKey, pts: pts.join(' '), color: getLapColor(lap.colorIndex) }
+    }).filter(Boolean) as { key: string; pts: string; color: string }[]
+  }, [zoomDomain, laps, tf])
 
   // ── Zoom / pan ─────────────────────────────────────────────────────────────
 
@@ -285,21 +311,27 @@ export default function LapMap() {
                   vectorEffect="non-scaling-stroke" />
                 {polylines.laps.map(({ key, pts, color }) => (
                   <polyline key={key} points={pts} fill="none"
-                    stroke={color} strokeWidth={4} opacity={0.9}
+                    stroke={color} strokeWidth={4} opacity={zoomedSegments?.length ? 0.22 : 0.9}
+                    strokeLinecap="round" strokeLinejoin="round"
+                    vectorEffect="non-scaling-stroke" />
+                ))}
+                {zoomedSegments?.map(seg => (
+                  <polyline key={`${seg.key}_zoom`} points={seg.pts}
+                    fill="none" stroke={seg.color} strokeWidth={6} opacity={1}
                     strokeLinecap="round" strokeLinejoin="round"
                     vectorEffect="non-scaling-stroke" />
                 ))}
                 {polylines.start && (
-                  <circle cx={polylines.start.x} cy={polylines.start.y} r={8}
+                  <circle cx={polylines.start.x} cy={polylines.start.y} r={8 / gScale}
                     fill="white" stroke={getLapColor(0)} strokeWidth={3}
                     vectorEffect="non-scaling-stroke" />
                 )}
                 {trackDots.map(({ pt, color }, i) => (
                   <g key={i}>
-                    <circle cx={pt.x} cy={pt.y} r={12}
+                    <circle cx={pt.x} cy={pt.y} r={12 / gScale}
                       fill="white" opacity={0.65} strokeWidth={0}
                       vectorEffect="non-scaling-stroke" />
-                    <circle cx={pt.x} cy={pt.y} r={8}
+                    <circle cx={pt.x} cy={pt.y} r={8 / gScale}
                       fill={color} stroke="white" strokeWidth={3}
                       vectorEffect="non-scaling-stroke" />
                   </g>
@@ -307,6 +339,31 @@ export default function LapMap() {
               </g>
             </svg>
           ) : null}
+
+          {/* Minimap: full track overview with dashed viewport rect when zoomed */}
+          {isZoomed && polylines && (
+            <div className="absolute bottom-10 right-2 pointer-events-none rounded border border-border overflow-hidden bg-card"
+              style={{ width: 88, height: 88, opacity: 0.88 }}>
+              <svg viewBox="0 0 1000 1000" className="w-full h-full">
+                <polyline points={polylines.base} fill="none"
+                  stroke="rgba(150,150,150,0.2)" strokeWidth={22}
+                  strokeLinecap="round" strokeLinejoin="round"
+                  vectorEffect="non-scaling-stroke" />
+                {polylines.laps.map(({ key, pts, color }) => (
+                  <polyline key={key} points={pts} fill="none"
+                    stroke={color} strokeWidth={6} opacity={0.55}
+                    strokeLinecap="round" strokeLinejoin="round"
+                    vectorEffect="non-scaling-stroke" />
+                ))}
+                <rect x={vb.x} y={vb.y} width={vb.w} height={vb.h}
+                  fill="rgba(255,255,255,0.06)"
+                  stroke="rgba(255,255,255,0.65)"
+                  strokeWidth={14}
+                  strokeDasharray="30 18"
+                  vectorEffect="non-scaling-stroke" />
+              </svg>
+            </div>
+          )}
         </div>
 
         {/* Zoom hint */}
