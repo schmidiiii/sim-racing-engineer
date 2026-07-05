@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from 'react'
+import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useSessionStore, parseLapKey, getLapColor } from '@/store/session'
 import TraceChart, { LapTrace } from '@/components/TraceChart'
@@ -17,6 +17,7 @@ interface LapGPS {
   colorIndex: number
   lat: number[]
   lon: number[]
+  timestamps: number[]   // needed to map crosshair time → track position
 }
 
 interface ViewBox { x: number; y: number; w: number; h: number }
@@ -24,24 +25,25 @@ interface ViewBox { x: number; y: number; w: number; h: number }
 const SIZE = 1000
 const INITIAL_VB: ViewBox = { x: 0, y: 0, w: SIZE, h: SIZE }
 
+// Loop-based min/max — Math.min(...largeArray) can stack-overflow for big GPS traces
 function computeTransform(lats: number[], lons: number[]) {
-  const minLat = Math.min(...lats), maxLat = Math.max(...lats)
-  const minLon = Math.min(...lons), maxLon = Math.max(...lons)
+  let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity
+  for (let i = 0; i < lats.length; i++) {
+    if (lats[i] < minLat) minLat = lats[i]
+    if (lats[i] > maxLat) maxLat = lats[i]
+  }
+  for (let i = 0; i < lons.length; i++) {
+    if (lons[i] < minLon) minLon = lons[i]
+    if (lons[i] > maxLon) maxLon = lons[i]
+  }
   const latR = maxLat - minLat || 1e-6
   const lonR = maxLon - minLon || 1e-6
   const scale = Math.min(SIZE / lonR, SIZE / latR) * 0.9
-  return {
-    minLat, minLon, scale,
-    ox: (SIZE - lonR * scale) / 2,
-    oy: (SIZE - latR * scale) / 2,
-  }
+  return { minLat, minLon, scale, ox: (SIZE - lonR * scale) / 2, oy: (SIZE - latR * scale) / 2 }
 }
 
 function project(lat: number, lon: number, tf: ReturnType<typeof computeTransform>) {
-  return {
-    x: (lon - tf.minLon) * tf.scale + tf.ox,
-    y: SIZE - (lat - tf.minLat) * tf.scale - tf.oy,
-  }
+  return { x: (lon - tf.minLon) * tf.scale + tf.ox, y: SIZE - (lat - tf.minLat) * tf.scale - tf.oy }
 }
 
 function buildPolyline(lat: number[], lon: number[], tf: ReturnType<typeof computeTransform>, step: number) {
@@ -57,30 +59,40 @@ function buildPolyline(lat: number[], lon: number[], tf: ReturnType<typeof compu
   return pts.join(' ')
 }
 
+// Binary search: index of timestamp closest to target
+function nearestTimeIdx(timestamps: number[], target: number): number {
+  let lo = 0, hi = timestamps.length - 1
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if (timestamps[mid] < target) lo = mid + 1; else hi = mid
+  }
+  if (lo > 0 && Math.abs(timestamps[lo - 1] - target) < Math.abs(timestamps[lo] - target)) lo--
+  return lo
+}
+
 const TELE_CHANNELS = [
-  { ch: 'Speed',    unit: 'km/h', domain: [0, 'auto'] as [number | 'auto', number | 'auto'], transform: (v: number) => v * 3.6 },
-  { ch: 'Throttle', unit: '%',    domain: [0, 100]    as [number | 'auto', number | 'auto'], transform: (v: number) => v * 100 },
-  { ch: 'Brake',    unit: '%',    domain: [0, 100]    as [number | 'auto', number | 'auto'], transform: (v: number) => v * 100 },
+  { ch: 'Speed',    unit: 'km/h', domain: [0, 'auto'] as [number | 'auto', number | 'auto'], xform: (v: number) => v * 3.6 },
+  { ch: 'Throttle', unit: '%',    domain: [0, 100]    as [number | 'auto', number | 'auto'], xform: (v: number) => v * 100 },
+  { ch: 'Brake',    unit: '%',    domain: [0, 100]    as [number | 'auto', number | 'auto'], xform: (v: number) => v * 100 },
 ]
 
 export default function LapMap() {
   const { sessions, selectedLapKeys } = useSessionStore()
-  const [laps, setLaps] = useState<LapGPS[]>([])
+  const [laps, setLaps]     = useState<LapGPS[]>([])
   const [traces, setTraces] = useState<Record<string, LapTrace[]>>({})
   const [loading, setLoading] = useState(false)
 
-  // Map zoom/pan state
-  const svgRef = useRef<SVGSVGElement>(null)
+  // Map zoom/pan
+  const svgRef       = useRef<SVGSVGElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
-  const [vb, setVb] = useState<ViewBox>(INITIAL_VB)
-  const vbRef = useRef(vb)
-  vbRef.current = vb
+  const [vb, setVb]  = useState<ViewBox>(INITIAL_VB)
   const dragRef = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null)
 
-  // Telemetry chart sync
-  const zoomRef = useRef<[number, number] | null>(null)
-  const redrawsRef = useRef(new Set<() => void>())
+  // Telemetry chart sync (crosshair + zoom)
+  const zoomRef     = useRef<[number, number] | null>(null)
+  const redrawsRef  = useRef(new Set<() => void>())
   const [crosshairTime, setCrosshairTime] = useState<number | null>(null)
+
   const handleZoom = useCallback((domain: [number, number] | null) => {
     zoomRef.current = domain
     redrawsRef.current.forEach(fn => fn())
@@ -90,16 +102,14 @@ export default function LapMap() {
     return () => { redrawsRef.current.delete(fn) }
   }, [])
 
-  // Fetch GPS + telemetry for all selected laps
+  // ── Data fetch ─────────────────────────────────────────────────────────────
   useEffect(() => {
-    if (selectedLapKeys.length === 0 || sessions.length === 0) {
-      setLaps([]); setTraces({}); return
-    }
+    if (selectedLapKeys.length === 0 || sessions.length === 0) { setLaps([]); setTraces({}); return }
     setLoading(true)
 
-    const fetchAll = async () => {
-      const gpsResults: LapGPS[] = []
-      const traceMap: Record<string, LapTrace[]> = { Speed: [], Throttle: [], Brake: [] }
+    const go = async () => {
+      const gpsOut: LapGPS[] = []
+      const tmap: Record<string, LapTrace[]> = { Speed: [], Throttle: [], Brake: [] }
 
       for (let ci = 0; ci < selectedLapKeys.length; ci++) {
         const key = selectedLapKeys[ci]
@@ -108,7 +118,6 @@ export default function LapMap() {
         if (!sess) continue
         const avail = new Set(sess.available_channels.map(c => c.name))
 
-        // GPS
         if (avail.has('Lat') && avail.has('Lon')) {
           try {
             const [latR, lonR] = await Promise.all([
@@ -116,58 +125,79 @@ export default function LapMap() {
               invoke<LapChannelData[]>('get_lap_channel_data', { sessionId, lapNumbers: [lapNumber], channel: 'Lon' }),
             ])
             if (latR[0] && lonR[0])
-              gpsResults.push({ lapKey: key, lapNumber, colorIndex: ci, lat: latR[0].samples, lon: lonR[0].samples })
+              gpsOut.push({ lapKey: key, lapNumber, colorIndex: ci,
+                lat: latR[0].samples, lon: lonR[0].samples, timestamps: latR[0].timestamps })
           } catch { /* no GPS */ }
         }
 
-        // Telemetry channels
-        for (const { ch, transform } of TELE_CHANNELS) {
+        for (const { ch, xform } of TELE_CHANNELS) {
           if (!avail.has(ch)) continue
           try {
             const res = await invoke<LapChannelData[]>('get_lap_channel_data', { sessionId, lapNumbers: [lapNumber], channel: ch })
             const d = res[0]
-            if (d) {
-              traceMap[ch].push({
-                lapNumber,
-                colorIndex: ci,
-                samples: d.samples.map(transform),
-                timestamps: d.timestamps,
-                lapDistPct: d.lap_dist_pct,
-              })
-            }
+            if (d) tmap[ch].push({ lapNumber, colorIndex: ci, samples: d.samples.map(xform), timestamps: d.timestamps, lapDistPct: d.lap_dist_pct })
           } catch { /* skip */ }
         }
       }
 
-      setLaps(gpsResults)
-      setTraces(traceMap)
+      setLaps(gpsOut)
+      setTraces(tmap)
       setLoading(false)
       setVb(INITIAL_VB)
       zoomRef.current = null
       redrawsRef.current.forEach(fn => fn())
     }
 
-    fetchAll()
+    go()
   }, [selectedLapKeys.join(','), sessions.length])
 
-  // Wheel zoom — attached to container div (always in DOM, avoids conditional SVG ref)
+  // ── Memoised SVG geometry — only rebuilds when laps change, NOT on zoom/pan ──
+
+  const tf = useMemo(() => {
+    if (laps.length === 0) return null
+    const allLats: number[] = [], allLons: number[] = []
+    for (const lap of laps) { for (const v of lap.lat) allLats.push(v); for (const v of lap.lon) allLons.push(v) }
+    if (allLats.length === 0) return null
+    return computeTransform(allLats, allLons)
+  }, [laps])
+
+  const polylines = useMemo(() => {
+    if (!tf || laps.length === 0) return null
+    return {
+      base: buildPolyline(laps[0].lat, laps[0].lon, tf, 4),
+      laps: laps.map(lap => ({ key: lap.lapKey, pts: buildPolyline(lap.lat, lap.lon, tf, 4), color: getLapColor(lap.colorIndex) })),
+      start: laps[0].lat.length > 0 ? project(laps[0].lat[0], laps[0].lon[0], tf) : null,
+    }
+  }, [laps, tf])
+
+  // Track position dot — follows telemetry crosshair
+  const trackDots = useMemo(() => {
+    if (crosshairTime === null || !tf) return []
+    return laps.flatMap(lap => {
+      if (!lap.timestamps.length || !lap.lat.length) return []
+      const i = Math.min(nearestTimeIdx(lap.timestamps, crosshairTime), lap.lat.length - 1)
+      return [{ pt: project(lap.lat[i], lap.lon[i], tf), color: getLapColor(lap.colorIndex) }]
+    })
+  }, [crosshairTime, laps, tf])
+
+  // ── Zoom / pan ─────────────────────────────────────────────────────────────
+
   const handleWheel = useCallback((e: WheelEvent) => {
     e.preventDefault()
     const svg = svgRef.current
     if (!svg) return
     const rect = svg.getBoundingClientRect()
-    if (!rect.width || !rect.height) return   // guard against 0-size during layout
+    if (!rect.width || !rect.height) return
     setVb(prev => {
       const factor = e.deltaY > 0 ? 1.22 : 1 / 1.22
       const mx = prev.x + (e.clientX - rect.left) / rect.width * prev.w
       const my = prev.y + (e.clientY - rect.top) / rect.height * prev.h
-      if (!isFinite(mx) || !isFinite(my)) return prev    // NaN guard
-      const newW = Math.min(SIZE, Math.max(30, prev.w * factor))
-      const newH = Math.min(SIZE, Math.max(30, prev.h * factor))
-      const nx = Math.max(0, Math.min(SIZE - newW, mx - (mx - prev.x) / prev.w * newW))
-      const ny = Math.max(0, Math.min(SIZE - newH, my - (my - prev.y) / prev.h * newH))
-      if (!isFinite(nx) || !isFinite(ny)) return prev    // NaN guard
-      return { x: nx, y: ny, w: newW, h: newH }
+      if (!isFinite(mx) || !isFinite(my)) return prev
+      const nw = Math.min(SIZE, Math.max(30, prev.w * factor))
+      const nh = Math.min(SIZE, Math.max(30, prev.h * factor))
+      const nx = Math.max(0, Math.min(SIZE - nw, mx - (mx - prev.x) / prev.w * nw))
+      const ny = Math.max(0, Math.min(SIZE - nh, my - (my - prev.y) / prev.h * nh))
+      return isFinite(nx) && isFinite(ny) ? { x: nx, y: ny, w: nw, h: nh } : prev
     })
   }, [])
 
@@ -182,34 +212,35 @@ export default function LapMap() {
     dragRef.current = { sx: e.clientX, sy: e.clientY, ox: vb.x, oy: vb.y }
   }
   const onMouseMove = (e: React.MouseEvent) => {
-    if (!dragRef.current || !svgRef.current) return
+    const drag = dragRef.current
+    if (!drag || !svgRef.current) return
     const rect = svgRef.current.getBoundingClientRect()
     if (!rect.width || !rect.height) return
-    const dx = (e.clientX - dragRef.current.sx) / rect.width * vb.w
-    const dy = (e.clientY - dragRef.current.sy) / rect.height * vb.h
+    const dx = (e.clientX - drag.sx) / rect.width * vb.w
+    const dy = (e.clientY - drag.sy) / rect.height * vb.h
     if (!isFinite(dx) || !isFinite(dy)) return
+    // Capture ox/oy into closure BEFORE setVb — dragRef may be null when updater runs
+    const ox = drag.ox, oy = drag.oy
     setVb(prev => ({
       ...prev,
-      x: Math.max(0, Math.min(SIZE - prev.w, dragRef.current!.ox - dx)),
-      y: Math.max(0, Math.min(SIZE - prev.h, dragRef.current!.oy - dy)),
+      x: Math.max(0, Math.min(SIZE - prev.w, ox - dx)),
+      y: Math.max(0, Math.min(SIZE - prev.h, oy - dy)),
     }))
   }
   const onMouseUp = () => { dragRef.current = null }
 
-  const allLats = laps.flatMap(l => l.lat)
-  const allLons = laps.flatMap(l => l.lon)
-  const tf = allLats.length > 0 ? computeTransform(allLats, allLons) : null
-  const isZoomed = vb.w < SIZE * 0.99
-  // SVG viewBox is ALWAYS "0 0 1000 1000". Pan/zoom is applied via <g transform>.
-  // This avoids WebView compositor issues when viewBox values change rapidly.
-  const gScale = SIZE / vb.w
+  const isZoomed  = vb.w < SIZE * 0.99
+  const gScale    = SIZE / vb.w
   const gTransform = `scale(${gScale.toFixed(6)}) translate(${(-vb.x).toFixed(4)} ${(-vb.y).toFixed(4)})`
 
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="flex-1 overflow-hidden flex gap-3 p-4 bg-background min-h-0">
 
-      {/* ── Track map (left) ───────────────────────────────── */}
+      {/* Track map — left column */}
       <div className="flex flex-col bg-card rounded-xl border border-border shadow-sm" style={{ width: '44%', minWidth: 180 }}>
+
+        {/* Header */}
         <div className="flex items-center justify-between px-3 pt-3 pb-2 shrink-0">
           <h3 className="text-xs font-semibold text-foreground">Track Map</h3>
           <div className="flex items-center gap-3">
@@ -220,21 +251,18 @@ export default function LapMap() {
               </span>
             ))}
             {isZoomed && (
-              <button
-                onClick={() => setVb(INITIAL_VB)}
-                className="text-[10px] border border-border rounded px-2 py-0.5 text-muted-foreground hover:text-foreground transition-colors"
-              >
+              <button onClick={() => setVb(INITIAL_VB)}
+                className="text-[10px] border border-border rounded px-2 py-0.5 text-muted-foreground hover:text-foreground transition-colors">
                 Reset
               </button>
             )}
           </div>
         </div>
 
-        <div
-          ref={containerRef}
-          className="flex-1 relative"
-          style={{ cursor: dragRef.current ? 'grabbing' : 'grab' }}
-        >
+        {/* Map area */}
+        <div ref={containerRef} className="flex-1 relative min-h-0"
+          style={{ cursor: dragRef.current ? 'grabbing' : 'grab' }}>
+
           {loading ? (
             <div className="absolute inset-0 flex items-center justify-center">
               <p className="text-sm text-muted-foreground">Loading…</p>
@@ -243,56 +271,47 @@ export default function LapMap() {
             <div className="absolute inset-0 flex items-center justify-center px-4 text-center">
               <p className="text-sm text-muted-foreground">Select laps with GPS data</p>
             </div>
-          ) : tf ? (
-            <svg
-              ref={svgRef}
-              viewBox="0 0 1000 1000"
-              className="absolute inset-0 w-full h-full"
-              onMouseDown={onMouseDown}
-              onMouseMove={onMouseMove}
-              onMouseUp={onMouseUp}
-              onMouseLeave={onMouseUp}
-              onDoubleClick={() => setVb(INITIAL_VB)}
-            >
-              {/* All content lives inside one <g> that handles pan/zoom.
-                  viewBox stays "0 0 1000 1000" forever — changing it rapidly
-                  causes WebView compositor corruption (blank screen). */}
+          ) : polylines ? (
+            <svg ref={svgRef} viewBox="0 0 1000 1000" className="absolute inset-0 w-full h-full"
+              overflow="hidden"
+              onMouseDown={onMouseDown} onMouseMove={onMouseMove}
+              onMouseUp={onMouseUp} onMouseLeave={onMouseUp}
+              onDoubleClick={() => setVb(INITIAL_VB)}>
+
+              {/* Single <g> handles all zoom/pan — viewBox never changes */}
               <g transform={gTransform}>
                 {/* Grey track base */}
-                <polyline
-                  points={buildPolyline(laps[0].lat, laps[0].lon, tf, 4)}
-                  fill="none"
-                  stroke="rgba(130,130,130,0.22)"
-                  strokeWidth={16}
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  vectorEffect="non-scaling-stroke"
-                />
-                {/* Racing lines per lap */}
-                {laps.map(lap => (
-                  <polyline
-                    key={lap.lapKey}
-                    points={buildPolyline(lap.lat, lap.lon, tf, 4)}
-                    fill="none"
-                    stroke={getLapColor(lap.colorIndex)}
-                    strokeWidth={4}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    opacity={0.88}
-                    vectorEffect="non-scaling-stroke"
-                  />
+                <polyline points={polylines.base} fill="none"
+                  stroke="rgba(130,130,130,0.22)" strokeWidth={16}
+                  strokeLinecap="round" strokeLinejoin="round"
+                  vectorEffect="non-scaling-stroke" />
+
+                {/* Racing lines */}
+                {polylines.laps.map(({ key, pts, color }) => (
+                  <polyline key={key} points={pts} fill="none"
+                    stroke={color} strokeWidth={4} opacity={0.88}
+                    strokeLinecap="round" strokeLinejoin="round"
+                    vectorEffect="non-scaling-stroke" />
                 ))}
-                {/* Start/finish dot */}
-                {(() => {
-                  const l = laps[0]
-                  if (!l.lat.length) return null
-                  const p = project(l.lat[0], l.lon[0], tf)
-                  return (
-                    <circle cx={p.x} cy={p.y} r={8}
-                      fill="white" stroke={getLapColor(0)} strokeWidth={3}
+
+                {/* Start/finish marker */}
+                {polylines.start && (
+                  <circle cx={polylines.start.x} cy={polylines.start.y} r={8}
+                    fill="white" stroke={getLapColor(0)} strokeWidth={3}
+                    vectorEffect="non-scaling-stroke" />
+                )}
+
+                {/* Crosshair position dots — one per lap */}
+                {trackDots.map(({ pt, color }, i) => (
+                  <g key={i}>
+                    <circle cx={pt.x} cy={pt.y} r={11}
+                      fill="white" strokeWidth={0}
+                      vectorEffect="non-scaling-stroke" opacity={0.7} />
+                    <circle cx={pt.x} cy={pt.y} r={8}
+                      fill={color} stroke="white" strokeWidth={3}
                       vectorEffect="non-scaling-stroke" />
-                  )
-                })()}
+                  </g>
+                ))}
               </g>
             </svg>
           ) : null}
@@ -305,7 +324,7 @@ export default function LapMap() {
         )}
       </div>
 
-      {/* ── Telemetry charts (right) ───────────────────────── */}
+      {/* Telemetry charts — right column */}
       <div className="flex-1 flex flex-col gap-2 overflow-y-auto min-w-0">
         {loading ? (
           <div className="flex-1 flex items-center justify-center bg-card rounded-xl border border-border shadow-sm">
@@ -315,28 +334,21 @@ export default function LapMap() {
           <div className="flex-1 flex items-center justify-center bg-card rounded-xl border border-border shadow-sm">
             <p className="text-sm text-muted-foreground">Select laps to compare</p>
           </div>
-        ) : (
-          TELE_CHANNELS.map(({ ch, unit, domain }) => {
-            const ch_traces = traces[ch] ?? []
-            if (ch_traces.length === 0) return null
-            return (
-              <div key={ch} className="bg-card rounded-xl border border-border shadow-sm overflow-hidden">
-                <TraceChart
-                  channel={ch}
-                  unit={unit}
-                  yDomain={domain}
-                  traces={ch_traces}
-                  crosshairTime={crosshairTime}
-                  onMouseMove={setCrosshairTime}
-                  zoomRef={zoomRef}
-                  onZoom={handleZoom}
-                  registerRedraw={registerRedraw}
-                  height={140}
-                />
-              </div>
-            )
-          })
-        )}
+        ) : TELE_CHANNELS.map(({ ch, unit, domain }) => {
+          const lapTraces = traces[ch] ?? []
+          if (!lapTraces.length) return null
+          return (
+            <div key={ch} className="bg-card rounded-xl border border-border shadow-sm overflow-hidden">
+              <TraceChart
+                channel={ch} unit={unit} yDomain={domain}
+                traces={lapTraces}
+                crosshairTime={crosshairTime} onMouseMove={setCrosshairTime}
+                zoomRef={zoomRef} onZoom={handleZoom} registerRedraw={registerRedraw}
+                height={140}
+              />
+            </div>
+          )
+        })}
       </div>
     </div>
   )
