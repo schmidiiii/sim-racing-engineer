@@ -150,23 +150,24 @@ export default function LapMap() {
     fetchAll()
   }, [selectedLapKeys.join(','), sessions.length])
 
-  // Wheel zoom — attached to container div so it's always available
+  // Wheel zoom — attached to container div (always in DOM, avoids conditional SVG ref)
   const handleWheel = useCallback((e: WheelEvent) => {
     e.preventDefault()
     const svg = svgRef.current
     if (!svg) return
     const rect = svg.getBoundingClientRect()
+    if (!rect.width || !rect.height) return   // guard against 0-size during layout
     setVb(prev => {
       const factor = e.deltaY > 0 ? 1.22 : 1 / 1.22
       const mx = prev.x + (e.clientX - rect.left) / rect.width * prev.w
       const my = prev.y + (e.clientY - rect.top) / rect.height * prev.h
+      if (!isFinite(mx) || !isFinite(my)) return prev    // NaN guard
       const newW = Math.min(SIZE, Math.max(30, prev.w * factor))
       const newH = Math.min(SIZE, Math.max(30, prev.h * factor))
-      return {
-        x: Math.max(0, Math.min(SIZE - newW, mx - (mx - prev.x) / prev.w * newW)),
-        y: Math.max(0, Math.min(SIZE - newH, my - (my - prev.y) / prev.h * newH)),
-        w: newW, h: newH,
-      }
+      const nx = Math.max(0, Math.min(SIZE - newW, mx - (mx - prev.x) / prev.w * newW))
+      const ny = Math.max(0, Math.min(SIZE - newH, my - (my - prev.y) / prev.h * newH))
+      if (!isFinite(nx) || !isFinite(ny)) return prev    // NaN guard
+      return { x: nx, y: ny, w: newW, h: newH }
     })
   }, [])
 
@@ -183,8 +184,10 @@ export default function LapMap() {
   const onMouseMove = (e: React.MouseEvent) => {
     if (!dragRef.current || !svgRef.current) return
     const rect = svgRef.current.getBoundingClientRect()
+    if (!rect.width || !rect.height) return
     const dx = (e.clientX - dragRef.current.sx) / rect.width * vb.w
     const dy = (e.clientY - dragRef.current.sy) / rect.height * vb.h
+    if (!isFinite(dx) || !isFinite(dy)) return
     setVb(prev => ({
       ...prev,
       x: Math.max(0, Math.min(SIZE - prev.w, dragRef.current!.ox - dx)),
@@ -197,8 +200,10 @@ export default function LapMap() {
   const allLons = laps.flatMap(l => l.lon)
   const tf = allLats.length > 0 ? computeTransform(allLats, allLons) : null
   const isZoomed = vb.w < SIZE * 0.99
-  const strokeW = (vb.w / SIZE) * 7
-  const step = Math.max(1, Math.floor(vb.w / SIZE * 5))
+  // SVG viewBox is ALWAYS "0 0 1000 1000". Pan/zoom is applied via <g transform>.
+  // This avoids WebView compositor issues when viewBox values change rapidly.
+  const gScale = SIZE / vb.w
+  const gTransform = `scale(${gScale.toFixed(6)}) translate(${(-vb.x).toFixed(4)} ${(-vb.y).toFixed(4)})`
 
   return (
     <div className="flex-1 overflow-hidden flex gap-3 p-4 bg-background min-h-0">
@@ -241,7 +246,7 @@ export default function LapMap() {
           ) : tf ? (
             <svg
               ref={svgRef}
-              viewBox={`${vb.x.toFixed(1)} ${vb.y.toFixed(1)} ${vb.w.toFixed(1)} ${vb.h.toFixed(1)}`}
+              viewBox="0 0 1000 1000"
               className="absolute inset-0 w-full h-full"
               onMouseDown={onMouseDown}
               onMouseMove={onMouseMove}
@@ -249,38 +254,46 @@ export default function LapMap() {
               onMouseLeave={onMouseUp}
               onDoubleClick={() => setVb(INITIAL_VB)}
             >
-              {/* Grey track base */}
-              <polyline
-                points={buildPolyline(laps[0].lat, laps[0].lon, tf, step)}
-                fill="none"
-                stroke="rgba(130,130,130,0.22)"
-                strokeWidth={strokeW * 2.6}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-              {/* Racing lines per lap */}
-              {laps.map(lap => (
+              {/* All content lives inside one <g> that handles pan/zoom.
+                  viewBox stays "0 0 1000 1000" forever — changing it rapidly
+                  causes WebView compositor corruption (blank screen). */}
+              <g transform={gTransform}>
+                {/* Grey track base */}
                 <polyline
-                  key={lap.lapKey}
-                  points={buildPolyline(lap.lat, lap.lon, tf, step)}
+                  points={buildPolyline(laps[0].lat, laps[0].lon, tf, 4)}
                   fill="none"
-                  stroke={getLapColor(lap.colorIndex)}
-                  strokeWidth={strokeW}
+                  stroke="rgba(130,130,130,0.22)"
+                  strokeWidth={16}
                   strokeLinecap="round"
                   strokeLinejoin="round"
-                  opacity={0.85}
+                  vectorEffect="non-scaling-stroke"
                 />
-              ))}
-              {/* Start/finish dot */}
-              {(() => {
-                const l = laps[0]
-                if (!l.lat.length) return null
-                const p = project(l.lat[0], l.lon[0], tf)
-                return (
-                  <circle cx={p.x} cy={p.y} r={strokeW * 2.2}
-                    fill="white" stroke={getLapColor(0)} strokeWidth={strokeW * 0.6} />
-                )
-              })()}
+                {/* Racing lines per lap */}
+                {laps.map(lap => (
+                  <polyline
+                    key={lap.lapKey}
+                    points={buildPolyline(lap.lat, lap.lon, tf, 4)}
+                    fill="none"
+                    stroke={getLapColor(lap.colorIndex)}
+                    strokeWidth={4}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    opacity={0.88}
+                    vectorEffect="non-scaling-stroke"
+                  />
+                ))}
+                {/* Start/finish dot */}
+                {(() => {
+                  const l = laps[0]
+                  if (!l.lat.length) return null
+                  const p = project(l.lat[0], l.lon[0], tf)
+                  return (
+                    <circle cx={p.x} cy={p.y} r={8}
+                      fill="white" stroke={getLapColor(0)} strokeWidth={3}
+                      vectorEffect="non-scaling-stroke" />
+                  )
+                })()}
+              </g>
             </svg>
           ) : null}
         </div>
