@@ -361,23 +361,16 @@ export default function LapMap() {
             <div className="absolute bottom-10 right-2 pointer-events-none rounded-lg border border-border bg-card shadow-md overflow-hidden"
               style={{ width: 150, height: 150 }}>
               <svg viewBox={`${fitVb.x} ${fitVb.y} ${fitVb.w} ${fitVb.h}`} className="w-full h-full">
-                {/* Thick halo for track body */}
-                <polyline points={polylines.base} fill="none"
-                  stroke="currentColor" strokeWidth={20} opacity={0.08}
-                  strokeLinecap="round" strokeLinejoin="round"
-                  vectorEffect="non-scaling-stroke" />
-                {/* Track outline — single neutral color */}
                 {polylines.laps.slice(0, 1).map(({ key, pts }) => (
                   <polyline key={key} points={pts} fill="none"
-                    stroke="currentColor" strokeWidth={5} opacity={0.55}
+                    stroke="currentColor" strokeWidth={2} opacity={0.6}
                     strokeLinecap="round" strokeLinejoin="round"
                     vectorEffect="non-scaling-stroke" />
                 ))}
-                {/* Zoomed viewport — dashed rect */}
                 <rect x={vb.x} y={vb.y} width={vb.w} height={vb.h}
-                  fill="currentColor" fillOpacity={0.06}
-                  stroke="currentColor" strokeWidth={10} strokeOpacity={0.5}
-                  strokeDasharray="24 14"
+                  fill="currentColor" fillOpacity={0.05}
+                  stroke="currentColor" strokeWidth={2} strokeOpacity={0.45}
+                  strokeDasharray="8 5"
                   vectorEffect="non-scaling-stroke" />
               </svg>
             </div>
