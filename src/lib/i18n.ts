@@ -34,7 +34,7 @@ const EN = {
   trackEnd: '100% Track',
   brakePoints: 'Brake Points',
   zoneComparison: 'Zone Comparison',
-  brakeZoneDeltaHint: 'Δ = brake point difference in % of lap distance · positive = earlier · negative = later',
+  brakeZoneDeltaHint: 'Δ = brake point difference in meters · positive = you brake earlier · negative = you brake later',
   // Corner Speed view
   loadingCorners: 'Analysing corners…',
   noCornerData: 'Select laps with Speed data to see corner speeds',
