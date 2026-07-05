@@ -59,6 +59,16 @@ function buildPolyline(lat: number[], lon: number[], tf: ReturnType<typeof compu
   return pts.join(' ')
 }
 
+// Binary search: index of distArr closest to target
+function nearestDistIdx(distArr: number[], target: number): number {
+  let lo = 0, hi = distArr.length - 1
+  while (lo < hi) {
+    const m = (lo + hi) >> 1
+    if (distArr[m] < target) lo = m + 1; else hi = m
+  }
+  return lo
+}
+
 // Binary search: index of timestamp closest to target
 function nearestTimeIdx(timestamps: number[], target: number): number {
   let lo = 0, hi = timestamps.length - 1
@@ -112,7 +122,7 @@ export default function LapMap() {
 
     const go = async () => {
       const gpsOut: LapGPS[] = []
-      const tmap: Record<string, LapTrace[]> = { Speed: [], Throttle: [], Brake: [] }
+      const tmap: Record<string, LapTrace[]> = Object.fromEntries(TELE_CHANNELS.map(({ ch }) => [ch, []]))
 
       for (let ci = 0; ci < selectedLapKeys.length; ci++) {
         const key = selectedLapKeys[ci]
@@ -141,6 +151,22 @@ export default function LapMap() {
             if (d) tmap[ch].push({ lapNumber, colorIndex: ci, samples: d.samples.map(xform), timestamps: d.timestamps, lapDistPct: d.lap_dist_pct })
           } catch { /* skip */ }
         }
+      }
+
+      // Delta: cumulative time gap between first two laps at each track position
+      // positive = first lap is slower to that point
+      const sA = tmap['Speed']?.[0], sB = tmap['Speed']?.[1]
+      if (sA?.lapDistPct?.length && sB?.lapDistPct?.length) {
+        const aStart = sA.timestamps[0], bStart = sB.timestamps[0]
+        const dSamples: number[] = [], dTs: number[] = [], dDist: number[] = []
+        for (let i = 0; i < sA.timestamps.length; i++) {
+          const pct = sA.lapDistPct[i]
+          const j = nearestDistIdx(sB.lapDistPct, pct)
+          dSamples.push((sA.timestamps[i] - aStart) - (sB.timestamps[j] - bStart))
+          dTs.push(sA.timestamps[i])
+          dDist.push(pct)
+        }
+        tmap['_delta'] = [{ lapNumber: sA.lapNumber, colorIndex: 0, samples: dSamples, timestamps: dTs, lapDistPct: dDist }]
       }
 
       setLaps(gpsOut)
@@ -393,21 +419,38 @@ export default function LapMap() {
               {loading ? 'Loading…' : 'Select laps to compare'}
             </p>
           </div>
-        ) : TELE_CHANNELS.map(({ ch, unit, domain }) => {
-          const lapTraces = traces[ch] ?? []
-          if (!lapTraces.length) return null
-          return (
-            <div key={ch} className="bg-card shrink-0">
-              <TraceChart
-                channel={ch} unit={unit} yDomain={domain}
-                traces={lapTraces}
-                crosshairTime={crosshairTime} onMouseMove={setCrosshairTime}
-                zoomRef={zoomRef} onZoom={handleZoom} registerRedraw={registerRedraw}
-                height={128}
-              />
-            </div>
-          )
-        })}
+        ) : (
+          <>
+            {TELE_CHANNELS.map(({ ch, unit, domain }) => {
+              const lapTraces = traces[ch] ?? []
+              if (!lapTraces.length) return null
+              return (
+                <div key={ch} className="bg-card shrink-0">
+                  <TraceChart
+                    channel={ch} unit={unit} yDomain={domain}
+                    traces={lapTraces}
+                    crosshairTime={crosshairTime} onMouseMove={setCrosshairTime}
+                    zoomRef={zoomRef} onZoom={handleZoom} registerRedraw={registerRedraw}
+                    height={128}
+                  />
+                </div>
+              )
+            })}
+            {(traces['_delta']?.length ?? 0) > 0 && laps.length >= 2 && (
+              <div className="bg-card shrink-0">
+                <TraceChart
+                  channel={`Δ  L${laps[0].lapNumber} – L${laps[1].lapNumber}`}
+                  unit="s"
+                  yDomain={['auto', 'auto']}
+                  traces={traces['_delta']}
+                  crosshairTime={crosshairTime} onMouseMove={setCrosshairTime}
+                  zoomRef={zoomRef} onZoom={handleZoom} registerRedraw={registerRedraw}
+                  height={128}
+                />
+              </div>
+            )}
+          </>
+        )}
       </div>
     </div>
   )
