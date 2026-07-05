@@ -356,26 +356,27 @@ export default function LapMap() {
             </svg>
           ) : null}
 
-          {/* Minimap: full track overview with dashed viewport rect when zoomed */}
+          {/* Minimap: full track overview with viewport indicator when zoomed */}
           {isZoomed && polylines && (
-            <div className="absolute bottom-10 right-2 pointer-events-none rounded border border-border overflow-hidden bg-card"
-              style={{ width: 88, height: 88, opacity: 0.88 }}>
-              <svg viewBox={`${fitVb.x} ${fitVb.y} ${fitVb.w} ${fitVb.h}`} className="w-full h-full">
+            <div className="absolute bottom-10 right-2 pointer-events-none rounded-xl overflow-hidden"
+              style={{ width: 130, height: 130, background: 'rgba(10,10,10,0.72)' }}>
+              <svg viewBox={`${fitVb.x} ${fitVb.y} ${fitVb.w} ${fitVb.h}`} className="w-full h-full" style={{ padding: 6 }}>
+                {/* Shadow/glow under lap lines */}
                 <polyline points={polylines.base} fill="none"
-                  stroke="rgba(150,150,150,0.2)" strokeWidth={22}
+                  stroke="rgba(255,255,255,0.07)" strokeWidth={18}
                   strokeLinecap="round" strokeLinejoin="round"
                   vectorEffect="non-scaling-stroke" />
                 {polylines.laps.map(({ key, pts, color }) => (
                   <polyline key={key} points={pts} fill="none"
-                    stroke={color} strokeWidth={6} opacity={0.55}
+                    stroke={color} strokeWidth={5} opacity={0.65}
                     strokeLinecap="round" strokeLinejoin="round"
                     vectorEffect="non-scaling-stroke" />
                 ))}
+                {/* Viewport indicator: filled tint + bright solid border */}
                 <rect x={vb.x} y={vb.y} width={vb.w} height={vb.h}
-                  fill="rgba(255,255,255,0.06)"
-                  stroke="rgba(255,255,255,0.65)"
-                  strokeWidth={14}
-                  strokeDasharray="30 18"
+                  fill="rgba(255,255,255,0.10)"
+                  stroke="rgba(255,255,255,0.9)"
+                  strokeWidth={11}
                   vectorEffect="non-scaling-stroke" />
               </svg>
             </div>
