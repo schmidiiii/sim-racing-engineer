@@ -28,8 +28,9 @@ interface LapCorners {
   gpsDistPct: number[]    // lap_dist_pct from Lat channel (same timing as lat/lon)
 }
 
-// GPS curvature-based corner detection — uses actual track shape, not car speed.
-// Computes turning angle at each GPS sample; local maxima above threshold = corners.
+// GPS curvature-based corner detection using distance-normalised arms.
+// Measures the direction change over a fixed ±ARM_M metres (not ±N samples),
+// so slow hairpins and fast sweepers are treated equally.
 // Falls back to speed-based detection when GPS is unavailable.
 function detectCornersFromGPS(
   lat: number[], lon: number[], gpsDistPct: number[],
@@ -42,25 +43,45 @@ function detectCornersFromGPS(
   const x = lon.map(l => (l - lon[0]) * (Math.PI / 180) * R * Math.cos(latRef))
   const y = lat.map(l => (l - lat[0]) * (Math.PI / 180) * R)
 
-  const W = 20  // samples ahead/behind for angle vector
+  // Cumulative arc length in metres
+  const arc: number[] = [0]
+  for (let i = 1; i < lat.length; i++)
+    arc.push(arc[i - 1] + Math.hypot(x[i] - x[i - 1], y[i] - y[i - 1]))
+  const totalArc = arc[arc.length - 1]
+  if (totalArc < 200) return detectCornersFromSpeed(speedKmh, speedDistPct)
+
+  // Arm length: 30 m, capped at 3% of track so very short tracks still work
+  const ARM = Math.min(30, totalArc * 0.03)
+
   const angles: number[] = new Array(lat.length).fill(0)
-  for (let i = W; i < lat.length - W; i++) {
-    const dx1 = x[i] - x[i - W], dy1 = y[i] - y[i - W]
-    const dx2 = x[i + W] - x[i], dy2 = y[i + W] - y[i]
+  for (let i = 0; i < lat.length; i++) {
+    const aI = arc[i]
+    if (aI < ARM || aI > totalArc - ARM) continue
+
+    // Binary search for back/forward sample at ±ARM metres
+    let lo = 0, hi = i
+    while (lo < hi - 1) { const m = (lo + hi) >> 1; if (arc[m] < aI - ARM) lo = m; else hi = m }
+    const ib = lo
+
+    lo = i; hi = lat.length - 1
+    while (lo < hi - 1) { const m = (lo + hi) >> 1; if (arc[m] < aI + ARM) lo = m; else hi = m }
+    const iF = hi
+
+    const dx1 = x[i] - x[ib], dy1 = y[i] - y[ib]
+    const dx2 = x[iF] - x[i], dy2 = y[iF] - y[i]
     const len1 = Math.hypot(dx1, dy1), len2 = Math.hypot(dx2, dy2)
     if (len1 < 0.5 || len2 < 0.5) continue
     const cosA = Math.max(-1, Math.min(1, (dx1 * dx2 + dy1 * dy2) / (len1 * len2)))
     angles[i] = Math.acos(cosA) * 180 / Math.PI
   }
 
-  const MIN_ANGLE = 10  // degrees — real corners bend more than this
-  const MIN_SEP = 0.018
+  const MIN_ANGLE = 8   // degrees over ±ARM metres → real corners only
+  const MIN_SEP = 0.015 // 1.5% lap distance minimum between distinct corners
 
   const candidates: { dist: number; angle: number; gpsIdx: number }[] = []
-  for (let i = W + 1; i < lat.length - W - 1; i++) {
-    if (angles[i] > MIN_ANGLE && angles[i] > angles[i - 1] && angles[i] > angles[i + 1]) {
+  for (let i = 1; i < lat.length - 1; i++) {
+    if (angles[i] > MIN_ANGLE && angles[i] >= angles[i - 1] && angles[i] >= angles[i + 1])
       candidates.push({ dist: gpsDistPct[i] ?? 0, angle: angles[i], gpsIdx: i })
-    }
   }
 
   // Merge nearby — keep the sharpest bend per corner
@@ -71,13 +92,12 @@ function detectCornersFromGPS(
     else merged.push(c)
   }
 
-  // For each corner position, find the minimum speed within ±6% of that dist
+  // Look up minimum speed within ±6% lap distance of each GPS corner
   return merged.sort((a, b) => a.dist - b.dist).map(c => {
     let minSpeed = Infinity
     for (let i = 0; i < speedDistPct.length; i++) {
-      if (Math.abs(speedDistPct[i] - c.dist) < 0.06 && speedKmh[i] < minSpeed) {
+      if (Math.abs(speedDistPct[i] - c.dist) < 0.06 && speedKmh[i] < minSpeed)
         minSpeed = speedKmh[i]
-      }
     }
     return { dist: c.dist, minSpeed: minSpeed === Infinity ? 0 : minSpeed, sampleIdx: c.gpsIdx }
   })
