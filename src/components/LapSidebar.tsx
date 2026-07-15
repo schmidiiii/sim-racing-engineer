@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { open } from '@tauri-apps/plugin-dialog'
 import { invoke } from '@tauri-apps/api/core'
 import { useSessionStore, getLapColor, lapKey, type Session } from '@/store/session'
-import TrackMap from '@/components/TrackMap'
+import SidebarTrackMap from '@/components/SidebarTrackMap'
 import { useT } from '@/lib/i18n'
 
 function LapRow({ sessionId, lapNumber, lapTime, isValid, colorIndex, fastestTime, disabled }: {
@@ -289,10 +289,7 @@ export default function LapSidebar() {
       {/* Consistency score */}
       <ConsistencyPanel />
 
-      {/* Track map */}
-      <div className="shrink-0 border-t border-border p-2" style={{ height: 280 }}>
-        <TrackMap />
-      </div>
+      <SidebarTrackMap />
 
       {/* Lap Analyse button */}
       <div className="shrink-0 border-t border-border px-3 py-2">
