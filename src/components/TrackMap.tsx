@@ -81,12 +81,15 @@ function percentile(sorted: number[], p: number): number {
   return sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo)
 }
 
-export default function TrackMap() {
+export type { MapChannel }
+
+export default function TrackMap({ channel: channelProp }: { channel?: MapChannel } = {}) {
   const t = useT()
   const { sessions, selectedLapKeys, crosshairTime } = useSessionStore()
   const [points, setPoints] = useState<Point[]>([])
   const [loading, setLoading] = useState(false)
-  const [channel, setChannel] = useState<MapChannel>('Speed')
+  const [channelState, setChannelState] = useState<MapChannel>('Speed')
+  const channel = channelProp ?? channelState
 
   const mapChannels: { key: MapChannel; label: string }[] = [
     { key: 'Speed', label: 'Speed' },
@@ -180,22 +183,24 @@ export default function TrackMap() {
 
   return (
     <div className="h-full flex flex-col">
-      {/* Channel selector */}
-      <div className="shrink-0 flex items-center justify-center gap-1 pt-1.5 pb-0.5">
-        {mapChannels.map(opt => (
-          <button
-            key={opt.key}
-            onClick={() => setChannel(opt.key)}
-            className={`px-2 py-0.5 text-[10px] font-semibold rounded transition-colors ${
-              channel === opt.key
-                ? 'bg-primary text-primary-foreground'
-                : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
-            }`}
-          >
-            {opt.label}
-          </button>
-        ))}
-      </div>
+      {/* Channel selector — only shown when not controlled by parent */}
+      {!channelProp && (
+        <div className="shrink-0 flex items-center justify-center gap-1 pt-1.5 pb-0.5">
+          {mapChannels.map(opt => (
+            <button
+              key={opt.key}
+              onClick={() => setChannelState(opt.key)}
+              className={`px-2 py-0.5 text-[10px] font-semibold rounded transition-colors ${
+                channel === opt.key
+                  ? 'bg-primary text-primary-foreground'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Map */}
       <div className="flex-1 min-h-0 flex items-center justify-center relative">

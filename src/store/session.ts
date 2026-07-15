@@ -67,6 +67,8 @@ interface SessionStore {
   setCrosshairTime: (t: number | null) => void
   zoomDomain: [number, number] | null
   setZoomDomain: (domain: [number, number] | null) => void
+  sidebarMapExpanded: boolean
+  setSidebarMapExpanded: (v: boolean) => void
   activeTabLabel: string
   setActiveTabLabel: (label: string) => void
   autoLoad: boolean
@@ -109,6 +111,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
   zoomDomain: null,
   setZoomDomain: (domain) => set({ zoomDomain: domain }),
+
+  sidebarMapExpanded: false,
+  setSidebarMapExpanded: (v) => set({ sidebarMapExpanded: v }),
 
   activeTabLabel: 'General',
   setActiveTabLabel: (label) => set({ activeTabLabel: label }),

@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useSessionStore, parseLapKey, getLapColor } from '@/store/session'
 import { useT } from '@/lib/i18n'
-import TrackMap from '@/components/TrackMap'
 
 interface LapChannelData {
   lap_number: number
@@ -97,8 +96,6 @@ export default function BrakeAnalysis() {
   const { sessions, selectedLapKeys } = useSessionStore()
   const [lapDataArr, setLapDataArr] = useState<LapData[]>([])
   const [loading, setLoading] = useState(false)
-  const [mapOpen, setMapOpen] = useState(true)
-  const [mapLarge, setMapLarge] = useState(false)
 
   useEffect(() => {
     if (selectedLapKeys.length === 0 || sessions.length === 0) { setLapDataArr([]); return }
@@ -178,49 +175,6 @@ export default function BrakeAnalysis() {
 
   return (
     <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-background">
-
-      {/* Track map — collapsible + expandable */}
-      <div className="bg-card rounded-xl border border-border shadow-sm overflow-hidden">
-        <div className="flex items-center justify-between px-4 py-2.5 border-b border-border">
-          <h3 className="text-sm font-semibold text-foreground">Track Map</h3>
-          <div className="flex items-center gap-1">
-            {mapOpen && (
-              <button
-                onClick={() => setMapLarge(v => !v)}
-                className="w-7 h-7 flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-                title={mapLarge ? 'Smaller' : 'Larger'}
-              >
-                {mapLarge ? (
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/>
-                    <line x1="10" y1="14" x2="3" y2="21"/><line x1="21" y1="3" x2="14" y2="10"/>
-                  </svg>
-                ) : (
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>
-                    <line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
-                  </svg>
-                )}
-              </button>
-            )}
-            <button
-              onClick={() => setMapOpen(v => !v)}
-              className="w-7 h-7 flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-              title={mapOpen ? 'Collapse' : 'Expand'}
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
-                style={{ transform: mapOpen ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 0.2s' }}>
-                <polyline points="6 9 12 15 18 9"/>
-              </svg>
-            </button>
-          </div>
-        </div>
-        {mapOpen && (
-          <div style={{ height: mapLarge ? 480 : 260 }} className="transition-all duration-200 overflow-hidden">
-            <TrackMap />
-          </div>
-        )}
-      </div>
 
       {/* Bremsdruckverlauf strips — one zone rect per detected zone (fast) */}
       <div className="bg-card rounded-xl border border-border shadow-sm p-4">

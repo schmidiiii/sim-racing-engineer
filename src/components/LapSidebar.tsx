@@ -172,7 +172,26 @@ function ConsistencyPanel() {
   return (
     <div className="shrink-0 border-t border-border px-3 py-2.5 bg-secondary/20">
       <div className="flex items-center justify-between mb-1.5">
-        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">{t('consistencyScore')}</p>
+        <div className="flex items-center gap-1.5">
+          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">{t('consistencyScore')}</p>
+          {/* Info tooltip */}
+          <div className="relative group">
+            <button className="text-muted-foreground/50 hover:text-muted-foreground transition-colors leading-none">
+              <svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="7" cy="7" r="6" />
+                <path d="M7 6.5v4M7 4.5v.5" />
+              </svg>
+            </button>
+            <div className="absolute bottom-full left-0 mb-2 w-60 hidden group-hover:block z-50 pointer-events-none">
+              <div className="bg-popover border border-border rounded-lg shadow-lg px-3 py-2.5 text-[10px] text-muted-foreground leading-relaxed">
+                <p className="font-semibold text-foreground mb-1">{t('consistencyScore')}</p>
+                <p className="mb-2">{t('consistencyScoreInfo')}</p>
+                <p className="font-semibold text-foreground mb-1">{t('idealLap')}</p>
+                <p>{t('idealLapInfo')}</p>
+              </div>
+            </div>
+          </div>
+        </div>
         <p className={`text-sm font-bold tabular-nums ${scoreColor}`}>{consistency.toFixed(1)}%</p>
       </div>
       <div className="h-1 bg-secondary rounded-full mb-2 overflow-hidden">
@@ -207,7 +226,7 @@ function ConsistencyPanel() {
 
 export default function LapSidebar() {
   const t = useT()
-  const { sessions, activeSessionId, setActiveSessionId, removeSession, loading, error, loadFiles, autoLoad, setAutoLoad, setLapMapFullscreen } = useSessionStore()
+  const { sessions, activeSessionId, setActiveSessionId, removeSession, loading, error, loadFiles, autoLoad, setAutoLoad, sidebarMapExpanded } = useSessionStore()
 
   const fastestTime = sessions.flatMap(s => s.laps)
     .filter(l => l.is_valid && l.lap_time > 10)
@@ -240,7 +259,10 @@ export default function LapSidebar() {
     !refTrack || !refCar || (s.track === refTrack && s.car === refCar)
 
   return (
-    <aside className="w-80 shrink-0 border-r border-border bg-card flex flex-col overflow-hidden">
+    <aside
+      className="shrink-0 border-r border-border bg-card flex flex-col overflow-hidden transition-[width] duration-200"
+      style={{ width: sidebarMapExpanded ? '35vw' : 320 }}
+    >
 
       {/* Header */}
       <div className="px-4 pt-4 pb-3 border-b border-border shrink-0">
@@ -253,7 +275,7 @@ export default function LapSidebar() {
       </div>
 
       {/* Sessions + laps */}
-      <div className="flex-1 overflow-y-auto py-2">
+      <div className={`overflow-y-auto py-2 ${sidebarMapExpanded ? 'max-h-[180px]' : 'flex-1'}`}>
         {sessions.map((session, si) => (
           <div key={session.id} className="group">
             <SessionCard
@@ -286,37 +308,16 @@ export default function LapSidebar() {
         ))}
       </div>
 
-      {/* Consistency score */}
-      <ConsistencyPanel />
+      {/* Consistency score — hidden when map is expanded */}
+      {!sidebarMapExpanded && <ConsistencyPanel />}
 
       <SidebarTrackMap />
-
-      {/* Lap Analyse button */}
-      <div className="shrink-0 border-t border-border px-3 py-2">
-        <button
-          onClick={() => setLapMapFullscreen(true)}
-          className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg border border-border hover:border-primary/40 hover:bg-primary/5 text-xs font-medium text-muted-foreground hover:text-primary transition-colors"
-        >
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M2 13 L5 8 L8 10 L11 5 L14 7" />
-            <rect x="1" y="1" width="14" height="14" rx="2" strokeWidth="1.4" />
-          </svg>
-          {t('lapAnalyse')}
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="ml-auto opacity-50">
-            <path d="M1 5h8M6 2l3 3-3 3" />
-          </svg>
-        </button>
-      </div>
 
       {/* Load button + auto-load toggle */}
       <div className="px-3 py-3 border-t border-border shrink-0 flex flex-col gap-2">
         <button
           onClick={() => setAutoLoad(!autoLoad)}
-          className={`w-full flex items-center justify-between text-xs px-3 py-2 rounded-lg border transition-colors ${
-            autoLoad
-              ? 'bg-primary/10 border-primary/30 text-primary'
-              : 'border-border text-muted-foreground hover:text-foreground'
-          }`}
+          className="w-full flex items-center justify-between text-xs px-3 py-2 rounded-lg border border-border text-muted-foreground hover:text-foreground transition-colors"
         >
           <span>{t('autoLoadFiles')}</span>
           <span className={`relative inline-flex w-8 h-4 rounded-full transition-colors shrink-0 ml-2 ${autoLoad ? 'bg-primary' : 'bg-muted'}`}>

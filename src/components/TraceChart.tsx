@@ -161,6 +161,9 @@ function paintChart(
 function paintCrosshair(
   ctx: CanvasRenderingContext2D,
   data: DataPt[],
+  traces: LapTrace[],
+  yDomain: [number | 'auto', number | 'auto'] | undefined,
+  unit: string | undefined,
   t: number | null,
   dark: boolean,
   w: number,
@@ -170,13 +173,85 @@ function paintCrosshair(
   if (t == null || data.length < 2) return
   const tMin = data[0].t, tMax = data[data.length - 1].t
   if (t < tMin || t > tMax) return
-  const W = w - PAD.l - PAD.r
-  const x = PAD.l + (t - tMin) / (tMax - tMin || 1) * W
+  const W = w - PAD.l - PAD.r, H = h - PAD.t - PAD.b
+  // Snap to integer + 0.5 so a 1px line falls on a physical pixel boundary
+  const xPos = Math.round(PAD.l + (t - tMin) / (tMax - tMin || 1) * W) + 0.5
+
+  // Vertical crosshair line
   ctx.strokeStyle = dark ? 'rgba(200,205,220,0.35)' : 'rgba(50,55,70,0.35)'
   ctx.lineWidth = 1
   ctx.setLineDash([3, 3])
-  ctx.beginPath(); ctx.moveTo(x, PAD.t); ctx.lineTo(x, h - PAD.b); ctx.stroke()
+  ctx.beginPath(); ctx.moveTo(xPos, PAD.t); ctx.lineTo(xPos, h - PAD.b); ctx.stroke()
   ctx.setLineDash([])
+
+  if (!traces.length) return
+
+  const [yLo, yHi] = computeYRange(data, traces, yDomain)
+  const ySpan = yHi - yLo || 1
+  const ty = (v: number) => PAD.t + (1 - (v - yLo) / ySpan) * H
+
+  ctx.font = '600 10px system-ui,sans-serif'
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'middle'
+
+  // Find the nearest DataPt to t — values here are already distance-aligned,
+  // matching exactly what the chart draws (nearestValue on raw timestamps is wrong
+  // when laps are aligned by LapDistPct rather than time).
+  let nearestPt = data[0]
+  let nearestD = Infinity
+  for (const pt of data) {
+    const d = Math.abs(pt.t - t)
+    if (d < nearestD) { nearestD = d; nearestPt = pt } else break
+  }
+
+  const LH = 14
+  // Collect traces in stable colorIndex order
+  const sorted = [...traces].sort((a, b) => a.colorIndex - b.colorIndex)
+  const items: { color: string; label: string; labelY: number; dotY: number }[] = []
+  for (const tr of sorted) {
+    const val = nearestPt[`t_${tr.colorIndex}`]
+    if (typeof val !== 'number') continue
+    const dotY = ty(val)
+    const fmt = Math.abs(val) >= 100 ? val.toFixed(0) : val.toFixed(1)
+    const label = unit ? `${fmt}${unit}` : fmt
+    items.push({ color: getLapColor(tr.colorIndex), label, labelY: 0, dotY })
+  }
+  if (!items.length) return
+
+  // Stack all labels at the top of the chart, one below the other — fixed, never jump
+  const topY = PAD.t + LH / 2 + 2
+  items.forEach((item, i) => {
+    item.labelY = Math.round(topY + i * (LH + 1))
+  })
+
+  const LABEL_W = 56
+  const xInt = Math.round(xPos)  // integer x for label placement
+  const showRight = xInt < w - PAD.r - LABEL_W - 8
+  const bgColor = dark ? 'rgba(20,22,28,0.90)' : 'rgba(248,249,252,0.94)'
+
+  for (const { color, label, labelY, dotY } of items) {
+    // Dot at exact trace y (rounded for crispness)
+    const dy = Math.round(dotY)
+    if (dy >= PAD.t - 3 && dy <= h - PAD.b + 3) {
+      ctx.beginPath()
+      ctx.arc(xInt, dy, 3, 0, Math.PI * 2)
+      ctx.fillStyle = color
+      ctx.fill()
+      ctx.strokeStyle = dark ? '#14161d' : '#ffffff'
+      ctx.lineWidth = 1.5
+      ctx.stroke()
+    }
+
+    // Label: background rect then text, all at integer positions
+    const textW = ctx.measureText(label).width
+    const pad = 3
+    const lx = Math.round(showRight ? xInt + 7 : xInt - 7 - textW - pad * 2)
+    const ly = labelY - Math.round(LH / 2)
+    ctx.fillStyle = bgColor
+    ctx.fillRect(lx, ly, Math.ceil(textW) + pad * 2, LH)
+    ctx.fillStyle = color
+    ctx.fillText(label, lx + pad, labelY)
+  }
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -216,6 +291,7 @@ export default function TraceChart({
   // Always-current refs (read during imperative draw, never stale)
   const tracesRef = useRef(traces); tracesRef.current = traces
   const yDomainRef = useRef(yDomain); yDomainRef.current = yDomain
+  const unitRef = useRef(unit); unitRef.current = unit
   const crosshairRef = useRef(crosshairTime); crosshairRef.current = crosshairTime
 
   const data = useMemo(() => buildData(traces), [traces])
@@ -237,7 +313,7 @@ export default function TraceChart({
     const dcCtx = dc.getContext('2d')
     const xcCtx = xc.getContext('2d')
     if (dcCtx) paintChart(dcCtx, vis, tracesRef.current, yDomainRef.current, dark, w, h)
-    if (xcCtx) paintCrosshair(xcCtx, vis, crosshairRef.current, dark, w, h)
+    if (xcCtx) paintCrosshair(xcCtx, vis, tracesRef.current, yDomainRef.current, unitRef.current, crosshairRef.current, dark, w, h)
   }, [zoomRef])
 
   const redrawRef = useRef(redraw); redrawRef.current = redraw
@@ -255,7 +331,7 @@ export default function TraceChart({
     const dark = document.documentElement.classList.contains('dark')
     const { w, h } = sizeRef.current
     const xcCtx = xc.getContext('2d')
-    if (xcCtx) paintCrosshair(xcCtx, getVisible(), crosshairTime, dark, w, h)
+    if (xcCtx) paintCrosshair(xcCtx, getVisible(), tracesRef.current, yDomainRef.current, unitRef.current, crosshairTime, dark, w, h)
   }, [crosshairTime, getVisible])
 
   // Canvas sizing via ResizeObserver
@@ -390,20 +466,12 @@ export default function TraceChart({
           {unit && <span className="text-xs font-normal text-muted-foreground ml-1">({unit})</span>}
         </h3>
         <div className="flex items-center gap-3">
-          {traces.map(tr => {
-            const val = crosshairTime != null ? nearestValue(tr, crosshairTime) : null
-            return val != null ? (
-              <span key={tr.colorIndex} className="text-xs font-bold font-mono tabular-nums"
-                style={{ color: getLapColor(tr.colorIndex) }}>
-                {val.toFixed(1)}{unit && <span className="font-normal opacity-60 ml-0.5">{unit}</span>}
-              </span>
-            ) : (
-              <span key={tr.colorIndex} className="flex items-center gap-1 text-xs text-muted-foreground">
-                <span className="inline-block w-3 h-0.5 rounded" style={{ background: getLapColor(tr.colorIndex) }} />
-                L{tr.lapNumber}
-              </span>
-            )
-          })}
+          {traces.map(tr => (
+            <span key={tr.colorIndex} className="flex items-center gap-1 text-xs text-muted-foreground">
+              <span className="inline-block w-3 h-0.5 rounded" style={{ background: getLapColor(tr.colorIndex) }} />
+              L{tr.lapNumber}
+            </span>
+          ))}
         </div>
       </div>
       <div
