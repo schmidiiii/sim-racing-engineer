@@ -269,15 +269,6 @@ export interface Props {
   height?: number
 }
 
-function nearestValue(trace: LapTrace, t: number): number | null {
-  if (!trace.timestamps.length) return null
-  let best = 0, bestD = Infinity
-  for (let i = 0; i < trace.timestamps.length; i++) {
-    const d = Math.abs(trace.timestamps[i] - t)
-    if (d < bestD) { bestD = d; best = i }
-  }
-  return trace.samples[best] ?? null
-}
 
 export default function TraceChart({
   channel, unit, yDomain, traces, crosshairTime, onMouseMove,
