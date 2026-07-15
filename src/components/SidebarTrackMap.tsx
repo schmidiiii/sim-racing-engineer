@@ -173,6 +173,22 @@ export default function SidebarTrackMap() {
   useEffect(() => { fitVbRef.current = fitVb }, [fitVb])
   useEffect(() => { setVb(fitVb) }, [fitVb])
 
+  // Auto-pan: keep crosshair dot centred when map is zoomed and chart crosshair moves
+  useEffect(() => {
+    if (crosshairTime == null || !tf || laps.length === 0 || dragRef.current) return
+    const fvb = fitVbRef.current
+    setVb(prev => {
+      if (prev.w >= fvb.w * 0.99) return prev // not zoomed — skip
+      const lap = laps[0]
+      if (!lap.timestamps.length) return prev
+      const i = Math.min(nearestTimeIdx(lap.timestamps, crosshairTime), lap.lat.length - 1)
+      const pt = project(lap.lat[i], lap.lon[i], tf)
+      const nx = Math.max(fvb.x, Math.min(fvb.x + fvb.w - prev.w, pt.x - prev.w / 2))
+      const ny = Math.max(fvb.y, Math.min(fvb.y + fvb.h - prev.h, pt.y - prev.h / 2))
+      return { ...prev, x: nx, y: ny }
+    })
+  }, [crosshairTime, tf, laps])
+
   // ── Zoom / pan ────────────────────────────────────────────────────────────
   const handleWheel = useCallback((e: WheelEvent) => {
     e.preventDefault()

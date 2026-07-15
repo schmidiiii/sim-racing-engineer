@@ -240,7 +240,7 @@ export default function LapSidebar() {
     !refTrack || !refCar || (s.track === refTrack && s.car === refCar)
 
   return (
-    <aside className="w-72 shrink-0 border-r border-border bg-card flex flex-col overflow-hidden">
+    <aside className="w-80 shrink-0 border-r border-border bg-card flex flex-col overflow-hidden">
 
       {/* Header */}
       <div className="px-4 pt-4 pb-3 border-b border-border shrink-0">
