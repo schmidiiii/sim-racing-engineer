@@ -30,7 +30,7 @@ function StatCard({ label, value, sub }: { label: string; value: string; sub?: s
 
 export default function TraceGroup() {
   const t = useT()
-  const { sessions, selectedLapKeys, crosshairTime, setCrosshairTime, activeSessionId, setActiveTabLabel, lapMapFullscreen, setLapMapFullscreen } = useSessionStore()
+  const { sessions, selectedLapKeys, crosshairTime, setCrosshairTime, setZoomDomain, activeSessionId, setActiveTabLabel, lapMapFullscreen, setLapMapFullscreen } = useSessionStore()
   const [activeGroup, setActiveGroup] = useState(0)
   const [traces, setTraces] = useState<Record<string, LapTrace[]>>({})
   const [fetchError, setFetchError] = useState<string | null>(null)
@@ -65,15 +65,15 @@ export default function TraceGroup() {
       if (e.key === '[') {
         const next = (activeGroupRef.current - 1 + CHANNEL_GROUPS.length) % CHANNEL_GROUPS.length
         setActiveGroup(next); setActiveTabLabel(CHANNEL_GROUPS[next].label)
-        zoomRef.current = null; redrawsRef.current.forEach(fn => fn())
+        zoomRef.current = null; setZoomDomain(null); redrawsRef.current.forEach(fn => fn())
         e.preventDefault()
       } else if (e.key === ']') {
         const next = (activeGroupRef.current + 1) % CHANNEL_GROUPS.length
         setActiveGroup(next); setActiveTabLabel(CHANNEL_GROUPS[next].label)
-        zoomRef.current = null; redrawsRef.current.forEach(fn => fn())
+        zoomRef.current = null; setZoomDomain(null); redrawsRef.current.forEach(fn => fn())
         e.preventDefault()
       } else if (e.key === 'r' || e.key === 'R') {
-        zoomRef.current = null; redrawsRef.current.forEach(fn => fn())
+        zoomRef.current = null; setZoomDomain(null); redrawsRef.current.forEach(fn => fn())
         e.preventDefault()
       } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
         const current = crosshairTimeRef.current
@@ -91,8 +91,9 @@ export default function TraceGroup() {
 
   const handleZoom = useCallback((domain: [number, number] | null) => {
     zoomRef.current = domain
+    setZoomDomain(domain)
     redrawsRef.current.forEach(fn => fn())
-  }, [])
+  }, [setZoomDomain])
 
   const registerRedraw = useCallback((fn: () => void) => {
     redrawsRef.current.add(fn)
@@ -217,6 +218,7 @@ export default function TraceGroup() {
               setActiveGroup(i)
               setActiveTabLabel(g.label)
               zoomRef.current = null
+              setZoomDomain(null)
               redrawsRef.current.forEach(fn => fn())
             }}
             className={`px-3 py-2 text-xs font-semibold border-b-2 -mb-px transition-colors whitespace-nowrap shrink-0 ${

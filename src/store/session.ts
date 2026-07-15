@@ -65,6 +65,8 @@ interface SessionStore {
   error: string | null
   crosshairTime: number | null
   setCrosshairTime: (t: number | null) => void
+  zoomDomain: [number, number] | null
+  setZoomDomain: (domain: [number, number] | null) => void
   activeTabLabel: string
   setActiveTabLabel: (label: string) => void
   autoLoad: boolean
@@ -104,6 +106,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   error: null,
   crosshairTime: null,
   setCrosshairTime: (t) => set({ crosshairTime: t }),
+
+  zoomDomain: null,
+  setZoomDomain: (domain) => set({ zoomDomain: domain }),
 
   activeTabLabel: 'General',
   setActiveTabLabel: (label) => set({ activeTabLabel: label }),
