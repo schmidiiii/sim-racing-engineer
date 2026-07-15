@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useSessionStore, parseLapKey, getLapColor } from '@/store/session'
-import TrackMap from '@/components/TrackMap'
+import TrackMap, { type MapChannel } from '@/components/TrackMap'
 
 interface LapChannelData {
   lap_number: number
@@ -25,7 +25,6 @@ interface ViewBox { x: number; y: number; w: number; h: number }
 const SIZE = 1000
 const INITIAL_VB: ViewBox = { x: 0, y: 0, w: SIZE, h: SIZE }
 const COLLAPSED_H = 200
-const EXPANDED_H = 380
 
 function computeTransform(lats: number[], lons: number[]) {
   let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity
@@ -53,10 +52,6 @@ function buildPolyline(lat: number[], lon: number[], tf: ReturnType<typeof compu
     const p = project(lat[i], lon[i], tf)
     pts.push(`${p.x.toFixed(1)},${p.y.toFixed(1)}`)
   }
-  if (lat.length > 0) {
-    const p = project(lat[0], lon[0], tf)
-    pts.push(`${p.x.toFixed(1)},${p.y.toFixed(1)}`)
-  }
   return pts.join(' ')
 }
 
@@ -70,12 +65,13 @@ function nearestTimeIdx(timestamps: number[], target: number): number {
   return lo
 }
 
-type ActiveTab = 'traces' | 'map'
+type ActiveView = 'traces' | MapChannel
+
+const MAP_CHANNELS: MapChannel[] = ['Speed', 'Throttle', 'Brake', 'Gear']
 
 export default function SidebarTrackMap() {
-  const { sessions, selectedLapKeys, crosshairTime, zoomDomain } = useSessionStore()
-  const [activeTab, setActiveTab] = useState<ActiveTab>('traces')
-  const [expanded, setExpanded] = useState(false)
+  const { sessions, selectedLapKeys, crosshairTime, zoomDomain, sidebarMapExpanded, setSidebarMapExpanded } = useSessionStore()
+  const [activeView, setActiveView] = useState<ActiveView>('traces')
   const [laps, setLaps] = useState<LapGPS[]>([])
   const [loading, setLoading] = useState(false)
 
@@ -112,7 +108,7 @@ export default function SidebarTrackMap() {
     go()
   }, [selectedLapKeys.join(','), sessions.length])
 
-  // ── SVG geometry — only rebuilds when laps change ─────────────────────────
+  // ── SVG geometry ──────────────────────────────────────────────────────────
   const tf = useMemo(() => {
     if (laps.length === 0) return null
     const allLats: number[] = [], allLons: number[] = []
@@ -123,19 +119,37 @@ export default function SidebarTrackMap() {
 
   const polylines = useMemo(() => {
     if (!tf || laps.length === 0) return null
+    const lap0 = laps[0]
+    const startPt = lap0.lat.length > 0 ? project(lap0.lat[0], lap0.lon[0], tf) : null
+
+    // Compute start/finish line perpendicular to the track direction
+    let startLine: { x1: number; y1: number; x2: number; y2: number } | null = null
+    if (startPt && lap0.lat.length > 8) {
+      const ahead = project(lap0.lat[8], lap0.lon[8], tf)
+      const dx = ahead.x - startPt.x
+      const dy = ahead.y - startPt.y
+      const len = Math.sqrt(dx * dx + dy * dy) || 1
+      // Perpendicular unit vector
+      const px = -dy / len
+      const py = dx / len
+      const half = 22  // half-length in SVG units
+      startLine = { x1: startPt.x + px * half, y1: startPt.y + py * half, x2: startPt.x - px * half, y2: startPt.y - py * half }
+    }
+
     return {
-      base: buildPolyline(laps[0].lat, laps[0].lon, tf, 4),
+      base: buildPolyline(lap0.lat, lap0.lon, tf, 4),
       laps: laps.map(lap => ({ key: lap.lapKey, pts: buildPolyline(lap.lat, lap.lon, tf, 4), color: getLapColor(lap.colorIndex) })),
-      start: laps[0].lat.length > 0 ? project(laps[0].lat[0], laps[0].lon[0], tf) : null,
+      startLine,
     }
   }, [laps, tf])
 
-  const trackDot = useMemo(() => {
-    if (crosshairTime == null || !tf || laps.length === 0) return null
-    const lap = laps[0]
-    if (!lap.timestamps.length || !lap.lat.length) return null
-    const i = Math.min(nearestTimeIdx(lap.timestamps, crosshairTime), lap.lat.length - 1)
-    return { pt: project(lap.lat[i], lap.lon[i], tf), color: getLapColor(lap.colorIndex) }
+  const trackDots = useMemo(() => {
+    if (crosshairTime == null || !tf || laps.length === 0) return []
+    return laps.flatMap(lap => {
+      if (!lap.timestamps.length || !lap.lat.length) return []
+      const i = Math.min(nearestTimeIdx(lap.timestamps, crosshairTime), lap.lat.length - 1)
+      return [{ pt: project(lap.lat[i], lap.lon[i], tf), color: getLapColor(lap.colorIndex) }]
+    })
   }, [crosshairTime, laps, tf])
 
   const zoomedSegments = useMemo(() => {
@@ -162,23 +176,19 @@ export default function SidebarTrackMap() {
   }, [zoomDomain, laps, tf])
 
   const fitVb = useMemo((): ViewBox => {
-    if (!tf) return INITIAL_VB
-    const minPad = Math.min(tf.ox, tf.oy)
-    const dim = SIZE - 2 * minPad
-    const cx = SIZE / 2
-    return { x: cx - dim / 2, y: cx - dim / 2, w: dim, h: dim }
-  }, [tf])
+    return INITIAL_VB
+  }, [])
 
   const fitVbRef = useRef<ViewBox>(INITIAL_VB)
   useEffect(() => { fitVbRef.current = fitVb }, [fitVb])
   useEffect(() => { setVb(fitVb) }, [fitVb])
 
-  // Auto-pan: keep crosshair dot centred when map is zoomed and chart crosshair moves
+  // Auto-pan: keep crosshair dot centred when map is zoomed
   useEffect(() => {
     if (crosshairTime == null || !tf || laps.length === 0 || dragRef.current) return
     const fvb = fitVbRef.current
     setVb(prev => {
-      if (prev.w >= fvb.w * 0.99) return prev // not zoomed — skip
+      if (prev.w >= fvb.w * 0.99) return prev
       const lap = laps[0]
       if (!lap.timestamps.length) return prev
       const i = Math.min(nearestTimeIdx(lap.timestamps, crosshairTime), lap.lat.length - 1)
@@ -215,7 +225,7 @@ export default function SidebarTrackMap() {
     if (!el) return
     el.addEventListener('wheel', handleWheel, { passive: false })
     return () => el.removeEventListener('wheel', handleWheel)
-  }, [handleWheel])
+  })
 
   const onMouseDown = (e: React.MouseEvent) => {
     dragRef.current = { sx: e.clientX, sy: e.clientY, ox: vb.x, oy: vb.y }
@@ -240,69 +250,47 @@ export default function SidebarTrackMap() {
   const isZoomed = vb.w < fitVb.w * 0.99
   const gScale = SIZE / vb.w
   const gTransform = `scale(${gScale.toFixed(6)}) translate(${(-vb.x).toFixed(4)} ${(-vb.y).toFixed(4)})`
-  const mapH = expanded ? '50vh' : COLLAPSED_H
+
+  // Stroke widths: thinner in the small collapsed map, slightly thicker when expanded
+  const sw = sidebarMapExpanded
+    ? { base: 10, trace: 3, zoomed: 5 }
+    : { base: 7, trace: 3.5, zoomed: 4.5 }
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <div className="shrink-0 border-t border-border">
+    <div className={`border-t border-border${sidebarMapExpanded ? ' flex-1 min-h-0 flex flex-col' : ' shrink-0'}`}>
 
-      {/* Header: tabs + legend + expand toggle */}
-      <div className="flex items-center px-2 pt-1.5 pb-0.5 gap-1">
-        <button
-          onClick={() => setActiveTab('traces')}
-          className={`px-2 py-0.5 text-[10px] font-semibold rounded transition-colors ${
-            activeTab === 'traces'
-              ? 'bg-primary text-primary-foreground'
-              : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
-          }`}
-        >
-          Traces
-        </button>
-        <button
-          onClick={() => setActiveTab('map')}
-          className={`px-2 py-0.5 text-[10px] font-semibold rounded transition-colors ${
-            activeTab === 'map'
-              ? 'bg-primary text-primary-foreground'
-              : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
-          }`}
-        >
-          Map
-        </button>
+      {/* Header: view selector + legend + expand toggle */}
+      <div className="flex items-center px-2 pt-1.5 pb-0.5 gap-1 min-w-0">
+        {/* Scrollable tabs — so they never push the expand button off-screen */}
+        <div className="flex items-center gap-1 overflow-x-auto min-w-0 flex-1" style={{ scrollbarWidth: 'none' }}>
+          {(['traces', ...MAP_CHANNELS] as ActiveView[]).map(view => (
+            <button
+              key={view}
+              onClick={() => setActiveView(view)}
+              className={`shrink-0 px-1.5 py-0.5 text-[10px] font-semibold rounded transition-colors ${
+                activeView === view
+                  ? 'bg-primary text-primary-foreground'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
+              }`}
+            >
+              {view === 'traces' ? 'Traces' : view}
+            </button>
+          ))}
+        </div>
 
-        <div className="flex-1" />
-
-        {activeTab === 'traces' && laps.length > 0 && (
-          <div className="flex items-center gap-2 mr-1.5">
-            {laps.map(l => (
-              <span key={l.lapKey} className="flex items-center gap-1 text-[9px] text-muted-foreground">
-                <span className="inline-block w-3 h-1 rounded-full" style={{ background: getLapColor(l.colorIndex) }} />
-                L{l.lapNumber}
-              </span>
-            ))}
-          </div>
-        )}
-
-        <button
-          onClick={() => setExpanded(v => !v)}
-          className="p-0.5 text-muted-foreground hover:text-foreground transition-colors"
-          title={expanded ? 'Collapse map' : 'Expand map'}
-        >
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-            {expanded
-              ? <path d="M1 7l4-4 4 4" />
-              : <path d="M1 3l4 4 4-4" />
-            }
-          </svg>
-        </button>
       </div>
 
       {/* Map body */}
-      <div style={{ height: mapH }} className="overflow-hidden transition-[height] duration-200">
-
-        {activeTab === 'map' ? (
-          <TrackMap />
+      <div
+        style={!sidebarMapExpanded ? { height: COLLAPSED_H } : undefined}
+        className={`overflow-hidden relative${sidebarMapExpanded ? ' flex-1 min-h-0' : ''}`}
+      >
+        {activeView !== 'traces' ? (
+          <div className="absolute inset-0">
+            <TrackMap channel={activeView} />
+          </div>
         ) : (
-          /* Traces tab */
           <div
             ref={containerRef}
             className="relative w-full h-full"
@@ -331,42 +319,62 @@ export default function SidebarTrackMap() {
                 >
                   <g transform={gTransform}>
                     <polyline points={polylines.base} fill="none"
-                      stroke="rgba(150,150,150,0.18)" strokeWidth={5}
-                      strokeLinecap="round" strokeLinejoin="round"
-                      vectorEffect="non-scaling-stroke" />
+                      stroke="rgba(130,130,130,0.45)" strokeWidth={sw.base / gScale}
+                      strokeLinecap="round" strokeLinejoin="round" />
                     {polylines.laps.map(({ key, pts, color }) => (
                       <polyline key={key} points={pts} fill="none"
-                        stroke={color} strokeWidth={2} opacity={zoomedSegments?.length ? 0.22 : 0.9}
-                        strokeLinecap="round" strokeLinejoin="round"
-                        vectorEffect="non-scaling-stroke" />
+                        stroke={color} strokeWidth={sw.trace / gScale} opacity={zoomedSegments?.length ? 0.22 : 0.9}
+                        strokeLinecap="round" strokeLinejoin="round" />
                     ))}
                     {zoomedSegments?.map(seg => (
                       <polyline key={`${seg.key}_zoom`} points={seg.pts}
-                        fill="none" stroke={seg.color} strokeWidth={4} opacity={1}
-                        strokeLinecap="round" strokeLinejoin="round"
-                        vectorEffect="non-scaling-stroke" />
+                        fill="none" stroke={seg.color} strokeWidth={sw.zoomed / gScale} opacity={1}
+                        strokeLinecap="round" strokeLinejoin="round" />
                     ))}
-                    {polylines.start && (
-                      <circle cx={polylines.start.x} cy={polylines.start.y} r={8 / gScale}
-                        fill="white" stroke={getLapColor(0)} strokeWidth={3}
-                        vectorEffect="non-scaling-stroke" />
+                    {polylines.startLine && (
+                      <>
+                        {/* Shadow */}
+                        <line x1={polylines.startLine.x1} y1={polylines.startLine.y1}
+                          x2={polylines.startLine.x2} y2={polylines.startLine.y2}
+                          stroke="rgba(0,0,0,0.5)" strokeWidth={10 / gScale} strokeLinecap="butt" />
+                        {/* White base */}
+                        <line x1={polylines.startLine.x1} y1={polylines.startLine.y1}
+                          x2={polylines.startLine.x2} y2={polylines.startLine.y2}
+                          stroke="white" strokeWidth={7 / gScale} strokeLinecap="butt" />
+                        {/* Black dashes → checkered flag pattern */}
+                        <line x1={polylines.startLine.x1} y1={polylines.startLine.y1}
+                          x2={polylines.startLine.x2} y2={polylines.startLine.y2}
+                          stroke="black" strokeWidth={7 / gScale} strokeLinecap="butt"
+                          strokeDasharray={`${6 / gScale} ${6 / gScale}`} />
+                      </>
                     )}
-                    {trackDot && (
-                      <g>
-                        <circle cx={trackDot.pt.x} cy={trackDot.pt.y} r={12 / gScale}
+                    {trackDots.map(({ pt, color }, i) => (
+                      <g key={i}>
+                        <circle cx={pt.x} cy={pt.y} r={12 / gScale}
                           fill="white" opacity={0.65} strokeWidth={0}
                           vectorEffect="non-scaling-stroke" />
-                        <circle cx={trackDot.pt.x} cy={trackDot.pt.y} r={8 / gScale}
-                          fill={trackDot.color} stroke="white" strokeWidth={3}
+                        <circle cx={pt.x} cy={pt.y} r={8 / gScale}
+                          fill={color} stroke="white" strokeWidth={3}
                           vectorEffect="non-scaling-stroke" />
                       </g>
-                    )}
+                    ))}
                   </g>
                 </svg>
 
+                {/* Lap legend — bottom-left overlay */}
+                {laps.length > 0 && (
+                  <div className="absolute bottom-1.5 left-2 flex items-center gap-2 pointer-events-none">
+                    {laps.map(l => (
+                      <span key={l.lapKey} className="flex items-center gap-1 text-[9px] text-muted-foreground">
+                        <span className="inline-block w-2.5 h-1 rounded-full" style={{ background: getLapColor(l.colorIndex) }} />
+                        L{l.lapNumber}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
                 {isZoomed && (
                   <>
-                    {/* Minimap */}
                     <div
                       className="absolute bottom-2 right-2 pointer-events-none rounded border border-border bg-card shadow-md overflow-hidden"
                       style={{ width: 80, height: 80 }}
@@ -385,7 +393,6 @@ export default function SidebarTrackMap() {
                           vectorEffect="non-scaling-stroke" />
                       </svg>
                     </div>
-                    {/* Reset button */}
                     <button
                       className="absolute bottom-2 left-1/2 -translate-x-1/2 text-[9px] border border-border rounded px-1.5 py-0.5 text-muted-foreground hover:text-foreground bg-card transition-colors"
                       onClick={() => setVb(fitVb)}
@@ -399,6 +406,17 @@ export default function SidebarTrackMap() {
           </div>
         )}
       </div>
+
+      {/* Expand/Collapse labeled button below map */}
+      <button
+        onClick={() => setSidebarMapExpanded(!sidebarMapExpanded)}
+        className="shrink-0 w-full flex items-center justify-center gap-1.5 py-1.5 border-t border-border bg-card text-[10px] font-medium text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+      >
+        <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          {sidebarMapExpanded ? <path d="M8 2L4 6l4 4" /> : <path d="M4 2l4 4-4 4" />}
+        </svg>
+        {sidebarMapExpanded ? 'Collapse Map' : 'Expand Map'}
+      </button>
     </div>
   )
 }
