@@ -331,18 +331,18 @@ export default function SidebarTrackMap() {
                 >
                   <g transform={gTransform}>
                     <polyline points={polylines.base} fill="none"
-                      stroke="rgba(150,150,150,0.18)" strokeWidth={8}
+                      stroke="rgba(150,150,150,0.18)" strokeWidth={5}
                       strokeLinecap="round" strokeLinejoin="round"
                       vectorEffect="non-scaling-stroke" />
                     {polylines.laps.map(({ key, pts, color }) => (
                       <polyline key={key} points={pts} fill="none"
-                        stroke={color} strokeWidth={3} opacity={zoomedSegments?.length ? 0.22 : 0.9}
+                        stroke={color} strokeWidth={2} opacity={zoomedSegments?.length ? 0.22 : 0.9}
                         strokeLinecap="round" strokeLinejoin="round"
                         vectorEffect="non-scaling-stroke" />
                     ))}
                     {zoomedSegments?.map(seg => (
                       <polyline key={`${seg.key}_zoom`} points={seg.pts}
-                        fill="none" stroke={seg.color} strokeWidth={5} opacity={1}
+                        fill="none" stroke={seg.color} strokeWidth={4} opacity={1}
                         strokeLinecap="round" strokeLinejoin="round"
                         vectorEffect="non-scaling-stroke" />
                     ))}
