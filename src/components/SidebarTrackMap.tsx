@@ -240,7 +240,7 @@ export default function SidebarTrackMap() {
   const isZoomed = vb.w < fitVb.w * 0.99
   const gScale = SIZE / vb.w
   const gTransform = `scale(${gScale.toFixed(6)}) translate(${(-vb.x).toFixed(4)} ${(-vb.y).toFixed(4)})`
-  const mapH = expanded ? EXPANDED_H : COLLAPSED_H
+  const mapH = expanded ? '50vh' : COLLAPSED_H
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
