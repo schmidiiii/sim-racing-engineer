@@ -73,7 +73,7 @@ function nearestTimeIdx(timestamps: number[], target: number): number {
 type ActiveTab = 'traces' | 'map'
 
 export default function SidebarTrackMap() {
-  const { sessions, selectedLapKeys, crosshairTime } = useSessionStore()
+  const { sessions, selectedLapKeys, crosshairTime, zoomDomain } = useSessionStore()
   const [activeTab, setActiveTab] = useState<ActiveTab>('traces')
   const [expanded, setExpanded] = useState(false)
   const [laps, setLaps] = useState<LapGPS[]>([])
@@ -137,6 +137,29 @@ export default function SidebarTrackMap() {
     const i = Math.min(nearestTimeIdx(lap.timestamps, crosshairTime), lap.lat.length - 1)
     return { pt: project(lap.lat[i], lap.lon[i], tf), color: getLapColor(lap.colorIndex) }
   }, [crosshairTime, laps, tf])
+
+  const zoomedSegments = useMemo(() => {
+    if (!zoomDomain || !tf || laps.length === 0) return null
+    const [tLo, tHi] = zoomDomain
+    return laps.map(lap => {
+      if (!lap.timestamps.length || !lap.lat.length) return null
+      let lo = 0, hi = lap.timestamps.length - 1
+      while (lo < hi) { const m = (lo + hi) >> 1; if (lap.timestamps[m] < tLo) lo = m + 1; else hi = m }
+      const startIdx = lo
+      lo = 0; hi = lap.timestamps.length - 1
+      while (lo < hi) { const m = (lo + hi + 1) >> 1; if (lap.timestamps[m] > tHi) hi = m - 1; else lo = m }
+      const endIdx = lo
+      if (startIdx >= endIdx) return null
+      const pts: string[] = []
+      for (let i = startIdx; i <= endIdx; i += 2) {
+        if (i >= lap.lat.length) break
+        const p = project(lap.lat[i], lap.lon[i], tf)
+        pts.push(`${p.x.toFixed(1)},${p.y.toFixed(1)}`)
+      }
+      if (pts.length < 2) return null
+      return { key: lap.lapKey, pts: pts.join(' '), color: getLapColor(lap.colorIndex) }
+    }).filter(Boolean) as { key: string; pts: string; color: string }[]
+  }, [zoomDomain, laps, tf])
 
   const fitVb = useMemo((): ViewBox => {
     if (!tf) return INITIAL_VB
@@ -292,12 +315,18 @@ export default function SidebarTrackMap() {
                 >
                   <g transform={gTransform}>
                     <polyline points={polylines.base} fill="none"
-                      stroke="rgba(150,150,150,0.18)" strokeWidth={16}
+                      stroke="rgba(150,150,150,0.18)" strokeWidth={8}
                       strokeLinecap="round" strokeLinejoin="round"
                       vectorEffect="non-scaling-stroke" />
                     {polylines.laps.map(({ key, pts, color }) => (
                       <polyline key={key} points={pts} fill="none"
-                        stroke={color} strokeWidth={4} opacity={0.9}
+                        stroke={color} strokeWidth={3} opacity={zoomedSegments?.length ? 0.22 : 0.9}
+                        strokeLinecap="round" strokeLinejoin="round"
+                        vectorEffect="non-scaling-stroke" />
+                    ))}
+                    {zoomedSegments?.map(seg => (
+                      <polyline key={`${seg.key}_zoom`} points={seg.pts}
+                        fill="none" stroke={seg.color} strokeWidth={5} opacity={1}
                         strokeLinecap="round" strokeLinejoin="round"
                         vectorEffect="non-scaling-stroke" />
                     ))}
