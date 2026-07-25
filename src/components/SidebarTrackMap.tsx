@@ -72,7 +72,7 @@ const MAP_CHANNELS: MapChannel[] = ['Speed', 'Throttle', 'Brake', 'Gear']
 
 export default function SidebarTrackMap() {
   const { sessions, selectedLapKeys, crosshairTime, zoomDomain, sidebarMapExpanded, setSidebarMapExpanded } = useSessionStore()
-  const [activeView, setActiveView] = useState<ActiveView>('traces')
+  const [activeView, setActiveView] = useState<ActiveView>('3D')
   const [laps, setLaps] = useState<LapGPS[]>([])
   const [loading, setLoading] = useState(false)
 
@@ -265,7 +265,7 @@ export default function SidebarTrackMap() {
       <div className="flex items-center px-2 pt-1.5 pb-0.5 gap-1 min-w-0">
         {/* Scrollable tabs — so they never push the expand button off-screen */}
         <div className="flex items-center gap-1 overflow-x-auto min-w-0 flex-1" style={{ scrollbarWidth: 'none' }}>
-          {(['traces', ...MAP_CHANNELS, '3D'] as ActiveView[]).map(view => (
+          {(['3D', 'traces', ...MAP_CHANNELS] as ActiveView[]).map(view => (
             <button
               key={view}
               onClick={() => { setActiveView(view); if (view === '3D') setSidebarMapExpanded(true) }}

@@ -9,6 +9,7 @@ const MAX_TRACK_PTS = 1500
 const ROAD_WIDTH = 10  // world units (visible road surface width)
 const LINE_WIDTH  = 0.35 // per-lap driving line width (world units)
 const SPEEDS = [0.25, 0.5, 1, 2, 4]
+const TRACE_SAMPLES = 220 // rolling telemetry history length (frames)
 
 // iRacing open-wheel car name patterns
 const OPEN_WHEEL_RE = /formula|f1\b|f2\b|f3\b|f4\b|ir18|indycar|dallara|fr2\.0|ray|superformula/i
@@ -39,20 +40,6 @@ interface LapReplayData {
   timestamps: number[]
 }
 
-interface HudLapData {
-  speed: number
-  gear: number
-  throttle: number
-  brake: number
-  steering: number
-  delta: number  // seconds vs lap 0 (positional delta; 0 for reference lap)
-  lapIdx: number // current GPS sample index into lap.lat/lon
-}
-
-interface HudState {
-  time: number
-  laps: HudLapData[]
-}
 
 interface WorldTF {
   centerLat: number
@@ -61,6 +48,18 @@ interface WorldTF {
   scale: number
 }
 
+// Floor search: largest index where arr[i] <= target — guarantees frac ∈ [0,1) for interpolation
+function bsearchFloor(arr: number[], target: number): number {
+  if (target <= arr[0]) return 0
+  let lo = 0, hi = arr.length - 1
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1
+    if (arr[mid] <= target) lo = mid; else hi = mid - 1
+  }
+  return lo
+}
+
+// Nearest search — kept for crosshair sync (non-playback lookups)
 function bsearchNearest(arr: number[], target: number): number {
   let lo = 0, hi = arr.length - 1
   while (lo < hi) {
@@ -101,7 +100,8 @@ function toWorld(lat: number, lon: number, alt: number, tf: WorldTF): THREE.Vect
 }
 
 // Build a flat road ribbon (no colour attribute — colour set via Material).
-function buildRibbon(pts: THREE.Vector3[], width: number): THREE.BufferGeometry {
+// close=true connects the last vertex pair back to the first, sealing the loop at start/finish.
+function buildRibbon(pts: THREE.Vector3[], width: number, close = false): THREE.BufferGeometry {
   const n = pts.length
   const positions = new Float32Array(n * 2 * 3)
   const indices: number[] = []
@@ -123,6 +123,11 @@ function buildRibbon(pts: THREE.Vector3[], width: number): THREE.BufferGeometry 
       const a = i * 2, b = i * 2 + 1, c = i * 2 + 2, d = i * 2 + 3
       indices.push(a, b, d, a, d, c)
     }
+  }
+  // Close the loop: connect last vertex pair back to first, sealing the start/finish gap
+  if (close && n > 1) {
+    const a = (n - 1) * 2, b = (n - 1) * 2 + 1
+    indices.push(a, b, 1, a, 1, 0)
   }
 
   const geom = new THREE.BufferGeometry()
@@ -188,12 +193,29 @@ export default function Replay3DViewer() {
   const speedRef = useRef(1)
   const currentTimeRef = useRef(0)
   const crosshairRef = useRef<number | null>(null)
+  const cameraModeRef = useRef<'chase' | 'front' | 'tv'>('chase')
 
   const [laps, setLaps] = useState<LapReplayData[]>([])
   const [loading, setLoading] = useState(false)
   const [playing, setPlaying] = useState(false)
   const [playbackSpeed, setPlaybackSpeed] = useState(1)
-  const [hud, setHud] = useState<HudState | null>(null)
+  // currentT drives the slider — updated every 9 frames (~7fps), all other HUD values
+  // are written directly to DOM refs to avoid React re-renders during playback
+  const [currentT, setCurrentT] = useState(0)
+  const [isDark, setIsDark] = useState(() => document.documentElement.classList.contains('dark'))
+  const [cameraMode, setCameraMode] = useState<'chase' | 'front' | 'tv'>('chase')
+  const [hudScale, setHudScale] = useState(1)
+
+  const hudSpeedRefs  = useRef<(HTMLSpanElement  | null)[]>([])
+  const hudGearRefs   = useRef<(HTMLSpanElement  | null)[]>([])
+  const hudThrRefs    = useRef<(HTMLDivElement   | null)[]>([])
+  const hudBrkRefs    = useRef<(HTMLDivElement   | null)[]>([])
+  const hudWheelRefs  = useRef<(HTMLImageElement  | null)[]>([])
+  const hudDegRefs    = useRef<(HTMLSpanElement  | null)[]>([])
+  const hudDeltaRefs  = useRef<(HTMLSpanElement  | null)[]>([])
+  const mapDotRefs       = useRef<(SVGCircleElement | null)[]>([])
+  const hudTraceRefs     = useRef<(HTMLCanvasElement | null)[]>([])
+  const trackMapDataRef  = useRef<{ d: string; startXY: [number, number]; toMapXY: (lat: number, lon: number) => [number, number] } | null>(null)
 
   const lapTimes = useMemo(() =>
     laps.map(lap => {
@@ -225,6 +247,26 @@ export default function Replay3DViewer() {
     return { d, startXY: toMapXY(lap.lat[0], lap.lon[0]), toMapXY }
   }, [laps])
 
+  useEffect(() => { trackMapDataRef.current = trackMapData }, [trackMapData])
+
+  // Reset to start on new file load
+  useEffect(() => {
+    if (laps.length === 0) return
+    const t0 = laps[0].timestamps[0]
+    currentTimeRef.current = t0
+    crosshairRef.current = null
+    setCurrentT(t0)
+    setPlaying(false)
+  }, [laps])
+
+  useEffect(() => { cameraModeRef.current = cameraMode }, [cameraMode])
+  useEffect(() => {
+    const obs = new MutationObserver(() =>
+      setIsDark(document.documentElement.classList.contains('dark'))
+    )
+    obs.observe(document.documentElement, { attributeFilter: ['class'] })
+    return () => obs.disconnect()
+  }, [])
   useEffect(() => { playingRef.current = playing }, [playing])
   useEffect(() => { speedRef.current = playbackSpeed }, [playbackSpeed])
   useEffect(() => { crosshairRef.current = crosshairTime }, [crosshairTime])
@@ -296,10 +338,13 @@ export default function Replay3DViewer() {
     const w = width || 300
     const h = height || 400
 
-    // Scene
+    // Scene — colors adapt to light/dark mode
+    const skyCol  = isDark ? 0x0f172a : 0xdde6f0
+    const gndCol  = isDark ? 0x0c1a2e : 0xc8d5e2
+    const roadCol = isDark ? 0x0e1b2e : 0x3a4a5c
     const scene = new THREE.Scene()
-    scene.background = new THREE.Color(0x0f172a)
-    scene.fog = new THREE.Fog(0x0f172a, 300, 1200)
+    scene.background = new THREE.Color(skyCol)
+    scene.fog = new THREE.Fog(skyCol, 300, 1200)
 
     // Camera
     const camera = new THREE.PerspectiveCamera(65, w / h, 0.1, 5000)
@@ -310,16 +355,16 @@ export default function Replay3DViewer() {
     renderer.setSize(w, h)
     mount.appendChild(renderer.domElement)
 
-    // Lights — ambient fills shadows, directional adds depth to car bodies
-    scene.add(new THREE.AmbientLight(0xffffff, 0.55))
-    const sun = new THREE.DirectionalLight(0xffffff, 2.2)
+    // Lights — brighter ambient in light mode for realistic daylight feel
+    scene.add(new THREE.AmbientLight(0xffffff, isDark ? 0.55 : 1.1))
+    const sun = new THREE.DirectionalLight(0xffffff, isDark ? 2.2 : 3.0)
     sun.position.set(80, 200, 80)
     scene.add(sun)
 
     // Subtle ground plane so cars cast a visual reference
     const ground = new THREE.Mesh(
       new THREE.PlaneGeometry(1200, 1200),
-      new THREE.MeshBasicMaterial({ color: 0x0c1a2e }),
+      new THREE.MeshBasicMaterial({ color: gndCol }),
     )
     ground.rotation.x = -Math.PI / 2
     ground.position.y = -0.05
@@ -333,10 +378,10 @@ export default function Replay3DViewer() {
     for (let i = 0; i < pLap.lat.length; i += step)
       basePts.push(toWorld(pLap.lat[i], pLap.lon[i], pLap.alt[i], tf))
 
-    // Dark road surface
+    // Road surface
     scene.add(new THREE.Mesh(
-      buildRibbon(basePts, ROAD_WIDTH),
-      new THREE.MeshBasicMaterial({ color: 0x0e1b2e, side: THREE.DoubleSide }),
+      buildRibbon(basePts, ROAD_WIDTH, true),
+      new THREE.MeshBasicMaterial({ color: roadCol, side: THREE.DoubleSide }),
     ))
 
     // Per-lap coloured driving line
@@ -346,7 +391,7 @@ export default function Replay3DViewer() {
       for (let i = 0; i < lap.lat.length; i += lapStep)
         lapPts.push(toWorld(lap.lat[i], lap.lon[i], lap.alt[i], tf))
       const lapMesh = new THREE.Mesh(
-        buildRibbon(lapPts, LINE_WIDTH),
+        buildRibbon(lapPts, LINE_WIDTH, true),
         new THREE.MeshBasicMaterial({ color: new THREE.Color(getLapColor(lap.colorIndex)), side: THREE.DoubleSide }),
       )
       lapMesh.position.y = 0.06
@@ -364,7 +409,7 @@ export default function Replay3DViewer() {
         const perp = new THREE.Vector3(-tan.z, 0, tan.x)
         return p.clone().addScaledVector(perp, sign * halfW).setY(p.y + 0.12)
       })
-      scene.add(new THREE.Mesh(buildRibbon(edgePts, 0.55), edgeMat))
+      scene.add(new THREE.Mesh(buildRibbon(edgePts, 0.55, true), edgeMat))
     }
 
     // Car placeholder groups (shown immediately while OBJ loads)
@@ -400,8 +445,8 @@ export default function Replay3DViewer() {
       })
       .catch(() => { /* OBJ failed to load — keep placeholder */ })
 
-    // Init camera behind primary lap's car
-    const tInit = crosshairRef.current ?? pLap.timestamps[0]
+    // Always start from the beginning when a new scene is built (new file loaded)
+    const tInit = pLap.timestamps[0]
     const initIdx = bsearchNearest(pLap.timestamps, tInit)
     const initPos = toWorld(pLap.lat[initIdx], pLap.lon[initIdx], pLap.alt[initIdx], tf)
     // Estimate forward direction at init
@@ -427,6 +472,32 @@ export default function Replay3DViewer() {
     })
     ro.observe(mount)
 
+    // Rolling telemetry buffers — one per lap, reset with each scene
+    const traceBuffers: { thr: number[]; brk: number[] }[] = laps.map(() => ({ thr: [], brk: [] }))
+
+    // TV cam — 16 trackside positions, close to the action
+    const TV_CAM_COUNT = 16
+    const tvCamPositions: THREE.Vector3[] = []
+    for (let i = 0; i < TV_CAM_COUNT; i++) {
+      const ptIdx = Math.floor((i / TV_CAM_COUNT) * basePts.length)
+      const prevIdx = Math.max(0, ptIdx - 1)
+      const nextIdx = Math.min(basePts.length - 1, ptIdx + 1)
+      const tan   = new THREE.Vector3().subVectors(basePts[nextIdx], basePts[prevIdx]).normalize()
+      const right = new THREE.Vector3(-tan.z, 0, tan.x)
+      const side  = i % 2 === 0 ? 1 : -1
+      const dist  = 5 + (i % 3) * 1.5   // 5, 6.5, 8 units — tight trackside
+      const height = 5 + (i % 4) * 1.0  // 5 → 8 units — elevated enough to see cars on track
+      tvCamPositions.push(
+        basePts[ptIdx].clone()
+          .addScaledVector(right, side * dist)
+          .setY(basePts[ptIdx].y + height)
+      )
+    }
+    let tvCamIndex = 0
+    let tvCamLastSwitch = -Infinity  // trigger immediate pick on first frame
+    let tvCamInterval = 7000         // ms; randomised on each switch
+    let tvFovCurrent = 38
+
     // Animation loop
     let lastMs: number | null = null
     let frame = 0
@@ -443,7 +514,6 @@ export default function Replay3DViewer() {
       if (playingRef.current) {
         currentTimeRef.current += dt * speedRef.current
         if (currentTimeRef.current >= tMax) currentTimeRef.current = tMin
-        if (frame % 2 === 0) setCrosshairTime(currentTimeRef.current)
       } else {
         const ct = crosshairRef.current
         if (ct != null) currentTimeRef.current = ct
@@ -451,22 +521,26 @@ export default function Replay3DViewer() {
 
       const t = currentTimeRef.current
 
-      // Update car positions + orientation
+      // Update car positions + orientation + HUD DOM (direct writes — no React state)
       // Each lap has its own absolute timestamp base — shift so all laps progress
       // from their own start simultaneously (handles cross-lap and cross-session replay)
       const lapT0 = pLap.timestamps[0]
+      const idx0 = bsearchFloor(pLap.timestamps, t)
+      const elapsed0 = pLap.timestamps[idx0] - lapT0
+
       laps.forEach((lap, li) => {
         const group = carGroups[li]
         if (!group || !lap.timestamps.length) return
         const lapT = t + (lap.timestamps[0] - lapT0)
-        const idx = bsearchNearest(lap.timestamps, lapT)
+        // Floor search → idx is always the sample BEFORE lapT, so frac is always in [0,1)
+        const idx = bsearchFloor(lap.timestamps, lapT)
 
-        // Interpolate between adjacent GPS samples → smooth at any playback speed
+        // Linear interpolation between idx and idx+1 — fully smooth at any playback speed
         const nIdx1 = Math.min(idx + 1, lap.lat.length - 1)
         let lat: number, lon: number, alt: number
         if (nIdx1 > idx) {
           const t0 = lap.timestamps[idx], t1 = lap.timestamps[nIdx1]
-          const frac = t1 > t0 ? Math.max(0, Math.min(1, (lapT - t0) / (t1 - t0))) : 0
+          const frac = t1 > t0 ? (lapT - t0) / (t1 - t0) : 0
           lat = lap.lat[idx] + (lap.lat[nIdx1] - lap.lat[idx]) * frac
           lon = lap.lon[idx] + (lap.lon[nIdx1] - lap.lon[idx]) * frac
           alt = lap.alt[idx] + (lap.alt[nIdx1] - lap.alt[idx]) * frac
@@ -475,68 +549,165 @@ export default function Replay3DViewer() {
         }
         const pos = toWorld(lat, lon, alt, tf)
         group.position.copy(pos)
-        group.position.y += 1.0
-        const dIdx = Math.min(idx + 6, lap.lat.length - 1)
+        group.position.y += 0.35  // just above road ribbon so car appears on its trace
+        // Heading: look a few samples ahead from the interpolated position
+        const dIdx = Math.min(idx + 5, lap.lat.length - 1)
         if (dIdx > idx) {
           const nPos = toWorld(lap.lat[dIdx], lap.lon[dIdx], lap.alt[dIdx], tf)
           const dir = nPos.clone().sub(pos)
           if (dir.lengthSq() > 0.001) group.rotation.y = Math.atan2(dir.x, dir.z)
         }
+
+        // Direct DOM HUD updates — bypasses React virtual DOM
+        const speed  = Math.round((lap.speed[idx] ?? 0) * 3.6)
+        const gear   = Math.round(lap.gear[idx] ?? 1)
+        const thr    = Math.round((lap.throttle[idx] ?? 0) * 100)
+        const brk    = Math.round((lap.brake[idx] ?? 0) * 100)
+        // iRacing SteeringWheelAngle: positive = turn left, so negate for CSS rotate
+        const stDeg  = Math.round((lap.steering[idx] ?? 0) * 180 / Math.PI)
+        const cssDeg = -stDeg
+
+        const speedEl = hudSpeedRefs.current[li]; if (speedEl) speedEl.textContent = String(speed)
+        const gearEl  = hudGearRefs.current[li];  if (gearEl)  gearEl.textContent  = String(gear)
+        const thrEl   = hudThrRefs.current[li];   if (thrEl)   thrEl.style.height   = `${thr}%`
+        const brkEl   = hudBrkRefs.current[li];   if (brkEl)   brkEl.style.height   = `${brk}%`
+        const wheelEl = hudWheelRefs.current[li]; if (wheelEl) wheelEl.style.transform = `rotate(${cssDeg}deg)`
+        const degEl   = hudDegRefs.current[li];
+        if (degEl) degEl.textContent = `${Math.abs(stDeg)}°${stDeg > 1 ? 'L' : stDeg < -1 ? 'R' : ''}`
+
+        // Positional delta (lap i vs lap 0)
+        if (li > 0 && pLap.lat.length > 1) {
+          const frac0 = idx0 / (pLap.lat.length - 1)
+          const j = Math.min(Math.round(frac0 * (lap.lat.length - 1)), lap.lat.length - 1)
+          const delta = (lap.timestamps[j] - lap.timestamps[0]) - elapsed0
+          const deltaEl = hudDeltaRefs.current[li]
+          if (deltaEl) {
+            deltaEl.textContent = `${delta >= 0 ? '+' : ''}${delta.toFixed(3)}s`
+            deltaEl.style.color = delta > 0.05 ? '#fb7185' : delta < -0.05 ? '#34d399' : isDark ? 'rgba(255,255,255,0.45)' : 'rgba(15,23,42,0.50)'
+          }
+        }
+
+        // Minimap dot
+        const dot = mapDotRefs.current[li]
+        if (dot && trackMapDataRef.current) {
+          const [mx, my] = trackMapDataRef.current.toMapXY(lap.lat[idx], lap.lon[idx])
+          dot.setAttribute('cx', mx.toFixed(1))
+          dot.setAttribute('cy', my.toFixed(1))
+        }
+
+        // Rolling telemetry trace — only advance when playing, freeze on pause
+        const buf = traceBuffers[li]
+        if (playingRef.current) {
+          buf.thr.push(thr)
+          buf.brk.push(brk)
+          if (buf.thr.length > TRACE_SAMPLES) { buf.thr.shift(); buf.brk.shift() }
+        }
+        const canvas = hudTraceRefs.current[li]
+        if (canvas) {
+          const ctx = canvas.getContext('2d')
+          if (ctx) {
+            const W = canvas.width, H = canvas.height
+            const n = buf.thr.length
+            ctx.clearRect(0, 0, W, H)
+            // Draw filled area + stroke for each channel
+            const drawChannel = (data: number[], fillColor: string, strokeColor: string) => {
+              if (n < 2) return
+              // Newest sample always anchored to right edge; trace grows left as buffer fills
+              const xOf = (i: number) => ((TRACE_SAMPLES - n + i) / TRACE_SAMPLES) * W
+              const xStart = xOf(0), xEnd = xOf(n - 1)
+              ctx.beginPath()
+              ctx.moveTo(xStart, H)
+              for (let i = 0; i < n; i++) {
+                ctx.lineTo(xOf(i), H - (data[i] / 100) * (H - 2) - 1)
+              }
+              ctx.lineTo(xEnd, H)
+              ctx.closePath()
+              ctx.fillStyle = fillColor
+              ctx.fill()
+              ctx.beginPath()
+              ctx.strokeStyle = strokeColor; ctx.lineWidth = 1.5; ctx.lineJoin = 'round'
+              for (let i = 0; i < n; i++) {
+                const x = xOf(i), y = H - (data[i] / 100) * (H - 2) - 1
+                i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)
+              }
+              ctx.stroke()
+            }
+            drawChannel(buf.brk, 'rgba(239,68,68,0.28)', '#ef4444')
+            drawChannel(buf.thr, 'rgba(34,197,94,0.28)', '#22c55e')
+          }
+        }
       })
 
-      // Chase cam — close behind, looks ahead of car[0]
+      // Slider update at low frequency only
+      if (frame % 9 === 0) setCurrentT(t)
+
+      // Camera — three modes, all frame-rate-independent
       const car0 = carGroups[0]
       if (car0) {
-        const ry = car0.rotation.y
-        const sy = Math.sin(ry), cy2 = Math.cos(ry)
-        const behind = new THREE.Vector3(
-          car0.position.x - sy * 8,
-          car0.position.y + 3,
-          car0.position.z - cy2 * 8,
-        )
-        cameraPosRef.current.lerp(behind, 0.10)
+        const ry  = car0.rotation.y
+        const sy  = Math.sin(ry), cy2 = Math.cos(ry)
+        // forward = (sy, 0, cy2), right = (cy2, 0, -sy)
+        const posAlpha  = 1 - Math.pow(0.90, dt * 60)
+        const lookAlpha = 1 - Math.pow(0.88, dt * 60)
+        const carY = car0.position.y
+
+        // Restore base FOV when not in TV mode
+        if (cameraModeRef.current !== 'tv' && camera.fov !== 65) {
+          camera.fov = 65
+          camera.updateProjectionMatrix()
+        }
+        if (cameraModeRef.current === 'chase') {
+          const behind = new THREE.Vector3(car0.position.x - sy * 9, carY + 3.5, car0.position.z - cy2 * 9)
+          cameraPosRef.current.lerp(behind, posAlpha)
+          const ahead = new THREE.Vector3(car0.position.x + sy * 7, carY + 0.8, car0.position.z + cy2 * 7)
+          cameraTargetRef.current.lerp(ahead, lookAlpha)
+        } else if (cameraModeRef.current === 'front') {
+          // Camera in front of car, looking back
+          const front = new THREE.Vector3(car0.position.x + sy * 9, carY + 1.8, car0.position.z + cy2 * 9)
+          cameraPosRef.current.lerp(front, posAlpha)
+          const carCenter = new THREE.Vector3(car0.position.x, carY + 0.6, car0.position.z)
+          cameraTargetRef.current.lerp(carCenter, lookAlpha)
+        } else if (cameraModeRef.current === 'tv') {
+          const n = tvCamPositions.length
+          if (n > 0) {
+            const distToCamera = tvCamPositions[tvCamIndex].distanceTo(car0.position)
+            // Distance-based target FOV: keeps car at a consistent apparent size.
+            // 250/D gives ~45° at D=5.5 (close), ~25° at D=10, ~15° at D=16.
+            const targetFov = Math.max(15, Math.min(45, 250 / distToCamera))
+
+            // Switch: pick the camera nearest to the car's current position
+            if (now - tvCamLastSwitch >= tvCamInterval) {
+              let bestIdx = 0, bestDist = Infinity
+              for (let ci = 0; ci < n; ci++) {
+                if (ci === tvCamIndex) continue
+                const d = tvCamPositions[ci].distanceTo(car0.position)
+                if (d < bestDist) { bestDist = d; bestIdx = ci }
+              }
+              tvCamIndex = bestIdx
+              tvCamLastSwitch = now
+              tvCamInterval = 5000 + Math.random() * 4000
+              cameraPosRef.current.copy(tvCamPositions[tvCamIndex])
+              // Burst: start 8° narrower than target for dramatic punch-in on cut
+              tvFovCurrent = Math.max(12, targetFov - 8)
+            }
+            // Fixed vantage point — pan look-at to car
+            cameraPosRef.current.copy(tvCamPositions[tvCamIndex])
+            cameraTargetRef.current.lerp(
+              new THREE.Vector3(car0.position.x, carY + 0.5, car0.position.z),
+              1 - Math.pow(0.90, dt * 60)
+            )
+            // Smooth drift to distance-based FOV — car stays visible at any range
+            tvFovCurrent += (targetFov - tvFovCurrent) * (1 - Math.pow(0.992, dt * 60))
+            camera.fov = tvFovCurrent
+            camera.updateProjectionMatrix()
+          }
+        }
+
         camera.position.copy(cameraPosRef.current)
-        const lookAhead = new THREE.Vector3(
-          car0.position.x + sy * 7,
-          car0.position.y + 0.8,
-          car0.position.z + cy2 * 7,
-        )
-        cameraTargetRef.current.lerp(lookAhead, 0.12)
         camera.lookAt(cameraTargetRef.current)
       }
 
       renderer.render(scene, camera)
-
-      // Update HUD + time display at ~20 fps
-      if (frame % 3 === 0) {
-        const lapT0base = pLap.timestamps[0]
-        const idx0 = bsearchNearest(pLap.timestamps, t)
-        const elapsed0 = pLap.timestamps[idx0] - lapT0base
-
-        const lapHuds: HudLapData[] = laps.map((lap, li) => {
-          const lapT = t + (lap.timestamps[0] - lapT0base)
-          const idx = bsearchNearest(lap.timestamps, lapT)
-
-          // Positional delta: seconds lap i needs to reach the same circuit fraction as lap 0
-          let delta = 0
-          if (li > 0 && pLap.lat.length > 1) {
-            const frac0 = idx0 / (pLap.lat.length - 1)
-            const j = Math.min(Math.round(frac0 * (lap.lat.length - 1)), lap.lat.length - 1)
-            delta = (lap.timestamps[j] - lap.timestamps[0]) - elapsed0
-          }
-
-          return {
-            speed: Math.round((lap.speed[idx] ?? 0) * 3.6),
-            gear: Math.round(lap.gear[idx] ?? 1),
-            throttle: Math.round((lap.throttle[idx] ?? 0) * 100),
-            brake: Math.round((lap.brake[idx] ?? 0) * 100),
-            steering: Math.round((lap.steering[idx] ?? 0) * 180 / Math.PI),
-            delta,
-            lapIdx: idx,
-          }
-        })
-        setHud({ time: t, laps: lapHuds })
-      }
     }
     rafRef.current = requestAnimationFrame(animate)
 
@@ -554,16 +725,44 @@ export default function Replay3DViewer() {
       renderer.dispose()
       if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement)
     }
-  }, [laps, tf, openWheelCar])
+  }, [laps, tf, openWheelCar, isDark])
+
+  // ── HUD proportional scaling — shrinks pills when container is narrow ───────
+  useEffect(() => {
+    const el = mountRef.current
+    if (!el) return
+    const update = () => {
+      const w = el.clientWidth
+      const n = Math.max(1, laps.length)
+      // natural pill width 320px; N pills + (N-1) gaps of 8px between them
+      const naturalW = n * 320 + (n - 1) * 8
+      setHudScale(Math.min(1, w / naturalW))
+    }
+    update()
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [laps.length])
 
   // ── Playback controls ──────────────────────────────────────────────────────
-  const togglePlay = useCallback(() => setPlaying(p => !p), [])
+  const togglePlay = useCallback(() => {
+    setPlaying(p => {
+      if (p) {
+        // Pausing: immediately lock crosshair to current playback position
+        // so the animate loop doesn't snap back to a stale crosshairTime
+        const t = currentTimeRef.current
+        crosshairRef.current = t
+        setCrosshairTime(t)
+        setCurrentT(t)
+      }
+      return !p
+    })
+  }, [setCrosshairTime])
 
   const pLap = laps[0]
   const tMin = pLap?.timestamps[0] ?? 0
   const tMax = pLap?.timestamps[pLap.timestamps.length - 1] ?? 1
   const lapDuration = tMax - tMin || 1
-  const currentT = hud?.time ?? tMin
   const sliderVal = Math.round(((currentT - tMin) / lapDuration) * 1000)
   const sliderPct = sliderVal / 10  // 0–100, for CSS width/left
 
@@ -594,106 +793,152 @@ export default function Replay3DViewer() {
   return (
     <div className="absolute inset-0 flex flex-col overflow-hidden">
 
-      {/* Three.js canvas area — bg-neutral-950 prevents white flash before canvas mounts */}
-      <div ref={mountRef} className="flex-1 min-h-0 relative overflow-hidden bg-neutral-950">
+      {/* Three.js canvas area — bg prevents flash before canvas mounts */}
+      <div ref={mountRef} className="flex-1 min-h-0 relative overflow-hidden bg-neutral-950 dark:bg-neutral-950" style={{ backgroundColor: isDark ? '#0f172a' : '#dde6f0' }}>
+
+        {/* Camera mode buttons — top-right */}
+        <div className="absolute top-2 right-2 flex gap-1 select-none">
+          {(['chase', 'front', 'tv'] as const).map(mode => (
+            <button key={mode} onClick={() => setCameraMode(mode)}
+              className={`text-[8px] font-bold rounded px-1.5 py-0.5 transition-colors ${
+                cameraMode === mode
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-black/45 text-white/55 hover:text-white hover:bg-black/65'
+              }`}>
+              {mode === 'chase' ? 'REAR' : mode === 'front' ? 'FRONT' : 'TV'}
+            </button>
+          ))}
+        </div>
 
         {/* Track minimap — top-left, bare SVG on canvas */}
         {trackMapData && (
           <div className="absolute top-2 left-2 pointer-events-none select-none">
-            <svg width="130" height="130" viewBox="0 0 100 100">
-              <path d={trackMapData.d} fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.38)" strokeWidth="1.6" strokeLinejoin="round" />
-              <circle cx={trackMapData.startXY[0]} cy={trackMapData.startXY[1]} r="2.5" fill="white" opacity="0.5" />
-              {hud?.laps.map((lapData, li) => {
-                const lap = laps[li]
-                if (!lap || lap.lat.length === 0) return null
-                const idx = Math.min(lapData.lapIdx, lap.lat.length - 1)
-                const [cx, cy] = trackMapData.toMapXY(lap.lat[idx], lap.lon[idx])
+            <svg width="90" height="90" viewBox="0 0 100 100">
+              <path d={trackMapData.d}
+                fill={isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)'}
+                stroke={isDark ? 'rgba(255,255,255,0.40)' : 'rgba(0,0,0,0.50)'}
+                strokeWidth="1.6" strokeLinejoin="round" />
+              <circle cx={trackMapData.startXY[0]} cy={trackMapData.startXY[1]} r="2.5"
+                fill={isDark ? 'white' : '#334155'} opacity="0.55" />
+              {laps.map((lap, li) => {
+                if (lap.lat.length === 0) return null
+                const [ix, iy] = trackMapData.toMapXY(lap.lat[0], lap.lon[0])
                 return (
-                  <g key={lap.lapKey}>
-                    <circle cx={cx} cy={cy} r="4" fill={getLapColor(lap.colorIndex)} />
-                    <circle cx={cx} cy={cy} r="4" fill="none" stroke="white" strokeWidth="0.7" opacity="0.45" />
-                  </g>
+                  <circle key={lap.lapKey}
+                    ref={el => { mapDotRefs.current[li] = el }}
+                    cx={ix} cy={iy} r="4.5"
+                    fill={getLapColor(lap.colorIndex)}
+                    stroke={isDark ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.3)'}
+                    strokeWidth="1.2" />
                 )
               })}
             </svg>
           </div>
         )}
 
-        {/* HUD panels — bottom-left and bottom-right */}
-        {hud && hud.laps.length > 0 && (
-          <div className="absolute bottom-2 inset-x-2 flex items-end justify-between pointer-events-none select-none">
-            {hud.laps.map((lapData, li) => {
-              const lap = laps[li]
-              if (!lap) return null
+        {/* HUD panels — natural-width pills centered via translateX, scaled to fit */}
+        {laps.length > 0 && (
+          <div className="absolute bottom-2 flex flex-row gap-2 pointer-events-none select-none"
+            style={{
+              left: '50%',
+              transform: `translateX(-50%) scale(${hudScale})`,
+              transformOrigin: 'bottom center',
+            }}>
+            {laps.map((lap, li) => {
               const lapColor = getLapColor(lap.colorIndex)
               const lapTime = lapTimes[li]
               const fmtLapTime = lapTime != null
                 ? `${Math.floor(lapTime / 60)}:${(lapTime % 60).toFixed(3).padStart(6, '0')}`
                 : null
-              const deltaColor = lapData.delta > 0.05 ? 'text-rose-400' : lapData.delta < -0.05 ? 'text-emerald-400' : 'text-white/45'
+              // Theme-aware color tokens
+              const pillBg   = isDark ? 'rgba(10,10,12,0.90)'   : 'rgba(255,255,255,0.93)'
+              const textMain = isDark ? 'rgba(255,255,255,1)'    : 'rgba(15,23,42,0.95)'
+              const textDim  = isDark ? 'rgba(255,255,255,0.30)' : 'rgba(15,23,42,0.40)'
+              const divCol   = isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.07)'
+              const canvasBg = isDark ? 'rgba(0,0,0,0.40)'       : 'rgba(0,0,0,0.04)'
+              const stripBg  = isDark ? 'rgba(0,0,0,0.58)'       : 'rgba(255,255,255,0.84)'
+              const stripTxt = isDark ? 'rgba(255,255,255,0.82)' : 'rgba(15,23,42,0.85)'
+              const stripSub = isDark ? 'rgba(255,255,255,0.52)' : 'rgba(15,23,42,0.60)'
               return (
-                <div key={lap.lapKey}
-                  className="bg-black/55 backdrop-blur-md text-white rounded-xl px-3 py-2 ring-1 ring-white/10">
-                  {/* Header */}
-                  <div className="flex items-center gap-1.5 mb-2">
+                <div key={lap.lapKey} className="flex flex-col gap-0.5" style={{ width: 320 }}>
+
+                  {/* Lap info strip — backdrop for readability over 3D scene */}
+                  <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-lg"
+                    style={{ background: stripBg, backdropFilter: 'blur(6px)' }}>
                     <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: lapColor }} />
-                    <span className="text-[9px] font-bold tracking-wider text-white/80 uppercase">L{lap.lapNumber}</span>
+                    <span className="text-[9px] font-bold tracking-wider uppercase" style={{ color: stripTxt }}>L{lap.lapNumber}</span>
                     {fmtLapTime && (
-                      <span className="text-[9px] font-mono text-white/50 tabular-nums ml-1">{fmtLapTime}</span>
+                      <span className="text-[9px] font-mono tabular-nums" style={{ color: stripSub }}>{fmtLapTime}</span>
                     )}
                     {li > 0 && (
-                      <span className={`text-[9px] font-bold tabular-nums ml-auto ${deltaColor}`}>
-                        {lapData.delta >= 0 ? '+' : ''}{lapData.delta.toFixed(3)}s
-                      </span>
+                      <span ref={el => { hudDeltaRefs.current[li] = el }}
+                        className="text-[10px] font-bold tabular-nums whitespace-nowrap ml-auto"
+                        style={{ color: stripTxt }}>—</span>
                     )}
                   </div>
-                  {/* Main data row */}
-                  <div className="flex items-center gap-2.5">
-                    {/* Vertical BRK / THR bars */}
-                    <div className="flex gap-1 items-end pb-3">
-                      {([
-                        { label: 'BRK', val: lapData.brake,    color: 'bg-rose-500'   },
-                        { label: 'THR', val: lapData.throttle, color: 'bg-emerald-400' },
-                      ] as const).map(bar => (
-                        <div key={bar.label} className="flex flex-col items-center gap-0.5">
-                          <div className="w-[9px] h-10 bg-white/10 rounded-sm relative overflow-hidden">
-                            <div className={`absolute bottom-0 left-0 right-0 ${bar.color} transition-none`}
-                              style={{ height: `${bar.val}%` }} />
-                          </div>
-                          <span className="text-[6px] text-white/35 tracking-wide">{bar.label}</span>
-                        </div>
-                      ))}
-                    </div>
-                    {/* Gear */}
-                    <div className="flex flex-col items-center">
-                      <span className="text-[30px] font-bold leading-none tabular-nums text-amber-300">{lapData.gear}</span>
-                      <span className="text-[7px] text-white/35 tracking-widest mt-0.5">GEAR</span>
-                    </div>
-                    {/* Speed */}
-                    <div className="flex flex-col items-center">
-                      <span className="text-[24px] font-bold leading-none tabular-nums">{lapData.speed}</span>
-                      <span className="text-[7px] text-white/40 tracking-wide mt-0.5">km/h</span>
-                    </div>
-                    {/* Steering wheel */}
-                    <div className="flex flex-col items-center gap-0.5">
-                      <div className="relative w-[30px] h-[30px]">
-                        <svg width="30" height="30" viewBox="-15 -15 30 30"
-                          style={{ transform: `rotate(${lapData.steering}deg)`, display: 'block' }}>
-                          <circle r="12" fill="none" stroke="white" strokeWidth="2" opacity="0.7" />
-                          <circle r="3" fill="white" opacity="0.3" />
-                          <line x1="0" y1="-12" x2="0" y2="-4" stroke="white" strokeWidth="2" strokeLinecap="round" opacity="0.7" />
-                          <line x1="0" y1="12"  x2="0"  y2="4"  stroke="white" strokeWidth="2" strokeLinecap="round" opacity="0.7" />
-                          <line x1="-12" y1="0" x2="-4" y2="0"  stroke="white" strokeWidth="2" strokeLinecap="round" opacity="0.7" />
-                          <line x1="12"  y1="0" x2="4"  y2="0"  stroke="white" strokeWidth="2" strokeLinecap="round" opacity="0.7" />
-                        </svg>
-                        <svg width="30" height="30" viewBox="-15 -15 30 30" className="absolute inset-0 pointer-events-none">
-                          <line x1="0" y1="-14" x2="0" y2="-9" stroke="white" strokeWidth="2" strokeLinecap="round" opacity="0.5" />
-                        </svg>
-                      </div>
-                      <span className="text-[6px] text-white/35 tabular-nums">
-                        {Math.abs(lapData.steering)}°{lapData.steering > 1 ? 'R' : lapData.steering < -1 ? 'L' : ''}
+
+                  {/* Main pill */}
+                  <div className="flex items-stretch rounded-xl overflow-hidden"
+                    style={{ background: pillBg, borderTop: `2px solid ${lapColor}`, boxShadow: isDark ? 'none' : '0 2px 12px rgba(0,0,0,0.10)' }}>
+
+                    {/* Left accent stripe */}
+                    <div className="w-1 shrink-0" style={{ background: lapColor }} />
+
+                    {/* Telemetry trace canvas */}
+                    <div className="flex items-stretch shrink-0">
+                      <span className="flex items-center justify-center font-bold tracking-widest uppercase px-0.5"
+                        style={{ fontSize: 6, writingMode: 'vertical-rl', transform: 'rotate(180deg)', color: textDim }}>
+                        Telemetry
                       </span>
+                      <canvas ref={el => { hudTraceRefs.current[li] = el }}
+                        width={120} height={68}
+                        style={{ display: 'block', width: 120, height: 68, background: canvasBg }} />
                     </div>
+
+                    {/* BRK + THR vertical bars — current-value bars, grow from bottom */}
+                    <div className="flex gap-1 self-stretch shrink-0" style={{ padding: '10px 8px' }}>
+                      <div style={{ width: 8, position: 'relative', background: isDark ? 'rgba(239,68,68,0.18)' : 'rgba(239,68,68,0.14)', borderRadius: 3, overflow: 'hidden' }}>
+                        <div ref={el => { hudBrkRefs.current[li] = el }}
+                          style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: '0%', background: '#ef4444', borderRadius: 3 }} />
+                      </div>
+                      <div style={{ width: 8, position: 'relative', background: isDark ? 'rgba(34,197,94,0.18)' : 'rgba(34,197,94,0.14)', borderRadius: 3, overflow: 'hidden' }}>
+                        <div ref={el => { hudThrRefs.current[li] = el }}
+                          style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: '0%', background: '#22c55e', borderRadius: 3 }} />
+                      </div>
+                    </div>
+
+                    <div className="w-px self-stretch my-2 shrink-0" style={{ background: divCol }} />
+
+                    {/* Gear (top) → kph label → Speed (bottom), fixed width so digit count doesn't shift layout */}
+                    <div className="flex flex-col items-center justify-center shrink-0" style={{ width: 62, gap: 1 }}>
+                      <span ref={el => { hudGearRefs.current[li] = el }}
+                        className="font-black tabular-nums leading-none"
+                        style={{ fontSize: 32, color: textMain, letterSpacing: '-0.02em' }}>1</span>
+                      <span className="font-semibold tracking-widest uppercase leading-none"
+                        style={{ fontSize: 8, color: textDim }}>kph</span>
+                      <span ref={el => { hudSpeedRefs.current[li] = el }}
+                        className="font-bold tabular-nums leading-none"
+                        style={{ fontSize: 16, color: textMain }}>0</span>
+                    </div>
+
+                    <div className="w-px self-stretch my-2 shrink-0" style={{ background: divCol }} />
+
+                    {/* Steering wheel — fills remaining space, wheel centered, angle pinned to bottom */}
+                    <div className="flex-1 flex flex-col items-center px-1" style={{ minWidth: 48 }}>
+                      <div className="flex-1 flex items-center justify-center">
+                        <img
+                          ref={el => { hudWheelRefs.current[li] = el }}
+                          src="/moza-gs-v2p-steering-wheel-pc.webp"
+                          alt="wheel" width={46} height={46}
+                          className="object-contain" style={{ display: 'block' }}
+                          draggable={false}
+                        />
+                      </div>
+                      <span ref={el => { hudDegRefs.current[li] = el }}
+                        className="tabular-nums leading-none"
+                        style={{ fontSize: 9, color: textDim, paddingBottom: 4 }}>0°</span>
+                    </div>
+
                   </div>
                 </div>
               )
@@ -702,12 +947,12 @@ export default function Replay3DViewer() {
         )}
       </div>
 
-      {/* Playback controls — dark bar matching 3D theme */}
-      <div className="shrink-0 bg-neutral-900 border-t border-white/8 select-none">
+      {/* Playback controls bar — adapts to light/dark */}
+      <div className="shrink-0 bg-neutral-900 dark:bg-neutral-900 border-t select-none border-white/8 dark:border-white/8" style={isDark ? {} : { backgroundColor: '#f1f5f9', borderColor: '#cbd5e1' }}>
         {/* Progress timeline */}
         <div className="relative h-5 px-3 pt-3">
-          <div className="relative h-[3px] bg-white/12 rounded-full">
-            <div className="absolute inset-y-0 left-0 bg-white/30 rounded-full transition-none" style={{ width: `${sliderPct}%` }} />
+          <div className="relative h-[3px] rounded-full" style={{ background: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.12)' }}>
+            <div className="absolute inset-y-0 left-0 rounded-full transition-none" style={{ width: `${sliderPct}%`, background: isDark ? 'rgba(255,255,255,0.30)' : 'rgba(0,0,0,0.25)' }} />
             <div className="absolute top-1/2 w-2.5 h-2.5 bg-primary rounded-full shadow-md pointer-events-none"
               style={{ left: `${sliderPct}%`, transform: 'translate(-50%, -50%)' }} />
           </div>
@@ -723,11 +968,11 @@ export default function Replay3DViewer() {
           />
         </div>
         {/* Transport row */}
-        <div className="flex items-center justify-center gap-2 px-3 py-2">
+        <div className="flex items-center justify-center gap-2 px-3 py-2" style={{ color: isDark ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.6)' }}>
           {/* Skip to start */}
           <button
             onClick={() => { currentTimeRef.current = tMin; setCrosshairTime(tMin) }}
-            className="p-1.5 rounded-lg text-white/55 hover:text-white hover:bg-white/10 transition-colors"
+            className="p-1.5 rounded-lg hover:opacity-100 transition-opacity opacity-60 hover:bg-black/5 dark:hover:bg-white/10"
             title="Zum Anfang"
           >
             <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
@@ -741,13 +986,13 @@ export default function Replay3DViewer() {
             <button
               onClick={() => { const i = SPEEDS.indexOf(playbackSpeed); if (i > 0) setPlaybackSpeed(SPEEDS[i - 1]) }}
               disabled={SPEEDS.indexOf(playbackSpeed) === 0}
-              className="w-6 h-6 rounded text-white/70 hover:text-white hover:bg-white/10 transition-colors disabled:opacity-25 text-base font-bold flex items-center justify-center"
+              className="w-6 h-6 rounded hover:bg-black/8 dark:hover:bg-white/10 transition-colors disabled:opacity-25 text-base font-bold flex items-center justify-center"
             >−</button>
-            <span className="text-[11px] font-mono text-white/65 tabular-nums w-9 text-center">{playbackSpeed}x</span>
+            <span className="text-[11px] font-mono tabular-nums w-9 text-center opacity-65">{playbackSpeed}x</span>
             <button
               onClick={() => { const i = SPEEDS.indexOf(playbackSpeed); if (i < SPEEDS.length - 1) setPlaybackSpeed(SPEEDS[i + 1]) }}
               disabled={SPEEDS.indexOf(playbackSpeed) === SPEEDS.length - 1}
-              className="w-6 h-6 rounded text-white/70 hover:text-white hover:bg-white/10 transition-colors disabled:opacity-25 text-base font-bold flex items-center justify-center"
+              className="w-6 h-6 rounded hover:bg-black/8 dark:hover:bg-white/10 transition-colors disabled:opacity-25 text-base font-bold flex items-center justify-center"
             >+</button>
           </div>
 
@@ -771,7 +1016,7 @@ export default function Replay3DViewer() {
           {/* Skip to end */}
           <button
             onClick={() => { currentTimeRef.current = tMax; setCrosshairTime(tMax) }}
-            className="p-1.5 rounded-lg text-white/55 hover:text-white hover:bg-white/10 transition-colors"
+            className="p-1.5 rounded-lg hover:opacity-100 transition-opacity opacity-60 hover:bg-black/5 dark:hover:bg-white/10"
             title="Zum Ende"
           >
             <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
@@ -781,7 +1026,7 @@ export default function Replay3DViewer() {
           </button>
 
           {/* Elapsed time */}
-          <span className="text-[10px] font-mono text-white/50 tabular-nums ml-1">{formatTime(currentT)}</span>
+          <span className="text-[10px] font-mono tabular-nums ml-1 opacity-50">{formatTime(currentT)}</span>
         </div>
       </div>
     </div>

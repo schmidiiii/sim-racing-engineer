@@ -112,7 +112,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   zoomDomain: null,
   setZoomDomain: (domain) => set({ zoomDomain: domain }),
 
-  sidebarMapExpanded: false,
+  sidebarMapExpanded: true,
   setSidebarMapExpanded: (v) => set({ sidebarMapExpanded: v }),
 
   activeTabLabel: 'General',
