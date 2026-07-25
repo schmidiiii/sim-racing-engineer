@@ -583,9 +583,33 @@ export default function Replay3DViewer() {
       {/* Three.js canvas area — bg-neutral-950 prevents white flash before canvas mounts */}
       <div ref={mountRef} className="flex-1 min-h-0 relative overflow-hidden bg-neutral-950">
 
-        {/* HUD overlay — one box per lap, top-right */}
+        {/* Track minimap — top-left */}
+        {trackMapData && (
+          <div className="absolute top-2 left-2 pointer-events-none select-none">
+            <div className="bg-black/40 backdrop-blur-md rounded-lg p-1.5 ring-1 ring-white/12">
+              <svg width="88" height="88" viewBox="0 0 100 100">
+                <path d={trackMapData.d} fill="rgba(255,255,255,0.05)" stroke="rgba(255,255,255,0.28)" strokeWidth="1.6" strokeLinejoin="round" />
+                <circle cx={trackMapData.startXY[0]} cy={trackMapData.startXY[1]} r="2.5" fill="white" opacity="0.5" />
+                {hud?.laps.map((lapData, li) => {
+                  const lap = laps[li]
+                  if (!lap || lap.lat.length === 0) return null
+                  const idx = Math.min(lapData.lapIdx, lap.lat.length - 1)
+                  const [cx, cy] = trackMapData.toMapXY(lap.lat[idx], lap.lon[idx])
+                  return (
+                    <g key={lap.lapKey}>
+                      <circle cx={cx} cy={cy} r="4" fill={getLapColor(lap.colorIndex)} />
+                      <circle cx={cx} cy={cy} r="4" fill="none" stroke="white" strokeWidth="0.7" opacity="0.45" />
+                    </g>
+                  )
+                })}
+              </svg>
+            </div>
+          </div>
+        )}
+
+        {/* HUD panels — bottom row, first lap left / last lap right */}
         {hud && hud.laps.length > 0 && (
-          <div className="absolute top-2 right-2 flex flex-col gap-1.5 pointer-events-none select-none">
+          <div className="absolute bottom-2 inset-x-2 flex items-end justify-between gap-2 pointer-events-none select-none">
             {hud.laps.map((lapData, li) => {
               const lap = laps[li]
               if (!lap) return null
@@ -600,95 +624,68 @@ export default function Replay3DViewer() {
               return (
                 <div
                   key={lap.lapKey}
-                  className="bg-black/75 text-white rounded-xl p-2.5 text-[10px] font-mono min-w-[82px] space-y-1 backdrop-blur-sm"
-                  style={{ borderLeft: `2px solid ${lapColor}` }}
+                  className="bg-black/40 backdrop-blur-md text-white rounded-xl p-2 text-[10px] font-mono min-w-[76px] space-y-1 ring-1 ring-white/12"
                 >
-                  {/* Lap header: color label + total lap time */}
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-bold text-[9px]" style={{ color: lapColor }}>L{lap.lapNumber}</span>
-                    {fmtLapTime && <span className="opacity-55 text-[8px] tabular-nums">{fmtLapTime}</span>}
+                  {/* Lap identity row */}
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: lapColor }} />
+                    <span className="font-bold text-[9px] text-white/90">L{lap.lapNumber}</span>
+                    {fmtLapTime && <span className="text-[8px] text-white/45 tabular-nums ml-auto">{fmtLapTime}</span>}
                   </div>
-                  {/* Live positional delta vs reference lap */}
+                  {/* Delta */}
                   {fmtDelta && (
-                    <div className={`text-[9px] font-bold tabular-nums leading-none ${lapData.delta > 0.05 ? 'text-rose-400' : lapData.delta < -0.05 ? 'text-emerald-400' : 'text-white/60'}`}>
+                    <div className={`text-[9px] font-bold tabular-nums leading-none ${lapData.delta > 0.05 ? 'text-rose-400' : lapData.delta < -0.05 ? 'text-emerald-400' : 'text-white/50'}`}>
                       {fmtDelta}
                     </div>
                   )}
                   {/* Speed */}
-                  <div className="text-xl font-bold leading-none tabular-nums">
+                  <div className="text-[18px] font-bold leading-none tabular-nums">
                     {lapData.speed}
-                    <span className="text-[9px] font-normal opacity-60 ml-0.5">km/h</span>
+                    <span className="text-[9px] font-normal text-white/50 ml-0.5">km/h</span>
                   </div>
                   {/* Gear */}
-                  <div className="opacity-75">
+                  <div className="text-white/65">
                     Gear <span className="font-bold text-amber-300">{lapData.gear}</span>
                   </div>
-                  {/* Throttle / Brake bars */}
+                  {/* T / B bars */}
                   <div className="space-y-0.5 pt-0.5">
                     <div className="flex items-center gap-1">
-                      <span className="opacity-50 w-3">T</span>
-                      <div className="flex-1 h-1.5 bg-white/15 rounded-full overflow-hidden">
+                      <span className="text-white/40 w-3">T</span>
+                      <div className="flex-1 h-1.5 bg-white/10 rounded-full overflow-hidden">
                         <div className="h-full bg-emerald-400 rounded-full transition-none" style={{ width: `${lapData.throttle}%` }} />
                       </div>
                     </div>
                     <div className="flex items-center gap-1">
-                      <span className="opacity-50 w-3">B</span>
-                      <div className="flex-1 h-1.5 bg-white/15 rounded-full overflow-hidden">
+                      <span className="text-white/40 w-3">B</span>
+                      <div className="flex-1 h-1.5 bg-white/10 rounded-full overflow-hidden">
                         <div className="h-full bg-rose-400 rounded-full transition-none" style={{ width: `${lapData.brake}%` }} />
                       </div>
                     </div>
                   </div>
-                  {/* Steering wheel with fixed 12 o'clock reference mark */}
+                  {/* Steering wheel */}
                   <div className="flex flex-col items-center gap-0.5 pt-0.5">
                     <div className="relative w-[34px] h-[34px]">
-                      <svg
-                        width="34" height="34" viewBox="-17 -17 34 34"
-                        style={{ transform: `rotate(${lapData.steering}deg)`, display: 'block' }}
-                      >
-                        <circle r="14" fill="none" stroke="white" strokeWidth="2.5" opacity="0.85" />
-                        <circle r="3.5" fill="white" opacity="0.4" />
-                        <line x1="0" y1="-14" x2="0" y2="-5" stroke="white" strokeWidth="2.5" strokeLinecap="round" opacity="0.85" />
-                        <line x1="0" y1="14"  x2="0"  y2="5"  stroke="white" strokeWidth="2.5" strokeLinecap="round" opacity="0.85" />
-                        <line x1="-14" y1="0" x2="-5" y2="0"  stroke="white" strokeWidth="2.5" strokeLinecap="round" opacity="0.85" />
-                        <line x1="14"  y1="0" x2="5"  y2="0"  stroke="white" strokeWidth="2.5" strokeLinecap="round" opacity="0.85" />
+                      <svg width="34" height="34" viewBox="-17 -17 34 34"
+                        style={{ transform: `rotate(${lapData.steering}deg)`, display: 'block' }}>
+                        <circle r="14" fill="none" stroke="white" strokeWidth="2.5" opacity="0.75" />
+                        <circle r="3.5" fill="white" opacity="0.35" />
+                        <line x1="0" y1="-14" x2="0" y2="-5" stroke="white" strokeWidth="2.5" strokeLinecap="round" opacity="0.75" />
+                        <line x1="0" y1="14"  x2="0"  y2="5"  stroke="white" strokeWidth="2.5" strokeLinecap="round" opacity="0.75" />
+                        <line x1="-14" y1="0" x2="-5" y2="0"  stroke="white" strokeWidth="2.5" strokeLinecap="round" opacity="0.75" />
+                        <line x1="14"  y1="0" x2="5"  y2="0"  stroke="white" strokeWidth="2.5" strokeLinecap="round" opacity="0.75" />
                       </svg>
-                      {/* Fixed reference — marks 12 o'clock regardless of wheel rotation */}
+                      {/* Fixed 12 o'clock reference mark */}
                       <svg width="34" height="34" viewBox="-17 -17 34 34" className="absolute inset-0 pointer-events-none">
-                        <line x1="0" y1="-16" x2="0" y2="-10" stroke="white" strokeWidth="2" strokeLinecap="round" opacity="0.55" />
+                        <line x1="0" y1="-16" x2="0" y2="-10" stroke="white" strokeWidth="2" strokeLinecap="round" opacity="0.5" />
                       </svg>
                     </div>
-                    <span className="opacity-50 tabular-nums text-[9px]">
+                    <span className="text-white/45 tabular-nums text-[9px]">
                       {Math.abs(lapData.steering)}°{lapData.steering > 1 ? 'R' : lapData.steering < -1 ? 'L' : ''}
                     </span>
                   </div>
                 </div>
               )
             })}
-          </div>
-        )}
-
-        {/* Track minimap — bottom-left of canvas */}
-        {trackMapData && hud && hud.laps.length > 0 && (
-          <div className="absolute bottom-2 left-2 pointer-events-none select-none">
-            <div className="bg-black/60 backdrop-blur-sm rounded-lg p-1.5 ring-1 ring-white/10">
-              <svg width="96" height="96" viewBox="0 0 100 100">
-                <path d={trackMapData.d} fill="rgba(255,255,255,0.04)" stroke="rgba(255,255,255,0.22)" strokeWidth="1.4" strokeLinejoin="round" />
-                {/* Start/finish dot */}
-                <circle cx={trackMapData.startXY[0]} cy={trackMapData.startXY[1]} r="2.8" fill="white" opacity="0.55" />
-                {hud.laps.map((lapData, li) => {
-                  const lap = laps[li]
-                  if (!lap || lap.lat.length === 0) return null
-                  const idx = Math.min(lapData.lapIdx, lap.lat.length - 1)
-                  const [cx, cy] = trackMapData.toMapXY(lap.lat[idx], lap.lon[idx])
-                  return (
-                    <g key={lap.lapKey}>
-                      <circle cx={cx} cy={cy} r="4" fill={getLapColor(lap.colorIndex)} />
-                      <circle cx={cx} cy={cy} r="4" fill="none" stroke="white" strokeWidth="0.8" opacity="0.4" />
-                    </g>
-                  )
-                })}
-              </svg>
-            </div>
           </div>
         )}
       </div>
