@@ -2,11 +2,19 @@ import { useEffect, useRef, useState, useMemo, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useSessionStore, parseLapKey, getLapColor } from '@/store/session'
 import * as THREE from 'three'
+import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js'
 
 const ALT_SCALE = 0.2 // world units per metre of altitude
 const MAX_TRACK_PTS = 1500
 const ROAD_WIDTH = 10  // world units (visible road surface width)
+const LINE_WIDTH  = 0.35 // per-lap driving line width (world units)
 const SPEEDS = [0.25, 0.5, 1, 2, 4]
+
+// iRacing open-wheel car name patterns
+const OPEN_WHEEL_RE = /formula|f1\b|f2\b|f3\b|f4\b|ir18|indycar|dallara|fr2\.0|ray|superformula/i
+
+const GT_MODEL_URL = '/carmodels/55z27frcahz4-P911GT/Porsche_911_GT2.obj'
+const F1_MODEL_URL = '/carmodels/98-f1-low-poly/F1.obj'
 
 interface LapChannelData {
   lap_number: number
@@ -31,13 +39,19 @@ interface LapReplayData {
   timestamps: number[]
 }
 
+interface HudLapData {
+  speed: number
+  gear: number
+  throttle: number
+  brake: number
+  steering: number
+  delta: number  // seconds vs lap 0 (positional delta; 0 for reference lap)
+  lapIdx: number // current GPS sample index into lap.lat/lon
+}
+
 interface HudState {
   time: number
-  speed: number   // km/h
-  gear: number
-  throttle: number // 0-100
-  brake: number    // 0-100
-  steering: number // degrees
+  laps: HudLapData[]
 }
 
 interface WorldTF {
@@ -117,46 +131,39 @@ function buildRibbon(pts: THREE.Vector3[], width: number): THREE.BufferGeometry 
   return geom
 }
 
-// Car group: body, cabin, rear wing + pillars, 4 tyres with rims.
-function buildCarGroup(hexColor: string): THREE.Group {
-  const base    = new THREE.Color(hexColor)
-  const dark    = base.clone().multiplyScalar(0.45)
-  const mat     = new THREE.MeshLambertMaterial({ color: base })
-  const darkMat = new THREE.MeshLambertMaterial({ color: dark })
-  const tireMat = new THREE.MeshLambertMaterial({ color: 0x1a1a1a })
-  const rimMat  = new THREE.MeshLambertMaterial({ color: 0x999999 })
-  const group   = new THREE.Group()
+// Tint every mesh in a loaded model with the lap colour
+function applyLapColor(model: THREE.Object3D, hexColor: string) {
+  const color = new THREE.Color(hexColor)
+  model.traverse(child => {
+    const mesh = child as THREE.Mesh
+    if (!mesh.isMesh) return
+    // Dispose any existing material(s) to avoid leaks
+    if (Array.isArray(mesh.material)) mesh.material.forEach(m => m.dispose())
+    else if (mesh.material) mesh.material.dispose()
+    mesh.material = new THREE.MeshLambertMaterial({ color })
+  })
+}
 
-  // Lower body
-  const body = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.8, 5.0), mat)
-  body.position.set(0, 0.55, 0)
+// Scale an OBJ model so the car WIDTH (shorter horizontal axis) = targetWidth, sit it on y = 0
+function fitToWorldUnits(model: THREE.Object3D, targetWidth = 2.5) {
+  const box  = new THREE.Box3().setFromObject(model)
+  const size = box.getSize(new THREE.Vector3())
+  // Use the shorter of X and Z — that's the car width, not the length
+  const carWidth = Math.min(size.x, size.z)
+  const scale = targetWidth / Math.max(carWidth, 0.001)
+  model.scale.setScalar(scale)
+  // Re-compute box after scaling and centre + ground the model
+  const box2   = new THREE.Box3().setFromObject(model)
+  const center = box2.getCenter(new THREE.Vector3())
+  model.position.set(-center.x, -box2.min.y, -center.z)
+}
+
+// Fallback box-car used while the OBJ is loading
+function buildPlaceholderCar(): THREE.Group {
+  const group = new THREE.Group()
+  const body = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.55, 3.5), new THREE.MeshLambertMaterial({ color: 0x555555 }))
+  body.position.y = 0.35
   group.add(body)
-
-  // Cabin
-  const cabin = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.9, 1.9), darkMat)
-  cabin.position.set(0, 1.3, -0.3)
-  group.add(cabin)
-
-  // Rear wing blade + pillars
-  const blade = new THREE.Mesh(new THREE.BoxGeometry(3.0, 0.35, 0.18), darkMat)
-  blade.position.set(0, 1.75, -2.45)
-  group.add(blade)
-  for (const sx of [-1.1, 1.1]) {
-    const pillar = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.65, 0.18), darkMat)
-    pillar.position.set(sx, 1.25, -2.45)
-    group.add(pillar)
-  }
-
-  // 4 wheels — tyre cylinder + rim cylinder
-  const tireGeom = new THREE.CylinderGeometry(0.7, 0.7, 0.55, 14)
-  const rimGeom  = new THREE.CylinderGeometry(0.38, 0.38, 0.58, 10)
-  for (const [x, y, z] of [[-1.8, 0.7, 1.7], [1.8, 0.7, 1.7], [-1.8, 0.7, -1.7], [1.8, 0.7, -1.7]]) {
-    const tyre = new THREE.Mesh(tireGeom, tireMat)
-    tyre.rotation.z = Math.PI / 2; tyre.position.set(x, y, z); group.add(tyre)
-    const rim = new THREE.Mesh(rimGeom, rimMat)
-    rim.rotation.z = Math.PI / 2; rim.position.set(x, y, z); group.add(rim)
-  }
-
   return group
 }
 
@@ -164,9 +171,17 @@ export default function Replay3DViewer() {
   const { sessions, selectedLapKeys, crosshairTime, setCrosshairTime } = useSessionStore()
   const mountRef = useRef<HTMLDivElement>(null)
   const rafRef = useRef(0)
-  const carMeshesRef = useRef<THREE.Mesh[]>([])
+  const carMeshesRef = useRef<THREE.Mesh[]>([])  // holds THREE.Group[] at runtime
   const cameraPosRef = useRef(new THREE.Vector3())
   const cameraTargetRef = useRef(new THREE.Vector3())
+
+  // Detect open-wheel car for model selection
+  const openWheelCar = useMemo(() => {
+    if (!selectedLapKeys.length) return false
+    const { sessionId } = parseLapKey(selectedLapKeys[0])
+    const carName = sessions.find(s => s.id === sessionId)?.car ?? ''
+    return OPEN_WHEEL_RE.test(carName)
+  }, [sessions, selectedLapKeys])
 
   // Refs that the animation loop reads (avoids stale closures with useEffect deps)
   const playingRef = useRef(false)
@@ -179,6 +194,36 @@ export default function Replay3DViewer() {
   const [playing, setPlaying] = useState(false)
   const [playbackSpeed, setPlaybackSpeed] = useState(1)
   const [hud, setHud] = useState<HudState | null>(null)
+
+  const lapTimes = useMemo(() =>
+    laps.map(lap => {
+      const { sessionId, lapNumber } = parseLapKey(lap.lapKey)
+      return sessions.find(s => s.id === sessionId)?.laps.find(l => l.lap_number === lapNumber)?.lap_time ?? null
+    }),
+    [laps, sessions]
+  )
+
+  const trackMapData = useMemo(() => {
+    if (laps.length === 0 || laps[0].lat.length === 0) return null
+    const lap = laps[0]
+    const minLat = Math.min(...lap.lat), maxLat = Math.max(...lap.lat)
+    const minLon = Math.min(...lap.lon), maxLon = Math.max(...lap.lon)
+    const latR = maxLat - minLat || 0.001
+    const lonR = maxLon - minLon || 0.001
+    const scale = 90 / Math.max(latR, lonR)
+    const toMapXY = (lat: number, lon: number): [number, number] => [
+      5 + (lon - minLon) * scale,
+      95 - (lat - minLat) * scale,
+    ]
+    const step = Math.max(1, Math.floor(lap.lat.length / 400))
+    let d = ''
+    for (let i = 0; i < lap.lat.length; i += step) {
+      const [x, y] = toMapXY(lap.lat[i], lap.lon[i])
+      d += `${d === '' ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)} `
+    }
+    d += 'Z'
+    return { d, startXY: toMapXY(lap.lat[0], lap.lon[0]), toMapXY }
+  }, [laps])
 
   useEffect(() => { playingRef.current = playing }, [playing])
   useEffect(() => { speedRef.current = playbackSpeed }, [playbackSpeed])
@@ -281,54 +326,79 @@ export default function Replay3DViewer() {
     scene.add(ground)
 
     // ── Track surface ──────────────────────────────────────────────────────
-    // Dark base surface (wide, uniform asphalt colour)
     const pLap = laps[0]
+
     const step = Math.max(1, Math.floor(pLap.lat.length / MAX_TRACK_PTS))
     const basePts: THREE.Vector3[] = []
     for (let i = 0; i < pLap.lat.length; i += step)
       basePts.push(toWorld(pLap.lat[i], pLap.lon[i], pLap.alt[i], tf))
 
+    // Dark road surface
     scene.add(new THREE.Mesh(
       buildRibbon(basePts, ROAD_WIDTH),
       new THREE.MeshBasicMaterial({ color: 0x0e1b2e, side: THREE.DoubleSide }),
     ))
 
-    // Per-lap coloured driving line (each lap's actual GPS path, narrower)
+    // Per-lap coloured driving line
     for (const lap of laps) {
       const lapStep = Math.max(1, Math.floor(lap.lat.length / MAX_TRACK_PTS))
       const lapPts: THREE.Vector3[] = []
       for (let i = 0; i < lap.lat.length; i += lapStep)
         lapPts.push(toWorld(lap.lat[i], lap.lon[i], lap.alt[i], tf))
       const lapMesh = new THREE.Mesh(
-        buildRibbon(lapPts, 3.5),
+        buildRibbon(lapPts, LINE_WIDTH),
         new THREE.MeshBasicMaterial({ color: new THREE.Color(getLapColor(lap.colorIndex)), side: THREE.DoubleSide }),
       )
       lapMesh.position.y = 0.06
       scene.add(lapMesh)
     }
 
-    // White edge lines along the outer boundary of the base track
-    const edgeMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide })
+    // White edge strips
     const halfW = ROAD_WIDTH / 2
+    const edgeMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide })
     for (const sign of [-1, 1]) {
       const edgePts = basePts.map((p, i) => {
         const prev = basePts[Math.max(0, i - 1)]
         const next = basePts[Math.min(basePts.length - 1, i + 1)]
         const tan  = new THREE.Vector3().subVectors(next, prev).normalize()
-        const perp = new THREE.Vector3(-tan.z, 0, tan.x).normalize()
+        const perp = new THREE.Vector3(-tan.z, 0, tan.x)
         return p.clone().addScaledVector(perp, sign * halfW).setY(p.y + 0.12)
       })
       scene.add(new THREE.Mesh(buildRibbon(edgePts, 0.55), edgeMat))
     }
 
-    // Car groups — body + cabin per lap
-    const carGroups: THREE.Group[] = []
-    for (const lap of laps) {
-      const g = buildCarGroup(getLapColor(lap.colorIndex))
+    // Car placeholder groups (shown immediately while OBJ loads)
+    const carGroups: THREE.Group[] = laps.map(() => {
+      const g = buildPlaceholderCar()
       scene.add(g)
-      carGroups.push(g)
-    }
+      return g
+    })
     carMeshesRef.current = carGroups as unknown as THREE.Mesh[]
+
+    // Load the real OBJ model and replace placeholders per lap
+    let loadCancelled = false
+    const modelUrl = openWheelCar ? F1_MODEL_URL : GT_MODEL_URL
+    new OBJLoader().loadAsync(modelUrl)
+      .then((baseModel: THREE.Group) => {
+        if (loadCancelled) return
+        fitToWorldUnits(baseModel, 1.4)
+        // Porsche faces -Z natively → flip 180°; F1 faces +X natively → rotate -90°
+        baseModel.rotation.y = openWheelCar ? -Math.PI / 2 : Math.PI
+
+        laps.forEach((lap, i) => {
+          const innerModel = baseModel.clone(true)
+          applyLapColor(innerModel, getLapColor(lap.colorIndex))
+          // Outer group receives yaw from animation loop; inner model keeps the 180° correction
+          const outerGroup = new THREE.Group()
+          outerGroup.add(innerModel)
+          outerGroup.position.copy(carGroups[i].position)
+          outerGroup.rotation.copy(carGroups[i].rotation)
+          scene.remove(carGroups[i])
+          scene.add(outerGroup)
+          carGroups[i] = outerGroup
+        })
+      })
+      .catch(() => { /* OBJ failed to load — keep placeholder */ })
 
     // Init camera behind primary lap's car
     const tInit = crosshairRef.current ?? pLap.timestamps[0]
@@ -340,9 +410,9 @@ export default function Replay3DViewer() {
       ? toWorld(pLap.lat[initNext], pLap.lon[initNext], pLap.alt[initNext], tf).sub(initPos).normalize()
       : new THREE.Vector3(0, 0, 1)
     cameraPosRef.current.copy(initPos)
-      .addScaledVector(initFwd, -20)
-      .setY(initPos.y + 8)
-    cameraTargetRef.current.copy(initPos).addScaledVector(initFwd, 12).setY(initPos.y + 1.5)
+      .addScaledVector(initFwd, -8)
+      .setY(initPos.y + 3)
+    cameraTargetRef.current.copy(initPos).addScaledVector(initFwd, 7).setY(initPos.y + 0.8)
     camera.position.copy(cameraPosRef.current)
     camera.lookAt(cameraTargetRef.current)
     currentTimeRef.current = tInit
@@ -382,10 +452,14 @@ export default function Replay3DViewer() {
       const t = currentTimeRef.current
 
       // Update car positions + orientation
+      // Each lap has its own absolute timestamp base — shift so all laps progress
+      // from their own start simultaneously (handles cross-lap and cross-session replay)
+      const lapT0 = pLap.timestamps[0]
       laps.forEach((lap, li) => {
         const group = carGroups[li]
         if (!group || !lap.timestamps.length) return
-        const idx = bsearchNearest(lap.timestamps, t)
+        const lapT = t + (lap.timestamps[0] - lapT0)
+        const idx = bsearchNearest(lap.timestamps, lapT)
         const pos = toWorld(lap.lat[idx], lap.lon[idx], lap.alt[idx], tf)
         group.position.copy(pos)
         group.position.y += 1.0
@@ -397,22 +471,22 @@ export default function Replay3DViewer() {
         }
       })
 
-      // Chase cam — low, close, looks 14 units ahead of car[0]
+      // Chase cam — close behind, looks ahead of car[0]
       const car0 = carGroups[0]
       if (car0) {
         const ry = car0.rotation.y
         const sy = Math.sin(ry), cy2 = Math.cos(ry)
         const behind = new THREE.Vector3(
-          car0.position.x - sy * 20,
-          car0.position.y + 7,
-          car0.position.z - cy2 * 20,
+          car0.position.x - sy * 8,
+          car0.position.y + 3,
+          car0.position.z - cy2 * 8,
         )
         cameraPosRef.current.lerp(behind, 0.10)
         camera.position.copy(cameraPosRef.current)
         const lookAhead = new THREE.Vector3(
-          car0.position.x + sy * 14,
-          car0.position.y + 1.5,
-          car0.position.z + cy2 * 14,
+          car0.position.x + sy * 7,
+          car0.position.y + 0.8,
+          car0.position.z + cy2 * 7,
         )
         cameraTargetRef.current.lerp(lookAhead, 0.12)
         camera.lookAt(cameraTargetRef.current)
@@ -422,20 +496,39 @@ export default function Replay3DViewer() {
 
       // Update HUD + time display at ~20 fps
       if (frame % 3 === 0) {
-        const idx = bsearchNearest(pLap.timestamps, t)
-        setHud({
-          time: t,
-          speed: Math.round((pLap.speed[idx] ?? 0) * 3.6),
-          gear: Math.round(pLap.gear[idx] ?? 1),
-          throttle: Math.round((pLap.throttle[idx] ?? 0) * 100),
-          brake: Math.round((pLap.brake[idx] ?? 0) * 100),
-          steering: Math.round((pLap.steering[idx] ?? 0) * 180 / Math.PI),
+        const lapT0base = pLap.timestamps[0]
+        const idx0 = bsearchNearest(pLap.timestamps, t)
+        const elapsed0 = pLap.timestamps[idx0] - lapT0base
+
+        const lapHuds: HudLapData[] = laps.map((lap, li) => {
+          const lapT = t + (lap.timestamps[0] - lapT0base)
+          const idx = bsearchNearest(lap.timestamps, lapT)
+
+          // Positional delta: seconds lap i needs to reach the same circuit fraction as lap 0
+          let delta = 0
+          if (li > 0 && pLap.lat.length > 1) {
+            const frac0 = idx0 / (pLap.lat.length - 1)
+            const j = Math.min(Math.round(frac0 * (lap.lat.length - 1)), lap.lat.length - 1)
+            delta = (lap.timestamps[j] - lap.timestamps[0]) - elapsed0
+          }
+
+          return {
+            speed: Math.round((lap.speed[idx] ?? 0) * 3.6),
+            gear: Math.round(lap.gear[idx] ?? 1),
+            throttle: Math.round((lap.throttle[idx] ?? 0) * 100),
+            brake: Math.round((lap.brake[idx] ?? 0) * 100),
+            steering: Math.round((lap.steering[idx] ?? 0) * 180 / Math.PI),
+            delta,
+            lapIdx: idx,
+          }
         })
+        setHud({ time: t, laps: lapHuds })
       }
     }
     rafRef.current = requestAnimationFrame(animate)
 
     return () => {
+      loadCancelled = true
       cancelAnimationFrame(rafRef.current)
       ro.disconnect()
       scene.traverse(obj => {
@@ -448,7 +541,7 @@ export default function Replay3DViewer() {
       renderer.dispose()
       if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement)
     }
-  }, [laps, tf])
+  }, [laps, tf, openWheelCar])
 
   // ── Playback controls ──────────────────────────────────────────────────────
   const togglePlay = useCallback(() => setPlaying(p => !p), [])
@@ -487,63 +580,117 @@ export default function Replay3DViewer() {
   return (
     <div className="absolute inset-0 flex flex-col overflow-hidden">
 
-      {/* Three.js canvas area */}
-      <div ref={mountRef} className="flex-1 min-h-0 relative overflow-hidden">
+      {/* Three.js canvas area — bg-neutral-950 prevents white flash before canvas mounts */}
+      <div ref={mountRef} className="flex-1 min-h-0 relative overflow-hidden bg-neutral-950">
 
-        {/* HUD overlay — top-right corner */}
-        {hud && (
-          <div className="absolute top-2 right-2 bg-black/75 text-white rounded-xl p-2.5 text-[10px] font-mono min-w-[76px] pointer-events-none select-none space-y-1 backdrop-blur-sm">
-            <div className="text-xl font-bold leading-none tabular-nums">
-              {hud.speed}
-              <span className="text-[9px] font-normal opacity-60 ml-0.5">km/h</span>
-            </div>
-            <div className="opacity-75">
-              Gear <span className="font-bold text-amber-300">{hud.gear}</span>
-            </div>
-            <div className="space-y-0.5 pt-0.5">
-              <div className="flex items-center gap-1">
-                <span className="opacity-50 w-3">T</span>
-                <div className="flex-1 h-1.5 bg-white/15 rounded-full overflow-hidden">
-                  <div className="h-full bg-emerald-400 rounded-full transition-none" style={{ width: `${hud.throttle}%` }} />
+        {/* HUD overlay — one box per lap, top-right */}
+        {hud && hud.laps.length > 0 && (
+          <div className="absolute top-2 right-2 flex flex-col gap-1.5 pointer-events-none select-none">
+            {hud.laps.map((lapData, li) => {
+              const lap = laps[li]
+              if (!lap) return null
+              const lapColor = getLapColor(lap.colorIndex)
+              const lapTime = lapTimes[li]
+              const fmtLapTime = lapTime != null
+                ? `${Math.floor(lapTime / 60)}:${(lapTime % 60).toFixed(3).padStart(6, '0')}`
+                : null
+              const fmtDelta = li > 0
+                ? `${lapData.delta >= 0 ? '+' : ''}${lapData.delta.toFixed(3)}s`
+                : null
+              return (
+                <div
+                  key={lap.lapKey}
+                  className="bg-black/75 text-white rounded-xl p-2.5 text-[10px] font-mono min-w-[82px] space-y-1 backdrop-blur-sm"
+                  style={{ borderLeft: `2px solid ${lapColor}` }}
+                >
+                  {/* Lap header: color label + total lap time */}
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-bold text-[9px]" style={{ color: lapColor }}>L{lap.lapNumber}</span>
+                    {fmtLapTime && <span className="opacity-55 text-[8px] tabular-nums">{fmtLapTime}</span>}
+                  </div>
+                  {/* Live positional delta vs reference lap */}
+                  {fmtDelta && (
+                    <div className={`text-[9px] font-bold tabular-nums leading-none ${lapData.delta > 0.05 ? 'text-rose-400' : lapData.delta < -0.05 ? 'text-emerald-400' : 'text-white/60'}`}>
+                      {fmtDelta}
+                    </div>
+                  )}
+                  {/* Speed */}
+                  <div className="text-xl font-bold leading-none tabular-nums">
+                    {lapData.speed}
+                    <span className="text-[9px] font-normal opacity-60 ml-0.5">km/h</span>
+                  </div>
+                  {/* Gear */}
+                  <div className="opacity-75">
+                    Gear <span className="font-bold text-amber-300">{lapData.gear}</span>
+                  </div>
+                  {/* Throttle / Brake bars */}
+                  <div className="space-y-0.5 pt-0.5">
+                    <div className="flex items-center gap-1">
+                      <span className="opacity-50 w-3">T</span>
+                      <div className="flex-1 h-1.5 bg-white/15 rounded-full overflow-hidden">
+                        <div className="h-full bg-emerald-400 rounded-full transition-none" style={{ width: `${lapData.throttle}%` }} />
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <span className="opacity-50 w-3">B</span>
+                      <div className="flex-1 h-1.5 bg-white/15 rounded-full overflow-hidden">
+                        <div className="h-full bg-rose-400 rounded-full transition-none" style={{ width: `${lapData.brake}%` }} />
+                      </div>
+                    </div>
+                  </div>
+                  {/* Steering wheel with fixed 12 o'clock reference mark */}
+                  <div className="flex flex-col items-center gap-0.5 pt-0.5">
+                    <div className="relative w-[34px] h-[34px]">
+                      <svg
+                        width="34" height="34" viewBox="-17 -17 34 34"
+                        style={{ transform: `rotate(${lapData.steering}deg)`, display: 'block' }}
+                      >
+                        <circle r="14" fill="none" stroke="white" strokeWidth="2.5" opacity="0.85" />
+                        <circle r="3.5" fill="white" opacity="0.4" />
+                        <line x1="0" y1="-14" x2="0" y2="-5" stroke="white" strokeWidth="2.5" strokeLinecap="round" opacity="0.85" />
+                        <line x1="0" y1="14"  x2="0"  y2="5"  stroke="white" strokeWidth="2.5" strokeLinecap="round" opacity="0.85" />
+                        <line x1="-14" y1="0" x2="-5" y2="0"  stroke="white" strokeWidth="2.5" strokeLinecap="round" opacity="0.85" />
+                        <line x1="14"  y1="0" x2="5"  y2="0"  stroke="white" strokeWidth="2.5" strokeLinecap="round" opacity="0.85" />
+                      </svg>
+                      {/* Fixed reference — marks 12 o'clock regardless of wheel rotation */}
+                      <svg width="34" height="34" viewBox="-17 -17 34 34" className="absolute inset-0 pointer-events-none">
+                        <line x1="0" y1="-16" x2="0" y2="-10" stroke="white" strokeWidth="2" strokeLinecap="round" opacity="0.55" />
+                      </svg>
+                    </div>
+                    <span className="opacity-50 tabular-nums text-[9px]">
+                      {Math.abs(lapData.steering)}°{lapData.steering > 1 ? 'R' : lapData.steering < -1 ? 'L' : ''}
+                    </span>
+                  </div>
                 </div>
-              </div>
-              <div className="flex items-center gap-1">
-                <span className="opacity-50 w-3">B</span>
-                <div className="flex-1 h-1.5 bg-white/15 rounded-full overflow-hidden">
-                  <div className="h-full bg-rose-400 rounded-full transition-none" style={{ width: `${hud.brake}%` }} />
-                </div>
-              </div>
-            </div>
-            {/* Steering wheel */}
-            <div className="flex flex-col items-center gap-0.5 pt-0.5">
-              <svg
-                width="34" height="34" viewBox="-17 -17 34 34"
-                style={{ transform: `rotate(${hud.steering}deg)`, display: 'block' }}
-              >
-                <circle r="14" fill="none" stroke="white" strokeWidth="2.5" opacity="0.85" />
-                <circle r="3.5" fill="white" opacity="0.4" />
-                {/* 4 spokes */}
-                <line x1="0" y1="-14" x2="0" y2="-5" stroke="white" strokeWidth="2.5" strokeLinecap="round" opacity="0.85" />
-                <line x1="0" y1="14"  x2="0"  y2="5"  stroke="white" strokeWidth="2.5" strokeLinecap="round" opacity="0.85" />
-                <line x1="-14" y1="0" x2="-5" y2="0"  stroke="white" strokeWidth="2.5" strokeLinecap="round" opacity="0.85" />
-                <line x1="14"  y1="0" x2="5"  y2="0"  stroke="white" strokeWidth="2.5" strokeLinecap="round" opacity="0.85" />
-              </svg>
-              <span className="opacity-50 tabular-nums text-[9px]">
-                {Math.abs(hud.steering)}°{hud.steering > 1 ? 'R' : hud.steering < -1 ? 'L' : ''}
-              </span>
-            </div>
+              )
+            })}
           </div>
         )}
 
-        {/* Lap legend — top-left */}
-        <div className="absolute top-2 left-2 flex flex-col gap-0.5 pointer-events-none">
-          {laps.map(lap => (
-            <span key={lap.lapKey} className="flex items-center gap-1 text-[9px] drop-shadow">
-              <span className="inline-block w-2 h-2 rounded-sm" style={{ background: getLapColor(lap.colorIndex) }} />
-              <span className="text-white/70 font-mono">L{lap.lapNumber}</span>
-            </span>
-          ))}
-        </div>
+        {/* Track minimap — bottom-left of canvas */}
+        {trackMapData && hud && hud.laps.length > 0 && (
+          <div className="absolute bottom-2 left-2 pointer-events-none select-none">
+            <div className="bg-black/60 backdrop-blur-sm rounded-lg p-1.5 ring-1 ring-white/10">
+              <svg width="96" height="96" viewBox="0 0 100 100">
+                <path d={trackMapData.d} fill="rgba(255,255,255,0.04)" stroke="rgba(255,255,255,0.22)" strokeWidth="1.4" strokeLinejoin="round" />
+                {/* Start/finish dot */}
+                <circle cx={trackMapData.startXY[0]} cy={trackMapData.startXY[1]} r="2.8" fill="white" opacity="0.55" />
+                {hud.laps.map((lapData, li) => {
+                  const lap = laps[li]
+                  if (!lap || lap.lat.length === 0) return null
+                  const idx = Math.min(lapData.lapIdx, lap.lat.length - 1)
+                  const [cx, cy] = trackMapData.toMapXY(lap.lat[idx], lap.lon[idx])
+                  return (
+                    <g key={lap.lapKey}>
+                      <circle cx={cx} cy={cy} r="4" fill={getLapColor(lap.colorIndex)} />
+                      <circle cx={cx} cy={cy} r="4" fill="none" stroke="white" strokeWidth="0.8" opacity="0.4" />
+                    </g>
+                  )
+                })}
+              </svg>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Playback controls bar */}
