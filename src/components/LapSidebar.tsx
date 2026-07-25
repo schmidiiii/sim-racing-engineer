@@ -265,13 +265,37 @@ export default function LapSidebar() {
     >
 
       {/* Header */}
-      <div className="px-4 pt-4 pb-3 border-b border-border shrink-0">
-        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest mb-1">{t('sessions')}</p>
-        {loading && <p className="text-xs text-muted-foreground">{t('loading')}</p>}
-        {error && <p className="text-xs text-destructive truncate" title={error}>{t('errorLoadingFile')}</p>}
-        {sessions.length === 0 && !loading && (
-          <p className="text-xs text-muted-foreground/60">{t('noSessionLoaded')}</p>
-        )}
+      <div className="px-3 pt-2.5 pb-2 border-b border-border shrink-0 flex items-center gap-2">
+        <div className="flex-1 min-w-0">
+          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">{t('sessions')}</p>
+          {loading && <p className="text-[10px] text-muted-foreground">{t('loading')}</p>}
+          {error && <p className="text-[10px] text-destructive truncate" title={error}>{t('errorLoadingFile')}</p>}
+          {sessions.length === 0 && !loading && (
+            <p className="text-[10px] text-muted-foreground/50">{t('noSessionLoaded')}</p>
+          )}
+        </div>
+        {/* Auto-load toggle */}
+        <button
+          onClick={() => setAutoLoad(!autoLoad)}
+          title={t('autoLoadFiles')}
+          className="flex items-center gap-1.5 shrink-0 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <span className="hidden sm:inline">Auto</span>
+          <span className={`relative inline-flex w-7 h-3.5 rounded-full transition-colors shrink-0 ${autoLoad ? 'bg-primary' : 'bg-muted'}`}>
+            <span className={`absolute top-0.5 w-2.5 h-2.5 rounded-full bg-white shadow transition-transform ${autoLoad ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
+          </span>
+        </button>
+        {/* Load files button */}
+        <button
+          onClick={handleOpen}
+          title={t('loadFiles')}
+          className="shrink-0 flex items-center gap-1 text-[10px] font-medium text-muted-foreground hover:text-foreground border border-border hover:border-foreground/30 rounded-md px-2 py-1 transition-colors"
+        >
+          <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <path d="M5 1v8M1 5h8"/>
+          </svg>
+          Load
+        </button>
       </div>
 
       {/* Sessions + laps */}
@@ -308,29 +332,9 @@ export default function LapSidebar() {
         ))}
       </div>
 
-      {/* Consistency score — hidden when map is expanded */}
-      {!sidebarMapExpanded && <ConsistencyPanel />}
+      <ConsistencyPanel />
 
       <SidebarTrackMap />
-
-      {/* Load button + auto-load toggle */}
-      <div className="px-3 py-3 border-t border-border shrink-0 flex flex-col gap-2">
-        <button
-          onClick={() => setAutoLoad(!autoLoad)}
-          className="w-full flex items-center justify-between text-xs px-3 py-2 rounded-lg border border-border text-muted-foreground hover:text-foreground transition-colors"
-        >
-          <span>{t('autoLoadFiles')}</span>
-          <span className={`relative inline-flex w-8 h-4 rounded-full transition-colors shrink-0 ml-2 ${autoLoad ? 'bg-primary' : 'bg-muted'}`}>
-            <span className={`absolute top-0.5 w-3 h-3 rounded-full bg-white shadow transition-transform ${autoLoad ? 'translate-x-4' : 'translate-x-0.5'}`} />
-          </span>
-        </button>
-        <button
-          onClick={handleOpen}
-          className="w-full text-xs text-muted-foreground hover:text-foreground border border-border hover:border-foreground/30 rounded-lg px-3 py-2 text-center transition-colors"
-        >
-          {t('loadFiles')}
-        </button>
-      </div>
     </aside>
   )
 }
