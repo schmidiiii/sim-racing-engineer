@@ -2,6 +2,7 @@ import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useSessionStore, parseLapKey, getLapColor } from '@/store/session'
 import TrackMap, { type MapChannel } from '@/components/TrackMap'
+import Replay3DViewer from '@/components/Replay3DViewer'
 
 interface LapChannelData {
   lap_number: number
@@ -65,7 +66,7 @@ function nearestTimeIdx(timestamps: number[], target: number): number {
   return lo
 }
 
-type ActiveView = 'traces' | MapChannel
+type ActiveView = 'traces' | MapChannel | '3D'
 
 const MAP_CHANNELS: MapChannel[] = ['Speed', 'Throttle', 'Brake', 'Gear']
 
@@ -264,10 +265,10 @@ export default function SidebarTrackMap() {
       <div className="flex items-center px-2 pt-1.5 pb-0.5 gap-1 min-w-0">
         {/* Scrollable tabs — so they never push the expand button off-screen */}
         <div className="flex items-center gap-1 overflow-x-auto min-w-0 flex-1" style={{ scrollbarWidth: 'none' }}>
-          {(['traces', ...MAP_CHANNELS] as ActiveView[]).map(view => (
+          {(['traces', ...MAP_CHANNELS, '3D'] as ActiveView[]).map(view => (
             <button
               key={view}
-              onClick={() => setActiveView(view)}
+              onClick={() => { setActiveView(view); if (view === '3D') setSidebarMapExpanded(true) }}
               className={`shrink-0 px-1.5 py-0.5 text-[10px] font-semibold rounded transition-colors ${
                 activeView === view
                   ? 'bg-primary text-primary-foreground'
@@ -286,7 +287,9 @@ export default function SidebarTrackMap() {
         style={!sidebarMapExpanded ? { height: COLLAPSED_H } : undefined}
         className={`overflow-hidden relative${sidebarMapExpanded ? ' flex-1 min-h-0' : ''}`}
       >
-        {activeView !== 'traces' ? (
+        {activeView === '3D' ? (
+          <Replay3DViewer />
+        ) : activeView !== 'traces' ? (
           <div className="absolute inset-0">
             <TrackMap channel={activeView} />
           </div>
