@@ -4,7 +4,8 @@ import { useSessionStore, parseLapKey, getLapColor } from '@/store/session'
 import * as THREE from 'three'
 
 const ALT_SCALE = 0.2 // world units per metre of altitude
-const MAX_TRACK_PTS = 2000
+const MAX_TRACK_PTS = 1500
+const ROAD_WIDTH = 10  // world units (visible road surface width)
 const SPEEDS = [0.25, 0.5, 1, 2, 4]
 
 interface LapChannelData {
@@ -90,6 +91,76 @@ function speedColor(speedKph: number, maxKph: number): THREE.Color {
   const c = new THREE.Color()
   c.setHSL((1 - t) * 0.667, 1, 0.55)
   return c
+}
+
+// Build a speed-coloured road ribbon from a series of world-space points.
+// Each pair of adjacent points becomes a quad (two triangles) giving the road
+// its visible width.  The perpendicular is always kept horizontal so the
+// road surface stays level even on slopes.
+function buildTrackRibbon(
+  pts: THREE.Vector3[],
+  speedsKph: number[],
+  maxKph: number,
+): THREE.BufferGeometry {
+  const n = pts.length
+  const positions = new Float32Array(n * 2 * 3)
+  const colors    = new Float32Array(n * 2 * 3)
+  const indices: number[] = []
+
+  for (let i = 0; i < n; i++) {
+    const prev = pts[Math.max(0, i - 1)]
+    const next = pts[Math.min(n - 1, i + 1)]
+    const tan = new THREE.Vector3().subVectors(next, prev).normalize()
+    // Horizontal perpendicular (XZ only so the road doesn't bank)
+    const perp = new THREE.Vector3(-tan.z, 0, tan.x).normalize()
+
+    const L = pts[i].clone().addScaledVector(perp,  ROAD_WIDTH / 2)
+    const R = pts[i].clone().addScaledVector(perp, -ROAD_WIDTH / 2)
+
+    const o = i * 6
+    positions[o]     = L.x; positions[o + 1] = L.y; positions[o + 2] = L.z
+    positions[o + 3] = R.x; positions[o + 4] = R.y; positions[o + 5] = R.z
+
+    const c = speedColor(speedsKph[i], maxKph)
+    colors[o]     = c.r; colors[o + 1] = c.g; colors[o + 2] = c.b
+    colors[o + 3] = c.r; colors[o + 4] = c.g; colors[o + 5] = c.b
+
+    if (i < n - 1) {
+      const a = i * 2, b = i * 2 + 1, c2 = i * 2 + 2, d = i * 2 + 3
+      indices.push(a, b, d, a, d, c2)
+    }
+  }
+
+  const geom = new THREE.BufferGeometry()
+  geom.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+  geom.setAttribute('color',    new THREE.BufferAttribute(colors,    3))
+  geom.setIndex(indices)
+  return geom
+}
+
+// Simple two-box car: flat body + raised cabin, both tinted with lap colour.
+function buildCarGroup(hexColor: string): THREE.Group {
+  const base  = new THREE.Color(hexColor)
+  const dark  = base.clone().multiplyScalar(0.55)
+  const group = new THREE.Group()
+
+  // Body
+  const body = new THREE.Mesh(
+    new THREE.BoxGeometry(3.2, 0.9, 5.2),
+    new THREE.MeshLambertMaterial({ color: base }),
+  )
+  body.position.y = 0.45
+  group.add(body)
+
+  // Cabin
+  const cabin = new THREE.Mesh(
+    new THREE.BoxGeometry(2.3, 0.8, 2.6),
+    new THREE.MeshLambertMaterial({ color: dark }),
+  )
+  cabin.position.set(0, 1.25, -0.3)
+  group.add(cabin)
+
+  return group
 }
 
 export default function Replay3DViewer() {
@@ -189,7 +260,7 @@ export default function Replay3DViewer() {
     scene.fog = new THREE.Fog(0x0f172a, 300, 1200)
 
     // Camera
-    const camera = new THREE.PerspectiveCamera(55, w / h, 0.1, 5000)
+    const camera = new THREE.PerspectiveCamera(65, w / h, 0.1, 5000)
 
     // Renderer
     const renderer = new THREE.WebGLRenderer({ antialias: true })
@@ -197,49 +268,63 @@ export default function Replay3DViewer() {
     renderer.setSize(w, h)
     mount.appendChild(renderer.domElement)
 
-    // Lights
-    scene.add(new THREE.AmbientLight(0xffffff, 0.65))
-    const sun = new THREE.DirectionalLight(0xffffff, 1.8)
-    sun.position.set(100, 300, 100)
+    // Lights — ambient fills shadows, directional adds depth to car bodies
+    scene.add(new THREE.AmbientLight(0xffffff, 0.55))
+    const sun = new THREE.DirectionalLight(0xffffff, 2.2)
+    sun.position.set(80, 200, 80)
     scene.add(sun)
 
-    // Ground grid
-    const grid = new THREE.GridHelper(900, 50, 0x1e3a5f, 0x0f2240)
-    scene.add(grid)
+    // Subtle ground plane so cars cast a visual reference
+    const ground = new THREE.Mesh(
+      new THREE.PlaneGeometry(1200, 1200),
+      new THREE.MeshBasicMaterial({ color: 0x0c1a2e }),
+    )
+    ground.rotation.x = -Math.PI / 2
+    ground.position.y = -0.05
+    scene.add(ground)
 
-    // Speed-colored track (primary lap)
+    // Speed-coloured road ribbon (primary lap)
     const pLap = laps[0]
     const step = Math.max(1, Math.floor(pLap.lat.length / MAX_TRACK_PTS))
     const maxKph = Math.max(...pLap.speed) * 3.6
-    const trackPos: number[] = []
-    const trackCol: number[] = []
+    const pts: THREE.Vector3[] = []
+    const speedsKph: number[] = []
     for (let i = 0; i < pLap.lat.length; i += step) {
-      const p = toWorld(pLap.lat[i], pLap.lon[i], pLap.alt[i], tf)
-      trackPos.push(p.x, p.y, p.z)
-      const c = speedColor(pLap.speed[i] * 3.6, maxKph)
-      trackCol.push(c.r, c.g, c.b)
+      pts.push(toWorld(pLap.lat[i], pLap.lon[i], pLap.alt[i], tf))
+      speedsKph.push(pLap.speed[i] * 3.6)
     }
-    const trackGeom = new THREE.BufferGeometry()
-    trackGeom.setAttribute('position', new THREE.Float32BufferAttribute(trackPos, 3))
-    trackGeom.setAttribute('color', new THREE.Float32BufferAttribute(trackCol, 3))
-    scene.add(new THREE.Line(trackGeom, new THREE.LineBasicMaterial({ vertexColors: true })))
+    const ribbonGeom = buildTrackRibbon(pts, speedsKph, maxKph)
+    scene.add(new THREE.Mesh(ribbonGeom, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide })))
 
-    // Car meshes
-    const carGeom = new THREE.BoxGeometry(2.5, 1.2, 5)
-    const cars: THREE.Mesh[] = []
+    // Centre line (thin white strip for visibility at distance)
+    const clPos = new Float32Array(pts.length * 3)
+    pts.forEach((p, i) => { clPos[i * 3] = p.x; clPos[i * 3 + 1] = p.y + 0.02; clPos[i * 3 + 2] = p.z })
+    const clGeom = new THREE.BufferGeometry()
+    clGeom.setAttribute('position', new THREE.BufferAttribute(clPos, 3))
+    scene.add(new THREE.Line(clGeom, new THREE.LineBasicMaterial({ color: 0xffffff, opacity: 0.25, transparent: true })))
+
+    // Car groups — body + cabin per lap
+    const carGroups: THREE.Group[] = []
     for (const lap of laps) {
-      const mesh = new THREE.Mesh(carGeom, new THREE.MeshLambertMaterial({ color: getLapColor(lap.colorIndex) }))
-      scene.add(mesh)
-      cars.push(mesh)
+      const g = buildCarGroup(getLapColor(lap.colorIndex))
+      scene.add(g)
+      carGroups.push(g)
     }
-    carMeshesRef.current = cars
+    carMeshesRef.current = carGroups as unknown as THREE.Mesh[]
 
-    // Init camera behind primary lap's car at current crosshair position
+    // Init camera behind primary lap's car
     const tInit = crosshairRef.current ?? pLap.timestamps[0]
     const initIdx = bsearchNearest(pLap.timestamps, tInit)
     const initPos = toWorld(pLap.lat[initIdx], pLap.lon[initIdx], pLap.alt[initIdx], tf)
-    cameraPosRef.current.set(initPos.x, initPos.y + 12, initPos.z + 30)
-    cameraTargetRef.current.copy(initPos).add(new THREE.Vector3(0, 2, 0))
+    // Estimate forward direction at init
+    const initNext = bsearchNearest(pLap.timestamps, tInit + 0.5)
+    const initFwd = initNext > initIdx
+      ? toWorld(pLap.lat[initNext], pLap.lon[initNext], pLap.alt[initNext], tf).sub(initPos).normalize()
+      : new THREE.Vector3(0, 0, 1)
+    cameraPosRef.current.copy(initPos)
+      .addScaledVector(initFwd, -20)
+      .setY(initPos.y + 8)
+    cameraTargetRef.current.copy(initPos).addScaledVector(initFwd, 12).setY(initPos.y + 1.5)
     camera.position.copy(cameraPosRef.current)
     camera.lookAt(cameraTargetRef.current)
     currentTimeRef.current = tInit
@@ -280,33 +365,38 @@ export default function Replay3DViewer() {
 
       // Update car positions + orientation
       laps.forEach((lap, li) => {
-        const mesh = cars[li]
-        if (!mesh || !lap.timestamps.length) return
+        const group = carGroups[li]
+        if (!group || !lap.timestamps.length) return
         const idx = bsearchNearest(lap.timestamps, t)
         const pos = toWorld(lap.lat[idx], lap.lon[idx], lap.alt[idx], tf)
-        mesh.position.copy(pos)
-        mesh.position.y += 0.6 // car sits on top of track line
-        const nIdx = Math.min(idx + 5, lap.lat.length - 1)
+        group.position.copy(pos)
+        group.position.y += 1.0
+        const nIdx = Math.min(idx + 6, lap.lat.length - 1)
         if (nIdx > idx) {
           const nPos = toWorld(lap.lat[nIdx], lap.lon[nIdx], lap.alt[nIdx], tf)
           const dir = nPos.clone().sub(pos)
-          if (dir.lengthSq() > 0.001) mesh.rotation.y = Math.atan2(dir.x, dir.z)
+          if (dir.lengthSq() > 0.001) group.rotation.y = Math.atan2(dir.x, dir.z)
         }
       })
 
-      // Chase cam (smooth lerp, follows car[0])
-      const car0 = cars[0]
+      // Chase cam — low, close, looks 14 units ahead of car[0]
+      const car0 = carGroups[0]
       if (car0) {
-        const cy = car0.rotation.y
+        const ry = car0.rotation.y
+        const sy = Math.sin(ry), cy2 = Math.cos(ry)
         const behind = new THREE.Vector3(
-          car0.position.x - Math.sin(cy) * 30,
-          car0.position.y + 14,
-          car0.position.z - Math.cos(cy) * 30,
+          car0.position.x - sy * 20,
+          car0.position.y + 7,
+          car0.position.z - cy2 * 20,
         )
-        cameraPosRef.current.lerp(behind, 0.07)
+        cameraPosRef.current.lerp(behind, 0.10)
         camera.position.copy(cameraPosRef.current)
-        const look = car0.position.clone().add(new THREE.Vector3(0, 2, 0))
-        cameraTargetRef.current.lerp(look, 0.1)
+        const lookAhead = new THREE.Vector3(
+          car0.position.x + sy * 14,
+          car0.position.y + 1.5,
+          car0.position.z + cy2 * 14,
+        )
+        cameraTargetRef.current.lerp(lookAhead, 0.12)
         camera.lookAt(cameraTargetRef.current)
       }
 
