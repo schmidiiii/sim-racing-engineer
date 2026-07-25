@@ -552,6 +552,7 @@ export default function Replay3DViewer() {
   const lapDuration = tMax - tMin || 1
   const currentT = hud?.time ?? tMin
   const sliderVal = Math.round(((currentT - tMin) / lapDuration) * 1000)
+  const sliderPct = sliderVal / 10  // 0–100, for CSS width/left
 
   const formatTime = (t: number) => {
     const s = Math.max(0, t - tMin)
@@ -605,9 +606,9 @@ export default function Replay3DViewer() {
           </div>
         )}
 
-        {/* HUD panels — bottom row, first lap left / last lap right */}
+        {/* HUD panels — bottom-left and bottom-right */}
         {hud && hud.laps.length > 0 && (
-          <div className="absolute bottom-2 inset-x-2 flex items-end justify-between gap-2 pointer-events-none select-none">
+          <div className="absolute bottom-2 inset-x-2 flex items-end justify-between pointer-events-none select-none">
             {hud.laps.map((lapData, li) => {
               const lap = laps[li]
               if (!lap) return null
@@ -616,70 +617,70 @@ export default function Replay3DViewer() {
               const fmtLapTime = lapTime != null
                 ? `${Math.floor(lapTime / 60)}:${(lapTime % 60).toFixed(3).padStart(6, '0')}`
                 : null
-              const fmtDelta = li > 0
-                ? `${lapData.delta >= 0 ? '+' : ''}${lapData.delta.toFixed(3)}s`
-                : null
+              const deltaColor = lapData.delta > 0.05 ? 'text-rose-400' : lapData.delta < -0.05 ? 'text-emerald-400' : 'text-white/45'
               return (
-                <div
-                  key={lap.lapKey}
-                  className="bg-black/40 backdrop-blur-md text-white rounded-xl p-2 text-[10px] font-mono min-w-[76px] space-y-1 ring-1 ring-white/12"
-                >
-                  {/* Lap identity row */}
-                  <div className="flex items-center gap-1.5">
+                <div key={lap.lapKey}
+                  className="bg-black/55 backdrop-blur-md text-white rounded-xl px-3 py-2 ring-1 ring-white/10">
+                  {/* Header */}
+                  <div className="flex items-center gap-1.5 mb-2">
                     <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: lapColor }} />
-                    <span className="font-bold text-[9px] text-white/90">L{lap.lapNumber}</span>
-                    {fmtLapTime && <span className="text-[8px] text-white/45 tabular-nums ml-auto">{fmtLapTime}</span>}
+                    <span className="text-[9px] font-bold tracking-wider text-white/80 uppercase">L{lap.lapNumber}</span>
+                    {fmtLapTime && (
+                      <span className="text-[9px] font-mono text-white/50 tabular-nums ml-1">{fmtLapTime}</span>
+                    )}
+                    {li > 0 && (
+                      <span className={`text-[9px] font-bold tabular-nums ml-auto ${deltaColor}`}>
+                        {lapData.delta >= 0 ? '+' : ''}{lapData.delta.toFixed(3)}s
+                      </span>
+                    )}
                   </div>
-                  {/* Delta */}
-                  {fmtDelta && (
-                    <div className={`text-[9px] font-bold tabular-nums leading-none ${lapData.delta > 0.05 ? 'text-rose-400' : lapData.delta < -0.05 ? 'text-emerald-400' : 'text-white/50'}`}>
-                      {fmtDelta}
+                  {/* Main data row */}
+                  <div className="flex items-center gap-2.5">
+                    {/* Vertical BRK / THR bars */}
+                    <div className="flex gap-1 items-end pb-3">
+                      {([
+                        { label: 'BRK', val: lapData.brake,    color: 'bg-rose-500'   },
+                        { label: 'THR', val: lapData.throttle, color: 'bg-emerald-400' },
+                      ] as const).map(bar => (
+                        <div key={bar.label} className="flex flex-col items-center gap-0.5">
+                          <div className="w-[9px] h-10 bg-white/10 rounded-sm relative overflow-hidden">
+                            <div className={`absolute bottom-0 left-0 right-0 ${bar.color} transition-none`}
+                              style={{ height: `${bar.val}%` }} />
+                          </div>
+                          <span className="text-[6px] text-white/35 tracking-wide">{bar.label}</span>
+                        </div>
+                      ))}
                     </div>
-                  )}
-                  {/* Speed */}
-                  <div className="text-[18px] font-bold leading-none tabular-nums">
-                    {lapData.speed}
-                    <span className="text-[9px] font-normal text-white/50 ml-0.5">km/h</span>
-                  </div>
-                  {/* Gear */}
-                  <div className="text-white/65">
-                    Gear <span className="font-bold text-amber-300">{lapData.gear}</span>
-                  </div>
-                  {/* T / B bars */}
-                  <div className="space-y-0.5 pt-0.5">
-                    <div className="flex items-center gap-1">
-                      <span className="text-white/40 w-3">T</span>
-                      <div className="flex-1 h-1.5 bg-white/10 rounded-full overflow-hidden">
-                        <div className="h-full bg-emerald-400 rounded-full transition-none" style={{ width: `${lapData.throttle}%` }} />
+                    {/* Gear */}
+                    <div className="flex flex-col items-center">
+                      <span className="text-[30px] font-bold leading-none tabular-nums text-amber-300">{lapData.gear}</span>
+                      <span className="text-[7px] text-white/35 tracking-widest mt-0.5">GEAR</span>
+                    </div>
+                    {/* Speed */}
+                    <div className="flex flex-col items-center">
+                      <span className="text-[24px] font-bold leading-none tabular-nums">{lapData.speed}</span>
+                      <span className="text-[7px] text-white/40 tracking-wide mt-0.5">km/h</span>
+                    </div>
+                    {/* Steering wheel */}
+                    <div className="flex flex-col items-center gap-0.5">
+                      <div className="relative w-[30px] h-[30px]">
+                        <svg width="30" height="30" viewBox="-15 -15 30 30"
+                          style={{ transform: `rotate(${lapData.steering}deg)`, display: 'block' }}>
+                          <circle r="12" fill="none" stroke="white" strokeWidth="2" opacity="0.7" />
+                          <circle r="3" fill="white" opacity="0.3" />
+                          <line x1="0" y1="-12" x2="0" y2="-4" stroke="white" strokeWidth="2" strokeLinecap="round" opacity="0.7" />
+                          <line x1="0" y1="12"  x2="0"  y2="4"  stroke="white" strokeWidth="2" strokeLinecap="round" opacity="0.7" />
+                          <line x1="-12" y1="0" x2="-4" y2="0"  stroke="white" strokeWidth="2" strokeLinecap="round" opacity="0.7" />
+                          <line x1="12"  y1="0" x2="4"  y2="0"  stroke="white" strokeWidth="2" strokeLinecap="round" opacity="0.7" />
+                        </svg>
+                        <svg width="30" height="30" viewBox="-15 -15 30 30" className="absolute inset-0 pointer-events-none">
+                          <line x1="0" y1="-14" x2="0" y2="-9" stroke="white" strokeWidth="2" strokeLinecap="round" opacity="0.5" />
+                        </svg>
                       </div>
+                      <span className="text-[6px] text-white/35 tabular-nums">
+                        {Math.abs(lapData.steering)}°{lapData.steering > 1 ? 'R' : lapData.steering < -1 ? 'L' : ''}
+                      </span>
                     </div>
-                    <div className="flex items-center gap-1">
-                      <span className="text-white/40 w-3">B</span>
-                      <div className="flex-1 h-1.5 bg-white/10 rounded-full overflow-hidden">
-                        <div className="h-full bg-rose-400 rounded-full transition-none" style={{ width: `${lapData.brake}%` }} />
-                      </div>
-                    </div>
-                  </div>
-                  {/* Steering wheel */}
-                  <div className="flex flex-col items-center gap-0.5 pt-0.5">
-                    <div className="relative w-[34px] h-[34px]">
-                      <svg width="34" height="34" viewBox="-17 -17 34 34"
-                        style={{ transform: `rotate(${lapData.steering}deg)`, display: 'block' }}>
-                        <circle r="14" fill="none" stroke="white" strokeWidth="2.5" opacity="0.75" />
-                        <circle r="3.5" fill="white" opacity="0.35" />
-                        <line x1="0" y1="-14" x2="0" y2="-5" stroke="white" strokeWidth="2.5" strokeLinecap="round" opacity="0.75" />
-                        <line x1="0" y1="14"  x2="0"  y2="5"  stroke="white" strokeWidth="2.5" strokeLinecap="round" opacity="0.75" />
-                        <line x1="-14" y1="0" x2="-5" y2="0"  stroke="white" strokeWidth="2.5" strokeLinecap="round" opacity="0.75" />
-                        <line x1="14"  y1="0" x2="5"  y2="0"  stroke="white" strokeWidth="2.5" strokeLinecap="round" opacity="0.75" />
-                      </svg>
-                      {/* Fixed 12 o'clock reference mark */}
-                      <svg width="34" height="34" viewBox="-17 -17 34 34" className="absolute inset-0 pointer-events-none">
-                        <line x1="0" y1="-16" x2="0" y2="-10" stroke="white" strokeWidth="2" strokeLinecap="round" opacity="0.5" />
-                      </svg>
-                    </div>
-                    <span className="text-white/45 tabular-nums text-[9px]">
-                      {Math.abs(lapData.steering)}°{lapData.steering > 1 ? 'R' : lapData.steering < -1 ? 'L' : ''}
-                    </span>
                   </div>
                 </div>
               )
@@ -688,63 +689,87 @@ export default function Replay3DViewer() {
         )}
       </div>
 
-      {/* Playback controls bar */}
-      <div className="shrink-0 flex items-center gap-1.5 px-2 py-1 bg-card border-t border-border">
-        {/* Play/Pause */}
-        <button
-          onClick={togglePlay}
-          className="p-1 rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
-          title={playing ? 'Pause' : 'Play'}
-        >
-          {playing ? (
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
-              <rect x="2" y="2" width="3" height="8" rx="0.5" />
-              <rect x="7" y="2" width="3" height="8" rx="0.5" />
-            </svg>
-          ) : (
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
-              <path d="M3 2l7 4-7 4V2z" />
-            </svg>
-          )}
-        </button>
-
-        {/* Speed selector */}
-        <div className="flex items-center gap-0.5">
-          {SPEEDS.map(s => (
-            <button
-              key={s}
-              onClick={() => setPlaybackSpeed(s)}
-              className={`text-[9px] px-1 py-0.5 rounded transition-colors ${
-                playbackSpeed === s
-                  ? 'bg-primary text-primary-foreground'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              {s}x
-            </button>
-          ))}
+      {/* Playback controls — dark bar matching 3D theme */}
+      <div className="shrink-0 bg-neutral-900 border-t border-white/8 select-none">
+        {/* Progress timeline */}
+        <div className="relative h-5 px-3 pt-3">
+          <div className="relative h-[3px] bg-white/12 rounded-full">
+            <div className="absolute inset-y-0 left-0 bg-white/30 rounded-full transition-none" style={{ width: `${sliderPct}%` }} />
+            <div className="absolute top-1/2 w-2.5 h-2.5 bg-amber-400 rounded-full shadow-md shadow-amber-400/40 pointer-events-none"
+              style={{ left: `${sliderPct}%`, transform: 'translate(-50%, -50%)' }} />
+          </div>
+          {/* Transparent range input layered on top for native drag */}
+          <input type="range" min={0} max={1000} value={sliderVal}
+            onChange={e => {
+              const pct = Number(e.target.value) / 1000
+              const t = tMin + pct * lapDuration
+              currentTimeRef.current = t
+              setCrosshairTime(t)
+            }}
+            className="absolute inset-0 w-full opacity-0 cursor-pointer"
+          />
         </div>
-
-        {/* Slider */}
-        <input
-          type="range"
-          min={0}
-          max={1000}
-          value={sliderVal}
-          onChange={e => {
-            const pct = Number(e.target.value) / 1000
-            const t = tMin + pct * lapDuration
-            currentTimeRef.current = t
-            setCrosshairTime(t)
-          }}
-          className="flex-1 accent-primary cursor-pointer"
-          style={{ height: 4 }}
-        />
-
-        {/* Time */}
-        <span className="text-[9px] font-mono text-muted-foreground tabular-nums shrink-0 min-w-[40px] text-right">
-          {formatTime(currentT)}
-        </span>
+        {/* Transport row */}
+        <div className="flex items-center justify-center gap-1.5 px-3 py-2">
+          {/* Skip to start */}
+          <button
+            onClick={() => { currentTimeRef.current = tMin; setCrosshairTime(tMin) }}
+            className="p-1.5 rounded-lg text-white/40 hover:text-white/80 hover:bg-white/8 transition-colors"
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
+              <rect x="1.5" y="2" width="2" height="10" rx="0.5" />
+              <path d="M5 7L12 2.5v9L5 7z" />
+            </svg>
+          </button>
+          {/* Slower */}
+          <button
+            onClick={() => { const i = SPEEDS.indexOf(playbackSpeed); if (i > 0) setPlaybackSpeed(SPEEDS[i - 1]) }}
+            className="p-1.5 rounded-lg text-white/40 hover:text-white/80 hover:bg-white/8 transition-colors"
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M8 3L4 7l4 4M13 3L9 7l4 4" />
+            </svg>
+          </button>
+          {/* Play / Pause — amber accent */}
+          <button
+            onClick={togglePlay}
+            className="w-9 h-9 rounded-full bg-amber-400 hover:bg-amber-300 flex items-center justify-center text-neutral-900 shadow-lg shadow-amber-400/20 transition-colors mx-1"
+          >
+            {playing ? (
+              <svg width="13" height="13" viewBox="0 0 12 12" fill="currentColor">
+                <rect x="2" y="2" width="3" height="8" rx="0.5" />
+                <rect x="7" y="2" width="3" height="8" rx="0.5" />
+              </svg>
+            ) : (
+              <svg width="13" height="13" viewBox="0 0 12 12" fill="currentColor">
+                <path d="M3 2l7 4-7 4V2z" />
+              </svg>
+            )}
+          </button>
+          {/* Faster */}
+          <button
+            onClick={() => { const i = SPEEDS.indexOf(playbackSpeed); if (i < SPEEDS.length - 1) setPlaybackSpeed(SPEEDS[i + 1]) }}
+            className="p-1.5 rounded-lg text-white/40 hover:text-white/80 hover:bg-white/8 transition-colors"
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M6 3l4 4-4 4M1 3l4 4-4 4" />
+            </svg>
+          </button>
+          {/* Skip to end */}
+          <button
+            onClick={() => { currentTimeRef.current = tMax; setCrosshairTime(tMax) }}
+            className="p-1.5 rounded-lg text-white/40 hover:text-white/80 hover:bg-white/8 transition-colors"
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
+              <rect x="10.5" y="2" width="2" height="10" rx="0.5" />
+              <path d="M9 7L2 2.5v9L9 7z" />
+            </svg>
+          </button>
+          {/* Speed label */}
+          <span className="text-[10px] font-mono text-white/45 tabular-nums w-8 text-center ml-2">{playbackSpeed}x</span>
+          {/* Elapsed time */}
+          <span className="text-[10px] font-mono text-white/45 tabular-nums ml-1">{formatTime(currentT)}</span>
+        </div>
       </div>
     </div>
   )
