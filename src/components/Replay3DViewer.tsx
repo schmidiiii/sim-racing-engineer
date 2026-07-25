@@ -86,79 +86,76 @@ function toWorld(lat: number, lon: number, alt: number, tf: WorldTF): THREE.Vect
   )
 }
 
-function speedColor(speedKph: number, maxKph: number): THREE.Color {
-  const t = Math.min(1, speedKph / (maxKph || 250))
-  const c = new THREE.Color()
-  c.setHSL((1 - t) * 0.667, 1, 0.55)
-  return c
-}
-
-// Build a speed-coloured road ribbon from a series of world-space points.
-// Each pair of adjacent points becomes a quad (two triangles) giving the road
-// its visible width.  The perpendicular is always kept horizontal so the
-// road surface stays level even on slopes.
-function buildTrackRibbon(
-  pts: THREE.Vector3[],
-  speedsKph: number[],
-  maxKph: number,
-): THREE.BufferGeometry {
+// Build a flat road ribbon (no colour attribute — colour set via Material).
+function buildRibbon(pts: THREE.Vector3[], width: number): THREE.BufferGeometry {
   const n = pts.length
   const positions = new Float32Array(n * 2 * 3)
-  const colors    = new Float32Array(n * 2 * 3)
   const indices: number[] = []
 
   for (let i = 0; i < n; i++) {
     const prev = pts[Math.max(0, i - 1)]
     const next = pts[Math.min(n - 1, i + 1)]
-    const tan = new THREE.Vector3().subVectors(next, prev).normalize()
-    // Horizontal perpendicular (XZ only so the road doesn't bank)
+    const tan  = new THREE.Vector3().subVectors(next, prev).normalize()
     const perp = new THREE.Vector3(-tan.z, 0, tan.x).normalize()
 
-    const L = pts[i].clone().addScaledVector(perp,  ROAD_WIDTH / 2)
-    const R = pts[i].clone().addScaledVector(perp, -ROAD_WIDTH / 2)
+    const L = pts[i].clone().addScaledVector(perp,  width / 2)
+    const R = pts[i].clone().addScaledVector(perp, -width / 2)
 
     const o = i * 6
     positions[o]     = L.x; positions[o + 1] = L.y; positions[o + 2] = L.z
     positions[o + 3] = R.x; positions[o + 4] = R.y; positions[o + 5] = R.z
 
-    const c = speedColor(speedsKph[i], maxKph)
-    colors[o]     = c.r; colors[o + 1] = c.g; colors[o + 2] = c.b
-    colors[o + 3] = c.r; colors[o + 4] = c.g; colors[o + 5] = c.b
-
     if (i < n - 1) {
-      const a = i * 2, b = i * 2 + 1, c2 = i * 2 + 2, d = i * 2 + 3
-      indices.push(a, b, d, a, d, c2)
+      const a = i * 2, b = i * 2 + 1, c = i * 2 + 2, d = i * 2 + 3
+      indices.push(a, b, d, a, d, c)
     }
   }
 
   const geom = new THREE.BufferGeometry()
   geom.setAttribute('position', new THREE.BufferAttribute(positions, 3))
-  geom.setAttribute('color',    new THREE.BufferAttribute(colors,    3))
   geom.setIndex(indices)
   return geom
 }
 
-// Simple two-box car: flat body + raised cabin, both tinted with lap colour.
+// Car group: body, cabin, rear wing + pillars, 4 tyres with rims.
 function buildCarGroup(hexColor: string): THREE.Group {
-  const base  = new THREE.Color(hexColor)
-  const dark  = base.clone().multiplyScalar(0.55)
-  const group = new THREE.Group()
+  const base    = new THREE.Color(hexColor)
+  const dark    = base.clone().multiplyScalar(0.45)
+  const mat     = new THREE.MeshLambertMaterial({ color: base })
+  const darkMat = new THREE.MeshLambertMaterial({ color: dark })
+  const tireMat = new THREE.MeshLambertMaterial({ color: 0x1a1a1a })
+  const rimMat  = new THREE.MeshLambertMaterial({ color: 0x999999 })
+  const group   = new THREE.Group()
 
-  // Body
-  const body = new THREE.Mesh(
-    new THREE.BoxGeometry(3.2, 0.9, 5.2),
-    new THREE.MeshLambertMaterial({ color: base }),
-  )
-  body.position.y = 0.45
+  // Lower body
+  const body = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.8, 5.0), mat)
+  body.position.set(0, 0.55, 0)
   group.add(body)
 
   // Cabin
-  const cabin = new THREE.Mesh(
-    new THREE.BoxGeometry(2.3, 0.8, 2.6),
-    new THREE.MeshLambertMaterial({ color: dark }),
-  )
-  cabin.position.set(0, 1.25, -0.3)
+  const cabin = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.9, 1.9), darkMat)
+  cabin.position.set(0, 1.3, -0.3)
   group.add(cabin)
+
+  // Rear wing blade + pillars
+  const blade = new THREE.Mesh(new THREE.BoxGeometry(3.0, 0.35, 0.18), darkMat)
+  blade.position.set(0, 1.75, -2.45)
+  group.add(blade)
+  for (const sx of [-1.1, 1.1]) {
+    const pillar = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.65, 0.18), darkMat)
+    pillar.position.set(sx, 1.25, -2.45)
+    group.add(pillar)
+  }
+
+  // 4 wheels — tyre cylinder + rim cylinder
+  const tireGeom = new THREE.CylinderGeometry(0.7, 0.7, 0.55, 14)
+  const rimGeom  = new THREE.CylinderGeometry(0.38, 0.38, 0.58, 10)
+  for (const [x, y, z] of [[-1.8, 0.7, 1.7], [1.8, 0.7, 1.7], [-1.8, 0.7, -1.7], [1.8, 0.7, -1.7]]) {
+    const tyre = new THREE.Mesh(tireGeom, tireMat)
+    tyre.rotation.z = Math.PI / 2; tyre.position.set(x, y, z); group.add(tyre)
+    const rim = new THREE.Mesh(rimGeom, rimMat)
+    rim.rotation.z = Math.PI / 2; rim.position.set(x, y, z); group.add(rim)
+  }
 
   return group
 }
@@ -283,25 +280,46 @@ export default function Replay3DViewer() {
     ground.position.y = -0.05
     scene.add(ground)
 
-    // Speed-coloured road ribbon (primary lap)
+    // ── Track surface ──────────────────────────────────────────────────────
+    // Dark base surface (wide, uniform asphalt colour)
     const pLap = laps[0]
     const step = Math.max(1, Math.floor(pLap.lat.length / MAX_TRACK_PTS))
-    const maxKph = Math.max(...pLap.speed) * 3.6
-    const pts: THREE.Vector3[] = []
-    const speedsKph: number[] = []
-    for (let i = 0; i < pLap.lat.length; i += step) {
-      pts.push(toWorld(pLap.lat[i], pLap.lon[i], pLap.alt[i], tf))
-      speedsKph.push(pLap.speed[i] * 3.6)
-    }
-    const ribbonGeom = buildTrackRibbon(pts, speedsKph, maxKph)
-    scene.add(new THREE.Mesh(ribbonGeom, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide })))
+    const basePts: THREE.Vector3[] = []
+    for (let i = 0; i < pLap.lat.length; i += step)
+      basePts.push(toWorld(pLap.lat[i], pLap.lon[i], pLap.alt[i], tf))
 
-    // Centre line (thin white strip for visibility at distance)
-    const clPos = new Float32Array(pts.length * 3)
-    pts.forEach((p, i) => { clPos[i * 3] = p.x; clPos[i * 3 + 1] = p.y + 0.02; clPos[i * 3 + 2] = p.z })
-    const clGeom = new THREE.BufferGeometry()
-    clGeom.setAttribute('position', new THREE.BufferAttribute(clPos, 3))
-    scene.add(new THREE.Line(clGeom, new THREE.LineBasicMaterial({ color: 0xffffff, opacity: 0.25, transparent: true })))
+    scene.add(new THREE.Mesh(
+      buildRibbon(basePts, ROAD_WIDTH),
+      new THREE.MeshBasicMaterial({ color: 0x0e1b2e, side: THREE.DoubleSide }),
+    ))
+
+    // Per-lap coloured driving line (each lap's actual GPS path, narrower)
+    for (const lap of laps) {
+      const lapStep = Math.max(1, Math.floor(lap.lat.length / MAX_TRACK_PTS))
+      const lapPts: THREE.Vector3[] = []
+      for (let i = 0; i < lap.lat.length; i += lapStep)
+        lapPts.push(toWorld(lap.lat[i], lap.lon[i], lap.alt[i], tf))
+      const lapMesh = new THREE.Mesh(
+        buildRibbon(lapPts, 3.5),
+        new THREE.MeshBasicMaterial({ color: new THREE.Color(getLapColor(lap.colorIndex)), side: THREE.DoubleSide }),
+      )
+      lapMesh.position.y = 0.06
+      scene.add(lapMesh)
+    }
+
+    // White edge lines along the outer boundary of the base track
+    const edgeMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide })
+    const halfW = ROAD_WIDTH / 2
+    for (const sign of [-1, 1]) {
+      const edgePts = basePts.map((p, i) => {
+        const prev = basePts[Math.max(0, i - 1)]
+        const next = basePts[Math.min(basePts.length - 1, i + 1)]
+        const tan  = new THREE.Vector3().subVectors(next, prev).normalize()
+        const perp = new THREE.Vector3(-tan.z, 0, tan.x).normalize()
+        return p.clone().addScaledVector(perp, sign * halfW).setY(p.y + 0.12)
+      })
+      scene.add(new THREE.Mesh(buildRibbon(edgePts, 0.55), edgeMat))
+    }
 
     // Car groups — body + cabin per lap
     const carGroups: THREE.Group[] = []
@@ -496,8 +514,23 @@ export default function Replay3DViewer() {
                 </div>
               </div>
             </div>
-            <div className="opacity-70 tabular-nums">
-              {Math.abs(hud.steering)}°{hud.steering > 1 ? 'R' : hud.steering < -1 ? 'L' : ''}
+            {/* Steering wheel */}
+            <div className="flex flex-col items-center gap-0.5 pt-0.5">
+              <svg
+                width="34" height="34" viewBox="-17 -17 34 34"
+                style={{ transform: `rotate(${hud.steering}deg)`, display: 'block' }}
+              >
+                <circle r="14" fill="none" stroke="white" strokeWidth="2.5" opacity="0.85" />
+                <circle r="3.5" fill="white" opacity="0.4" />
+                {/* 4 spokes */}
+                <line x1="0" y1="-14" x2="0" y2="-5" stroke="white" strokeWidth="2.5" strokeLinecap="round" opacity="0.85" />
+                <line x1="0" y1="14"  x2="0"  y2="5"  stroke="white" strokeWidth="2.5" strokeLinecap="round" opacity="0.85" />
+                <line x1="-14" y1="0" x2="-5" y2="0"  stroke="white" strokeWidth="2.5" strokeLinecap="round" opacity="0.85" />
+                <line x1="14"  y1="0" x2="5"  y2="0"  stroke="white" strokeWidth="2.5" strokeLinecap="round" opacity="0.85" />
+              </svg>
+              <span className="opacity-50 tabular-nums text-[9px]">
+                {Math.abs(hud.steering)}°{hud.steering > 1 ? 'R' : hud.steering < -1 ? 'L' : ''}
+              </span>
             </div>
           </div>
         )}
