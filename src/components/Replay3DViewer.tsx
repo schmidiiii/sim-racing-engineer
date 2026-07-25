@@ -583,27 +583,25 @@ export default function Replay3DViewer() {
       {/* Three.js canvas area — bg-neutral-950 prevents white flash before canvas mounts */}
       <div ref={mountRef} className="flex-1 min-h-0 relative overflow-hidden bg-neutral-950">
 
-        {/* Track minimap — top-left */}
+        {/* Track minimap — top-left, bare SVG on canvas */}
         {trackMapData && (
           <div className="absolute top-2 left-2 pointer-events-none select-none">
-            <div className="bg-black/40 backdrop-blur-md rounded-lg p-1.5 ring-1 ring-white/12">
-              <svg width="88" height="88" viewBox="0 0 100 100">
-                <path d={trackMapData.d} fill="rgba(255,255,255,0.05)" stroke="rgba(255,255,255,0.28)" strokeWidth="1.6" strokeLinejoin="round" />
-                <circle cx={trackMapData.startXY[0]} cy={trackMapData.startXY[1]} r="2.5" fill="white" opacity="0.5" />
-                {hud?.laps.map((lapData, li) => {
-                  const lap = laps[li]
-                  if (!lap || lap.lat.length === 0) return null
-                  const idx = Math.min(lapData.lapIdx, lap.lat.length - 1)
-                  const [cx, cy] = trackMapData.toMapXY(lap.lat[idx], lap.lon[idx])
-                  return (
-                    <g key={lap.lapKey}>
-                      <circle cx={cx} cy={cy} r="4" fill={getLapColor(lap.colorIndex)} />
-                      <circle cx={cx} cy={cy} r="4" fill="none" stroke="white" strokeWidth="0.7" opacity="0.45" />
-                    </g>
-                  )
-                })}
-              </svg>
-            </div>
+            <svg width="130" height="130" viewBox="0 0 100 100">
+              <path d={trackMapData.d} fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.38)" strokeWidth="1.6" strokeLinejoin="round" />
+              <circle cx={trackMapData.startXY[0]} cy={trackMapData.startXY[1]} r="2.5" fill="white" opacity="0.5" />
+              {hud?.laps.map((lapData, li) => {
+                const lap = laps[li]
+                if (!lap || lap.lat.length === 0) return null
+                const idx = Math.min(lapData.lapIdx, lap.lat.length - 1)
+                const [cx, cy] = trackMapData.toMapXY(lap.lat[idx], lap.lon[idx])
+                return (
+                  <g key={lap.lapKey}>
+                    <circle cx={cx} cy={cy} r="4" fill={getLapColor(lap.colorIndex)} />
+                    <circle cx={cx} cy={cy} r="4" fill="none" stroke="white" strokeWidth="0.7" opacity="0.45" />
+                  </g>
+                )
+              })}
+            </svg>
           </div>
         )}
 
