@@ -460,12 +460,25 @@ export default function Replay3DViewer() {
         if (!group || !lap.timestamps.length) return
         const lapT = t + (lap.timestamps[0] - lapT0)
         const idx = bsearchNearest(lap.timestamps, lapT)
-        const pos = toWorld(lap.lat[idx], lap.lon[idx], lap.alt[idx], tf)
+
+        // Interpolate between adjacent GPS samples → smooth at any playback speed
+        const nIdx1 = Math.min(idx + 1, lap.lat.length - 1)
+        let lat: number, lon: number, alt: number
+        if (nIdx1 > idx) {
+          const t0 = lap.timestamps[idx], t1 = lap.timestamps[nIdx1]
+          const frac = t1 > t0 ? Math.max(0, Math.min(1, (lapT - t0) / (t1 - t0))) : 0
+          lat = lap.lat[idx] + (lap.lat[nIdx1] - lap.lat[idx]) * frac
+          lon = lap.lon[idx] + (lap.lon[nIdx1] - lap.lon[idx]) * frac
+          alt = lap.alt[idx] + (lap.alt[nIdx1] - lap.alt[idx]) * frac
+        } else {
+          lat = lap.lat[idx]; lon = lap.lon[idx]; alt = lap.alt[idx]
+        }
+        const pos = toWorld(lat, lon, alt, tf)
         group.position.copy(pos)
         group.position.y += 1.0
-        const nIdx = Math.min(idx + 6, lap.lat.length - 1)
-        if (nIdx > idx) {
-          const nPos = toWorld(lap.lat[nIdx], lap.lon[nIdx], lap.alt[nIdx], tf)
+        const dIdx = Math.min(idx + 6, lap.lat.length - 1)
+        if (dIdx > idx) {
+          const nPos = toWorld(lap.lat[dIdx], lap.lon[dIdx], lap.alt[dIdx], tf)
           const dir = nPos.clone().sub(pos)
           if (dir.lengthSq() > 0.001) group.rotation.y = Math.atan2(dir.x, dir.z)
         }
@@ -695,7 +708,7 @@ export default function Replay3DViewer() {
         <div className="relative h-5 px-3 pt-3">
           <div className="relative h-[3px] bg-white/12 rounded-full">
             <div className="absolute inset-y-0 left-0 bg-white/30 rounded-full transition-none" style={{ width: `${sliderPct}%` }} />
-            <div className="absolute top-1/2 w-2.5 h-2.5 bg-amber-400 rounded-full shadow-md shadow-amber-400/40 pointer-events-none"
+            <div className="absolute top-1/2 w-2.5 h-2.5 bg-primary rounded-full shadow-md pointer-events-none"
               style={{ left: `${sliderPct}%`, transform: 'translate(-50%, -50%)' }} />
           </div>
           {/* Transparent range input layered on top for native drag */}
@@ -710,30 +723,38 @@ export default function Replay3DViewer() {
           />
         </div>
         {/* Transport row */}
-        <div className="flex items-center justify-center gap-1.5 px-3 py-2">
+        <div className="flex items-center justify-center gap-2 px-3 py-2">
           {/* Skip to start */}
           <button
             onClick={() => { currentTimeRef.current = tMin; setCrosshairTime(tMin) }}
-            className="p-1.5 rounded-lg text-white/40 hover:text-white/80 hover:bg-white/8 transition-colors"
+            className="p-1.5 rounded-lg text-white/55 hover:text-white hover:bg-white/10 transition-colors"
+            title="Zum Anfang"
           >
             <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
               <rect x="1.5" y="2" width="2" height="10" rx="0.5" />
               <path d="M5 7L12 2.5v9L5 7z" />
             </svg>
           </button>
-          {/* Slower */}
-          <button
-            onClick={() => { const i = SPEEDS.indexOf(playbackSpeed); if (i > 0) setPlaybackSpeed(SPEEDS[i - 1]) }}
-            className="p-1.5 rounded-lg text-white/40 hover:text-white/80 hover:bg-white/8 transition-colors"
-          >
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M8 3L4 7l4 4M13 3L9 7l4 4" />
-            </svg>
-          </button>
-          {/* Play / Pause — amber accent */}
+
+          {/* Speed: − label + */}
+          <div className="flex items-center gap-0.5">
+            <button
+              onClick={() => { const i = SPEEDS.indexOf(playbackSpeed); if (i > 0) setPlaybackSpeed(SPEEDS[i - 1]) }}
+              disabled={SPEEDS.indexOf(playbackSpeed) === 0}
+              className="w-6 h-6 rounded text-white/70 hover:text-white hover:bg-white/10 transition-colors disabled:opacity-25 text-base font-bold flex items-center justify-center"
+            >−</button>
+            <span className="text-[11px] font-mono text-white/65 tabular-nums w-9 text-center">{playbackSpeed}x</span>
+            <button
+              onClick={() => { const i = SPEEDS.indexOf(playbackSpeed); if (i < SPEEDS.length - 1) setPlaybackSpeed(SPEEDS[i + 1]) }}
+              disabled={SPEEDS.indexOf(playbackSpeed) === SPEEDS.length - 1}
+              className="w-6 h-6 rounded text-white/70 hover:text-white hover:bg-white/10 transition-colors disabled:opacity-25 text-base font-bold flex items-center justify-center"
+            >+</button>
+          </div>
+
+          {/* Play / Pause */}
           <button
             onClick={togglePlay}
-            className="w-9 h-9 rounded-full bg-amber-400 hover:bg-amber-300 flex items-center justify-center text-neutral-900 shadow-lg shadow-amber-400/20 transition-colors mx-1"
+            className="w-9 h-9 rounded-full bg-primary hover:opacity-90 flex items-center justify-center text-primary-foreground shadow-lg transition-opacity mx-1"
           >
             {playing ? (
               <svg width="13" height="13" viewBox="0 0 12 12" fill="currentColor">
@@ -746,29 +767,21 @@ export default function Replay3DViewer() {
               </svg>
             )}
           </button>
-          {/* Faster */}
-          <button
-            onClick={() => { const i = SPEEDS.indexOf(playbackSpeed); if (i < SPEEDS.length - 1) setPlaybackSpeed(SPEEDS[i + 1]) }}
-            className="p-1.5 rounded-lg text-white/40 hover:text-white/80 hover:bg-white/8 transition-colors"
-          >
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M6 3l4 4-4 4M1 3l4 4-4 4" />
-            </svg>
-          </button>
+
           {/* Skip to end */}
           <button
             onClick={() => { currentTimeRef.current = tMax; setCrosshairTime(tMax) }}
-            className="p-1.5 rounded-lg text-white/40 hover:text-white/80 hover:bg-white/8 transition-colors"
+            className="p-1.5 rounded-lg text-white/55 hover:text-white hover:bg-white/10 transition-colors"
+            title="Zum Ende"
           >
             <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
               <rect x="10.5" y="2" width="2" height="10" rx="0.5" />
               <path d="M9 7L2 2.5v9L9 7z" />
             </svg>
           </button>
-          {/* Speed label */}
-          <span className="text-[10px] font-mono text-white/45 tabular-nums w-8 text-center ml-2">{playbackSpeed}x</span>
+
           {/* Elapsed time */}
-          <span className="text-[10px] font-mono text-white/45 tabular-nums ml-1">{formatTime(currentT)}</span>
+          <span className="text-[10px] font-mono text-white/50 tabular-nums ml-1">{formatTime(currentT)}</span>
         </div>
       </div>
     </div>
