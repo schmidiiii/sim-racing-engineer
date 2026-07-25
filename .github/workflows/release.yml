@@ -31,6 +31,19 @@ jobs:
       - name: Install frontend deps
         run: npm ci
 
+      - name: Read release notes
+        id: notes
+        shell: bash
+        run: |
+          FILE="release-notes/${{ github.ref_name }}.md"
+          if [ -f "$FILE" ]; then
+            echo "body<<EOF" >> $GITHUB_OUTPUT
+            cat "$FILE" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          else
+            echo "body=Siehe Commit-History für Details." >> $GITHUB_OUTPUT
+          fi
+
       - name: Build & publish release
         uses: tauri-apps/tauri-action@v0
         env:
@@ -40,9 +53,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: Sim Racing Engineer ${{ github.ref_name }}
-          releaseBody: |
-            ## Was ist neu
-            Siehe Commit-History für Details.
+          releaseBody: ${{ steps.notes.outputs.body }}
           releaseDraft: false
           prerelease: false
           updaterJsonPreferNsis: true
