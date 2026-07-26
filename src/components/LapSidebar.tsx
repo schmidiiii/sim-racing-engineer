@@ -169,27 +169,22 @@ function ConsistencyPanel() {
 
   return (
     <div className="shrink-0 border-t border-border px-3 py-1.5 bg-secondary/20">
-      <div className="flex items-center gap-2">
-        <p className={`text-[11px] font-bold tabular-nums shrink-0 ${scoreColor}`}>{consistency.toFixed(1)}%</p>
-        <div className="w-12 h-1 bg-secondary rounded-full overflow-hidden shrink-0">
+      <div className="flex items-center gap-3">
+        <p className={`text-xs font-bold tabular-nums shrink-0 ${scoreColor}`}>{consistency.toFixed(1)}%</p>
+        <div className="flex-1 h-1.5 bg-secondary rounded-full overflow-hidden">
           <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${consistency}%` }} />
         </div>
-        <div className="flex items-center gap-2 min-w-0 overflow-hidden">
-          <span className="text-[9px] text-muted-foreground/60 shrink-0">Best</span>
-          <span className="text-[10px] font-mono text-foreground tabular-nums shrink-0">{fmtTime(best)}</span>
-          <span className="text-[9px] text-muted-foreground/60 shrink-0">{t('lapSpread')}</span>
-          <span className="text-[10px] font-mono text-foreground tabular-nums shrink-0">+{spread.toFixed(3)}s</span>
-          <span className="text-[9px] text-muted-foreground/60 shrink-0">{t('idealLap')}</span>
-          {idealTime != null ? (
-            <>
-              <span className="text-[10px] font-mono text-foreground tabular-nums shrink-0">{fmtTime(idealTime)}</span>
+        <div className="flex items-center gap-2.5 shrink-0">
+          <span className="text-[10px] text-muted-foreground/60">Best <span className="text-foreground font-mono tabular-nums">{fmtTime(best)}</span></span>
+          <span className="text-[10px] text-muted-foreground/60">{t('lapSpread')} <span className="text-foreground font-mono tabular-nums">+{spread.toFixed(3)}s</span></span>
+          <span className="text-[10px] text-muted-foreground/60">{t('idealLap')} {idealTime != null ? (
+            <span className="text-foreground font-mono tabular-nums">
+              {fmtTime(idealTime)}
               {idealDelta != null && Math.abs(idealDelta) > 0.01 && (
-                <span className="text-[9px] font-mono text-sky-500 tabular-nums shrink-0">-{Math.abs(idealDelta).toFixed(3)}s</span>
+                <span className="text-sky-500 ml-1">-{Math.abs(idealDelta).toFixed(3)}s</span>
               )}
-            </>
-          ) : (
-            <span className="text-[10px] font-mono text-muted-foreground/40">–</span>
-          )}
+            </span>
+          ) : <span className="text-muted-foreground/40">–</span>}</span>
         </div>
       </div>
     </div>
