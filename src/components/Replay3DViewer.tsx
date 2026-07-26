@@ -179,6 +179,7 @@ export default function Replay3DViewer() {
   const carMeshesRef = useRef<THREE.Mesh[]>([])  // holds THREE.Group[] at runtime
   const cameraPosRef = useRef(new THREE.Vector3())
   const cameraTargetRef = useRef(new THREE.Vector3())
+  const cloudGroupsRef = useRef<Array<{group: THREE.Group; vx: number; vz: number}>>([]);
 
   // Detect open-wheel car for model selection
   const openWheelCar = useMemo(() => {
@@ -339,9 +340,9 @@ export default function Replay3DViewer() {
     const h = height || 400
 
     // Scene — colors adapt to light/dark mode
-    const skyCol  = isDark ? 0x1c1c1e : 0xffffff
-    const gndCol  = isDark ? 0x141416 : 0xe5e5e5
-    const roadCol = isDark ? 0x2a2a2e : 0x5a6070
+    const skyCol  = isDark ? 0x1a1e2a : 0x9ec8e8
+    const gndCol  = isDark ? 0x111612 : 0x5a7d3a
+    const roadCol = isDark ? 0x26262c : 0x383840
     const scene = new THREE.Scene()
     scene.background = new THREE.Color(skyCol)
     scene.fog = new THREE.Fog(skyCol, 300, 1200)
@@ -361,15 +362,6 @@ export default function Replay3DViewer() {
     sun.position.set(80, 200, 80)
     scene.add(sun)
 
-    // Subtle ground plane so cars cast a visual reference
-    const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(1200, 1200),
-      new THREE.MeshBasicMaterial({ color: gndCol }),
-    )
-    ground.rotation.x = -Math.PI / 2
-    ground.position.y = -0.05
-    scene.add(ground)
-
     // ── Track surface ──────────────────────────────────────────────────────
     const pLap = laps[0]
 
@@ -377,6 +369,77 @@ export default function Replay3DViewer() {
     const basePts: THREE.Vector3[] = []
     for (let i = 0; i < pLap.lat.length; i += step)
       basePts.push(toWorld(pLap.lat[i], pLap.lon[i], pLap.alt[i], tf))
+
+    // ── Elevation terrain grid ─────────────────────────────────────────────
+    // T_NEAR=20: any vertex within 20wu of track center → set to road height (flush, no float).
+    // T_FAR=60:  blend to IDW beyond that.
+    // Safety clamp ensures terrain ≤ closestY-0.12 in the entire near zone → no clipping.
+    const halfRoad = ROAD_WIDTH / 2
+    const T_NEAR = 20, T_FAR = 60
+    const terrainGeo = new THREE.PlaneGeometry(1600, 1600, 90, 90)
+    terrainGeo.rotateX(-Math.PI / 2)
+    const tPos = terrainGeo.attributes.position as THREE.BufferAttribute
+    const T_NEAR_SQ = T_NEAR * T_NEAR
+    for (let vi = 0; vi < tPos.count; vi++) {
+      const vx = tPos.getX(vi), vz = tPos.getZ(vi)
+      // j+=1: find true nearest road point — j+=2 could skip odd-index nearest → wrong closestY → clipping
+      let minD2 = Infinity, closestY = 0, minNearY = Infinity
+      for (let j = 0; j < basePts.length; j++) {
+        const dx = basePts[j].x - vx, dz = basePts[j].z - vz
+        const d2 = dx * dx + dz * dz
+        if (d2 < minD2) { minD2 = d2; closestY = basePts[j].y }
+        if (d2 < T_NEAR_SQ) minNearY = Math.min(minNearY, basePts[j].y)
+      }
+      // IDW with j+=2 is fine for smooth height (nearby jitter negligible)
+      let totalW = 0, weightedY = 0
+      for (let j = 0; j < basePts.length; j += 2) {
+        const dx = basePts[j].x - vx, dz = basePts[j].z - vz
+        const w = 1 / (dx * dx + dz * dz + 2000)
+        weightedY += basePts[j].y * w; totalW += w
+      }
+      const idwY = weightedY / totalW - 0.1
+      // Use lowest road Y within T_NEAR so terrain dips into valleys instead of floating above them
+      const floorY = (minNearY < Infinity ? minNearY : closestY) - 0.35
+      const minD   = Math.sqrt(minD2)
+      let finalY: number
+      if (minD <= T_NEAR) {
+        finalY = floorY
+      } else if (minD < T_FAR) {
+        const st = (minD - T_NEAR) / (T_FAR - T_NEAR)
+        finalY = Math.min(floorY * (1 - st) + idwY * st, floorY)
+      } else {
+        finalY = idwY
+      }
+      tPos.setY(vi, finalY)
+    }
+    tPos.needsUpdate = true
+    terrainGeo.computeVertexNormals()
+
+    // Per-vertex colour noise — breaks up the flat single-colour grass
+    const gndBase  = new THREE.Color(gndCol)
+    const gndAlt1  = new THREE.Color(isDark ? 0x1e2a18 : 0x3d5c22)   // darker/cooler
+    const gndAlt2  = new THREE.Color(isDark ? 0x0c110a : 0x728a3a)   // lighter/drier
+    const tCol = new Float32Array(tPos.count * 3)
+    for (let vi = 0; vi < tPos.count; vi++) {
+      const vx = tPos.getX(vi), vz = tPos.getZ(vi)
+      // Large-scale variation
+      const n1 = (
+        Math.sin(vx * 0.031 + vz * 0.027) * 0.40 +
+        Math.sin(vx * 0.019 - vz * 0.043) * 0.35 +
+        Math.sin((vx + vz) * 0.011)        * 0.25
+      ) * 0.5 + 0.5
+      // Mid-frequency detail
+      const n2 = (
+        Math.sin(vx * 0.071 + vz * 0.059) * 0.55 +
+        Math.sin(vx * 0.047 - vz * 0.083) * 0.45
+      ) * 0.5 + 0.5
+      const c = gndBase.clone()
+        .lerp(gndAlt1, n1 * 0.70)
+        .lerp(gndAlt2, n2 * 0.40)
+      tCol[vi * 3] = c.r; tCol[vi * 3 + 1] = c.g; tCol[vi * 3 + 2] = c.b
+    }
+    terrainGeo.setAttribute('color', new THREE.BufferAttribute(tCol, 3))
+    scene.add(new THREE.Mesh(terrainGeo, new THREE.MeshLambertMaterial({ vertexColors: true })))
 
     // Road surface
     scene.add(new THREE.Mesh(
@@ -412,6 +475,275 @@ export default function Replay3DViewer() {
       scene.add(new THREE.Mesh(buildRibbon(edgePts, 0.55, true), edgeMat))
     }
 
+    // ── Corner detection → curbs only at corners ───────────────────────────
+    // Compute smoothed signed curvature (XZ cross product of consecutive direction vectors)
+    const curvRaw = new Float32Array(basePts.length)
+    for (let i = 2; i < basePts.length - 2; i++) {
+      const d1 = new THREE.Vector3().subVectors(basePts[i], basePts[Math.max(0, i - 3)])
+      const d2 = new THREE.Vector3().subVectors(basePts[Math.min(basePts.length - 1, i + 3)], basePts[i])
+      const cross = d1.x * d2.z - d1.z * d2.x
+      const denom = d1.length() * d2.length()
+      curvRaw[i] = denom > 0.001 ? cross / denom : 0
+    }
+    const curvSm = new Float32Array(basePts.length)
+    for (let i = 0; i < basePts.length; i++) {
+      let sum = 0, cnt = 0
+      for (let k = Math.max(0, i - 7); k <= Math.min(basePts.length - 1, i + 7); k++) { sum += curvRaw[k]; cnt++ }
+      curvSm[i] = sum / cnt
+    }
+    const CURV_THR = 0.035
+    const corners2: { start: number; end: number; apex: number; side: number; curv: number }[] = []
+    let inC = false, cStart = 0, apexI = 0, apexV = 0
+    for (let i = 0; i < basePts.length; i++) {
+      if (Math.abs(curvSm[i]) > CURV_THR) {
+        if (!inC) { inC = true; cStart = i; apexI = i; apexV = 0 }
+        if (Math.abs(curvSm[i]) > apexV) { apexV = Math.abs(curvSm[i]); apexI = i }
+      } else if (inC) {
+        inC = false
+        if (i - cStart > 4) corners2.push({ start: cStart, end: i - 1, apex: apexI, side: Math.sign(curvSm[apexI]), curv: apexV })
+      }
+    }
+    // Helper: build alternating red/white curb from a slice of basePts, offset to one side
+    const curbRed = new THREE.MeshBasicMaterial({ color: isDark ? 0x991111 : 0xdd1111, side: THREE.DoubleSide })
+    const curbWht = new THREE.MeshBasicMaterial({ color: isDark ? 0xa8a8a8 : 0xffffff, side: THREE.DoubleSide })
+    const CURB_W = 1.2, CURB_STRIPE = 4.0
+    const addCurb = (pts: THREE.Vector3[], side: number) => {
+      if (pts.length < 2) return
+      const strip = pts.map((p, i) => {
+        const prev = pts[Math.max(0, i - 1)], next = pts[Math.min(pts.length - 1, i + 1)]
+        const tan = new THREE.Vector3().subVectors(next, prev).normalize()
+        const perp = new THREE.Vector3(-tan.z, 0, tan.x)
+        // 0.275 = half the edge-strip width so curb inner edge is flush with white strip outer edge
+        return p.clone().addScaledVector(perp, side * (halfW + 0.275 + CURB_W / 2)).setY(p.y + 0.09)
+      })
+      let dist = 0, ss = 0, ci = 0
+      for (let i = 1; i <= strip.length; i++) {
+        if (i < strip.length) dist += strip[i].distanceTo(strip[i - 1])
+        if (dist >= CURB_STRIPE || i === strip.length) {
+          const seg = strip.slice(ss, i + 1)
+          if (seg.length > 1) scene.add(new THREE.Mesh(buildRibbon(seg, CURB_W, false), ci % 2 === 0 ? curbRed : curbWht))
+          ss = i; dist = 0; ci++
+        }
+      }
+    }
+    const n = basePts.length
+    for (const c of corners2) {
+      const span = c.end - c.start
+      // Inner apex curb (inside of corner, centred on apex)
+      const aR = Math.max(5, Math.round(span * 0.28))
+      addCurb(basePts.slice(Math.max(0, c.apex - aR), Math.min(n, c.apex + aR + 1)), c.side)
+      // Outer entry curb (outside, at corner entry — starts 12 pts before corner, covers 45% of span)
+      const eR = Math.max(10, Math.round(span * 0.45))
+      addCurb(basePts.slice(Math.max(0, c.start - 12), Math.min(n, c.start + eR)), -c.side)
+      // Outer exit curb (outside, at corner exit — ends 12 pts after corner)
+      addCurb(basePts.slice(Math.max(0, c.end - eR), Math.min(n, c.end + 12)), -c.side)
+    }
+
+    // ── Gravel/sand runoff areas (outside of corners only) ────────────────
+    const RUNOFF_W    = 9.0
+    const RUNOFF_INNER = halfW + 0.275 + CURB_W + 0.4   // starts just past outer curb edge
+    // Stamp noise-based vertex colours onto a ribbon so sand doesn't look uniformly flat
+    const noiseRibbon = (geo: THREE.BufferGeometry, c1: THREE.Color, c2: THREE.Color, c3: THREE.Color) => {
+      const p = geo.attributes.position as THREE.BufferAttribute
+      const buf = new Float32Array(p.count * 3)
+      for (let i = 0; i < p.count; i++) {
+        const x = p.getX(i), z = p.getZ(i)
+        const n1 = (Math.sin(x * 0.11 + z * 0.09) + Math.sin(x * 0.07 - z * 0.13)) * 0.25 + 0.5
+        const n2 = (Math.sin(x * 0.23 + z * 0.19) + Math.sin(x * 0.17 - z * 0.29)) * 0.25 + 0.5
+        const c = c1.clone().lerp(c2, Math.max(0, Math.min(1, n1)) * 0.70)
+                            .lerp(c3, Math.max(0, Math.min(1, n2)) * 0.45)
+        buf[i * 3] = c.r; buf[i * 3 + 1] = c.g; buf[i * 3 + 2] = c.b
+      }
+      geo.setAttribute('color', new THREE.BufferAttribute(buf, 3))
+      return geo
+    }
+    const gravelC1 = new THREE.Color(isDark ? 0x3a3020 : 0xd4b86a)
+    const gravelC2 = new THREE.Color(isDark ? 0x22180e : 0xb88840)
+    const gravelC3 = new THREE.Color(isDark ? 0x46382a : 0xe8c87a)
+    const fringeC1 = new THREE.Color(isDark ? 0x28231a : 0xb89a50)
+    const fringeC2 = new THREE.Color(isDark ? 0x161008 : 0x907030)
+    const fringeC3 = new THREE.Color(isDark ? 0x342a1e : 0xcaaa60)
+    const gravelMat = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide })
+    const fringeMat = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide })
+    const addRunoff  = (pts: THREE.Vector3[], side: number) => {
+      if (pts.length < 2) return
+      const mkStrip = (pts: THREE.Vector3[], lateralDist: number, yOff: number) =>
+        pts.map((p, i) => {
+          const prev = pts[Math.max(0, i - 1)], next = pts[Math.min(pts.length - 1, i + 1)]
+          const tan  = new THREE.Vector3().subVectors(next, prev).normalize()
+          const perp = new THREE.Vector3(-tan.z, 0, tan.x)
+          return p.clone().addScaledVector(perp, side * lateralDist).setY(p.y + yOff)
+        })
+      // Main gravel — Y at terrain level (≈ p.y − 0.35) with tiny lift for no z-fight
+      scene.add(new THREE.Mesh(
+        noiseRibbon(buildRibbon(mkStrip(pts, RUNOFF_INNER + RUNOFF_W / 2, -0.32), RUNOFF_W, false), gravelC1, gravelC2, gravelC3), gravelMat))
+      // Blend fringe (darker sand-to-grass) at outer edge — softens the hard cutoff
+      scene.add(new THREE.Mesh(
+        noiseRibbon(buildRibbon(mkStrip(pts, RUNOFF_INNER + RUNOFF_W + 1.5, -0.34), 3.0, false), fringeC1, fringeC2, fringeC3), fringeMat))
+    }
+    const RUNOFF_CURV_THR = 0.09   // only at sharp corners (gentle bends stay clean)
+    for (const c of corners2) {
+      if (c.curv < RUNOFF_CURV_THR) continue
+      const span = c.end - c.start
+      const eR   = Math.max(10, Math.round(span * 0.45))
+      addRunoff(basePts.slice(Math.max(0, c.start - 12), Math.min(n, c.start + eR)), -c.side)
+      addRunoff(basePts.slice(Math.max(0, c.end - eR),   Math.min(n, c.end + 12)),   -c.side)
+    }
+
+    // ── Background mountain range — continuous connected ridge ─────────────
+    // Build two rings (main range + foothills) as single solid BufferGeometry each.
+    // Height profile = layered sine waves → natural ridgeline, no gaps between peaks.
+    const buildMtnRing = (innerR: number, outerR: number, segs: number,
+      hFn: (t: number) => number, color: number) => {
+      // Each segment point has 4 vertices: innerTop, innerBot, outerTop, outerBot
+      const pos = new Float32Array((segs + 1) * 4 * 3)
+      const idx: number[] = []
+      for (let i = 0; i <= segs; i++) {
+        const t = i / segs
+        const a = t * Math.PI * 2
+        const cx = Math.sin(a), cz = Math.cos(a)
+        const h = hFn(t), hOut = h * 0.55
+        const base = i * 4 * 3
+        // innerTop
+        pos[base]   = cx * innerR; pos[base+1] = h;   pos[base+2] = cz * innerR
+        // innerBot
+        pos[base+3] = cx * innerR; pos[base+4] = -20; pos[base+5] = cz * innerR
+        // outerTop
+        pos[base+6] = cx * outerR; pos[base+7] = hOut; pos[base+8] = cz * outerR
+        // outerBot
+        pos[base+9] = cx * outerR; pos[base+10]= -20; pos[base+11]= cz * outerR
+        if (i < segs) {
+          const A = i*4, B=A+1, C=A+2, D=A+3, E=(i+1)*4, F=E+1, G=E+2, H=E+3
+          idx.push(A,F,B, A,E,F)   // inner face (toward track)
+          idx.push(C,D,H, D,G,H)   // outer face (away from track)  — wait wrong
+          idx.push(A,C,G, A,G,E)   // top ridge
+        }
+      }
+      const geo = new THREE.BufferGeometry()
+      geo.setAttribute('position', new THREE.BufferAttribute(pos, 3))
+      geo.setIndex(idx); geo.computeVertexNormals()
+      scene.add(new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color, side: THREE.DoubleSide })))
+    }
+    // Main range — large connected ridge far away
+    buildMtnRing(1050, 1350, 140, t => Math.max(8,
+      110 + 100 * Math.sin(t * Math.PI * 2 * 5 + 0.7)
+          + 55  * Math.sin(t * Math.PI * 2 * 9 + 1.5)
+          + 30  * Math.sin(t * Math.PI * 2 * 13 + 0.3)
+          + 20  * Math.sin(t * Math.PI * 2 * 3  + 2.1)
+    ), 0x5e6e90)
+    // Foothills — closer, lower, slightly different hue
+    buildMtnRing(680, 920, 100, t => Math.max(5,
+      50 + 45 * Math.sin(t * Math.PI * 2 * 7 + 1.1)
+         + 25 * Math.sin(t * Math.PI * 2 * 12 + 0.6)
+         + 15 * Math.sin(t * Math.PI * 2 * 4  + 1.8)
+    ), 0x6a7a8c)
+
+    // ── Clouds ─────────────────────────────────────────────────────────────
+    // MeshBasicMaterial = unlit → stays white regardless of ambient intensity / dark mode
+    const cloudMat = new THREE.MeshBasicMaterial({ color: 0xf0f4ff, transparent: true, opacity: 0.72 })
+    const cloudR = (s: number) => { const x = Math.sin(s * 91.3 + 3.7) * 5471.2; return x - Math.floor(x) }
+    cloudGroupsRef.current = []
+    for (let c = 0; c < 14; c++) {
+      const angle  = cloudR(c) * Math.PI * 2
+      const dist   = 450 + cloudR(c + 10) * 350    // 450–800 → near mountain ring
+      const cloudY = 175 + cloudR(c + 20) * 110    // 175–285, above mountain peaks
+      const cx = Math.sin(angle) * dist, cz = Math.cos(angle) * dist
+      const mainR  = 28 + cloudR(c + 40) * 36       // half-width of base body
+
+      const cloudGroup = new THREE.Group()
+      cloudGroup.position.set(cx, 0, cz)
+
+      // Wide flat base body
+      const body = new THREE.Mesh(new THREE.SphereGeometry(mainR, 10, 6), cloudMat)
+      body.position.set(0, cloudY, 0)
+      body.scale.set(1.5, 0.22, 1.0)
+      cloudGroup.add(body)
+
+      // Puffy bumps rising from the top of the body
+      const numPuffs = 3 + Math.floor(cloudR(c + 30) * 3)
+      for (let b = 0; b < numPuffs; b++) {
+        const px = (cloudR(c * 7 + b) - 0.5) * mainR * 1.7
+        const pz = (cloudR(c * 7 + b + 1) - 0.5) * mainR * 0.6
+        const pr = mainR * (0.30 + cloudR(c * 7 + b + 2) * 0.22)
+        const puff = new THREE.Mesh(new THREE.SphereGeometry(pr, 8, 5), cloudMat)
+        puff.position.set(px, cloudY + mainR * 0.16, pz)
+        puff.scale.set(1.1, 0.48, 1.0)
+        cloudGroup.add(puff)
+      }
+
+      scene.add(cloudGroup)
+      const windAngle = 0.70 + cloudR(c + 50) * 0.30
+      const spd = 2.0 + cloudR(c + 60) * 2.5
+      cloudGroupsRef.current.push({ group: cloudGroup, vx: Math.cos(windAngle) * spd, vz: Math.sin(windAngle) * spd })
+    }
+
+    // ── Trees ─────────────────────────────────────────────────────────────
+    const seededRand = (seed: number) => { const x = Math.sin(seed + 1) * 10000; return x - Math.floor(x) }
+    const trunkMat = new THREE.MeshLambertMaterial({ color: isDark ? 0x130a04 : 0x5c3a1e })
+    const crownMats = (isDark
+      ? [0x0d1f0a, 0x101c0d, 0x0a1808, 0x121e0f, 0x0c1a09, 0x0f1c0c]
+      : [0x2d6a1e, 0x3d7a26, 0x4a8c30, 0x3b7322, 0x527d38, 0x245c18]
+    ).map(c => new THREE.MeshLambertMaterial({ color: c }))
+    const TREE_CLEAR = halfW + 20    // trees start well clear of road + runoff
+    const TREE_CLEAR_SQ = TREE_CLEAR * TREE_CLEAR
+    const tooClose = (px: number, pz: number): boolean => {
+      for (let j = 0; j < basePts.length; j++) {
+        const dx = basePts[j].x - px, dz = basePts[j].z - pz
+        if (dx * dx + dz * dz < TREE_CLEAR_SQ) return true
+      }
+      return false
+    }
+    let treeIdx = 0
+    for (let i = 0; i < basePts.length; i += 5) {
+      for (const side of [-1, 1]) {
+        if (seededRand(i * 17 + side * 5) < 0.42) continue
+        const prev = basePts[Math.max(0, i - 1)]
+        const next = basePts[Math.min(basePts.length - 1, i + 1)]
+        const tan  = new THREE.Vector3().subVectors(next, prev).normalize()
+        const perp = new THREE.Vector3(-tan.z, 0, tan.x)
+        const lateral = 16 + seededRand(i * 11 + side * 7) * 30
+        const fwdJitter = (seededRand(i * 23 + side) - 0.5) * 7
+        const treeH = 3.5 + seededRand(i * 19 + side * 3) * 5.5
+        const pos = basePts[i].clone().addScaledVector(perp, side * lateral).addScaledVector(tan, fwdJitter)
+        if (tooClose(pos.x, pos.z)) continue
+        // Ground tree with exact terrain-grid formula at the tree's world position
+        let tMD2 = Infinity, tCY = 0, tMNY = Infinity
+        for (let j = 0; j < basePts.length; j++) {
+          const dx2 = basePts[j].x - pos.x, dz2 = basePts[j].z - pos.z
+          const d2 = dx2 * dx2 + dz2 * dz2
+          if (d2 < tMD2) { tMD2 = d2; tCY = basePts[j].y }
+          if (d2 < T_NEAR_SQ) tMNY = Math.min(tMNY, basePts[j].y)
+        }
+        const tFloor = (tMNY < Infinity ? tMNY : tCY) - 0.35
+        const tMinD  = Math.sqrt(tMD2)
+        if (tMinD <= T_NEAR) {
+          pos.y = tFloor
+        } else {
+          let tw = 0, wy = 0
+          for (let j = 0; j < basePts.length; j += 2) {
+            const dx2 = basePts[j].x - pos.x, dz2 = basePts[j].z - pos.z
+            const w = 1 / (dx2 * dx2 + dz2 * dz2 + 2000)
+            wy += basePts[j].y * w; tw += w
+          }
+          const tIdwY = wy / tw - 0.1
+          if (tMinD < T_FAR) {
+            const st = (tMinD - T_NEAR) / (T_FAR - T_NEAR)
+            pos.y = Math.min(tFloor * (1 - st) + tIdwY * st, tFloor)
+          } else {
+            pos.y = tIdwY
+          }
+        }
+        const trunkH = treeH * 0.32
+        const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.22, trunkH, 5), trunkMat)
+        trunk.position.set(pos.x, pos.y + trunkH / 2, pos.z)
+        scene.add(trunk)
+        const crown = new THREE.Mesh(new THREE.ConeGeometry(treeH * 0.40, treeH * 0.78, 6), crownMats[treeIdx % crownMats.length])
+        crown.position.set(pos.x, pos.y + trunkH + treeH * 0.32, pos.z)
+        scene.add(crown)
+        treeIdx++
+      }
+    }
+
     // Car placeholder groups (shown immediately while OBJ loads)
     const carGroups: THREE.Group[] = laps.map(() => {
       const g = buildPlaceholderCar()
@@ -444,6 +776,7 @@ export default function Replay3DViewer() {
         })
       })
       .catch(() => { /* OBJ failed to load — keep placeholder */ })
+
 
     // Always start from the beginning when a new scene is built (new file loaded)
     const tInit = pLap.timestamps[0]
@@ -707,6 +1040,16 @@ export default function Replay3DViewer() {
         camera.lookAt(cameraTargetRef.current)
       }
 
+      // Drift clouds slowly in wind direction; wrap at terrain boundary
+      for (const cd of cloudGroupsRef.current) {
+        cd.group.position.x += cd.vx * dt
+        cd.group.position.z += cd.vz * dt
+        if (cd.group.position.x >  1050) cd.group.position.x -= 2100
+        if (cd.group.position.x < -1050) cd.group.position.x += 2100
+        if (cd.group.position.z >  1050) cd.group.position.z -= 2100
+        if (cd.group.position.z < -1050) cd.group.position.z += 2100
+      }
+
       renderer.render(scene, camera)
     }
     rafRef.current = requestAnimationFrame(animate)
@@ -794,7 +1137,7 @@ export default function Replay3DViewer() {
     <div className="absolute inset-0 flex flex-col overflow-hidden">
 
       {/* Three.js canvas area — bg prevents flash before canvas mounts */}
-      <div ref={mountRef} className="flex-1 min-h-0 relative overflow-hidden" style={{ backgroundColor: isDark ? '#1c1c1e' : '#ffffff' }}>
+      <div ref={mountRef} className="flex-1 min-h-0 relative overflow-hidden" style={{ backgroundColor: isDark ? '#1a1e2a' : '#9ec8e8' }}>
 
         {/* Camera mode buttons — top-right */}
         <div className="absolute top-2 right-2 flex gap-1 select-none">
@@ -813,7 +1156,7 @@ export default function Replay3DViewer() {
         {/* Track minimap — top-left, bare SVG on canvas */}
         {trackMapData && (
           <div className="absolute top-2 left-2 pointer-events-none select-none">
-            <svg width="90" height="90" viewBox="0 0 100 100">
+            <svg width="120" height="120" viewBox="0 0 100 100">
               <path d={trackMapData.d}
                 fill={isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)'}
                 stroke={isDark ? 'rgba(255,255,255,0.40)' : 'rgba(0,0,0,0.50)'}
@@ -962,6 +1305,7 @@ export default function Replay3DViewer() {
               const pct = Number(e.target.value) / 1000
               const t = tMin + pct * lapDuration
               currentTimeRef.current = t
+              setCurrentT(t)
               setCrosshairTime(t)
             }}
             className="absolute inset-0 w-full opacity-0 cursor-pointer"
