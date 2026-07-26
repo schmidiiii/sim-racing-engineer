@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { useT } from '@/lib/i18n'
 import { useSessionStore, getLapColor, type Session } from '@/store/session'
 
 type SetupTree = Record<string, Record<string, Record<string, string>>>
@@ -152,6 +153,7 @@ function GroupCard({
 }
 
 export default function SetupPanel() {
+  const t = useT()
   const { sessions, activeSessionId } = useSessionStore()
   const [setups, setSetups] = useState<(SetupTree | null)[]>([])
   const [loading, setLoading] = useState(false)
@@ -176,7 +178,7 @@ export default function SetupPanel() {
   if (orderedSessions.length === 0) {
     return (
       <div className="flex-1 flex items-center justify-center">
-        <p className="text-sm text-muted-foreground">No session loaded</p>
+        <p className="text-sm text-muted-foreground">{t('noSessionLoaded')}</p>
       </div>
     )
   }

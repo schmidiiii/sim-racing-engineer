@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { useSessionStore, parseLapKey, getLapColor } from '@/store/session'
 import TrackMap, { type MapChannel } from '@/components/TrackMap'
 import Replay3DViewer from '@/components/Replay3DViewer'
+import { useT } from '@/lib/i18n'
 
 interface LapChannelData {
   lap_number: number
@@ -71,6 +72,7 @@ type ActiveView = 'traces' | MapChannel | '3D'
 const MAP_CHANNELS: MapChannel[] = ['Speed', 'Throttle', 'Brake', 'Gear']
 
 export default function SidebarTrackMap() {
+  const t = useT()
   const { sessions, selectedLapKeys, crosshairTime, zoomDomain, sidebarMapExpanded, setSidebarMapExpanded } = useSessionStore()
   const [activeView, setActiveView] = useState<ActiveView>('3D')
   const [laps, setLaps] = useState<LapGPS[]>([])
@@ -305,7 +307,7 @@ export default function SidebarTrackMap() {
               </div>
             ) : laps.length === 0 ? (
               <div className="absolute inset-0 flex items-center justify-center px-4 text-center">
-                <p className="text-xs text-muted-foreground">Select laps with GPS data</p>
+                <p className="text-xs text-muted-foreground">{t('needGps')}</p>
               </div>
             ) : polylines ? (
               <>

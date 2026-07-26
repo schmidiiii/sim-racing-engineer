@@ -3,13 +3,13 @@
 @tailwind utilities;
 
 @layer base {
-  /* Light mode: EOS palette
-     bg     = 20% Light green #E0EEF0
+  /* Light mode palette
+     bg     = 20% light green #E0EEF0
      card   = white #FFFFFF
-     border = 10% EOS black #EAE7E8
-     text   = EOS black #31171F
-     muted  = 60% EOS black #837378
-     primary= EOS red #EA0029
+     border = 10% black #EAE7E8
+     text   = black #31171F
+     muted  = 60% black #837378
+     primary= red #EA0029
   */
   :root {
     --background: 188 28% 91%;

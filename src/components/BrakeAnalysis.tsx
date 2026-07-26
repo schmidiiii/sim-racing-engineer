@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { speedFromKph, speedUnit } from '@/lib/units'
 import { useSessionStore, parseLapKey, getLapColor } from '@/store/session'
 import { useT } from '@/lib/i18n'
 
@@ -93,7 +94,7 @@ function project(lat: number, lon: number, tf: ReturnType<typeof computeTransfor
 
 export default function BrakeAnalysis() {
   const t = useT()
-  const { sessions, selectedLapKeys } = useSessionStore()
+  const { sessions, selectedLapKeys, units } = useSessionStore()
   const [lapDataArr, setLapDataArr] = useState<LapData[]>([])
   const [loading, setLoading] = useState(false)
 
@@ -305,7 +306,7 @@ export default function BrakeAnalysis() {
                                   {fmtM(e.entryDist)}
                                 </span>
                                 <span className="text-muted-foreground/50">
-                                  {e.speedAtEntry.toFixed(0)}&thinsp;km/h
+                                  {speedFromKph(e.speedAtEntry, units).toFixed(0)}&thinsp;{speedUnit(units)}
                                 </span>
                               </span>
                             ) : (

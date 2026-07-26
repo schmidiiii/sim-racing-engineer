@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useSessionStore, parseLapKey, getLapColor } from '@/store/session'
+import { useT } from '@/lib/i18n'
+import { speedFromMps, speedUnit, tempFromC, tempUnit, fuelFromL, fuelUnit, speedFromKph, type UnitSystem } from '@/lib/units'
 import * as THREE from 'three'
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js'
 
 const ALT_SCALE = 0.2 // world units per metre of altitude
 const MAX_TRACK_PTS = 1500
 const ROAD_WIDTH = 10  // world units (visible road surface width)
-const LINE_WIDTH  = 0.35 // per-lap driving line width (world units)
+const LINE_WIDTH  = 0.12 // per-lap driving line width (world units)
 const SPEEDS = [0.25, 0.5, 1, 2, 4]
 const TRACE_SAMPLES = 220 // rolling telemetry history length (frames)
 
@@ -48,9 +50,9 @@ const SKY_LIGHT = 0x9ec8e8
 const SKY_DARK  = 0x1a1e2a
 
 // ── Track / weather conditions ───────────────────────────────────────────────
-const SKIES_TXT   = ['Clear', 'Partly cloudy', 'Mostly cloudy', 'Overcast']
-const WETNESS_TXT = ['—', 'Dry', 'Mostly dry', 'Very lightly wet', 'Lightly wet',
-                     'Moderately wet', 'Very wet', 'Extremely wet']
+const SKIES_KEYS  = ['skyClear', 'skyPartly', 'skyMostly', 'skyOvercast'] as const
+const WETNESS_KEYS = ['wetDry', 'wetDry', 'wetMostlyDry', 'wetVeryLight', 'wetLight',
+                      'wetModerate', 'wetVery', 'wetExtreme'] as const
 const COMPASS     = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
 
 interface TrackConditions {
@@ -506,8 +508,10 @@ function addCarLights(
   tailGeo: THREE.BufferGeometry | null,
 ): CarLights {
   const size = box.getSize(new THREE.Vector3())
-  const mat = new THREE.MeshBasicMaterial({ color: BRAKE_OFF })
-  // Lenses cut from the bodywork beat anything stuck on top of it
+  // DoubleSide: the band's winding follows the panel it was probed from, so it
+  // must not depend on facing the camera the 'right' way round
+  const mat = new THREE.MeshBasicMaterial({ color: BRAKE_OFF, side: THREE.DoubleSide })
+  // Lenses built onto the bodywork beat anything stuck on top of it
   if (tailGeo) {
     parent.add(new THREE.Mesh(tailGeo, mat))
     return { mat, braking: false }
@@ -618,47 +622,70 @@ function shadeDarkParts(model: THREE.Object3D, box: THREE.Box3): Set<THREE.Mesh>
   return dark
 }
 
-// Unlike the front, the model has no separate tail-light lenses — a ray at the
-// back hits body panel, not the glazing. So the lamp is cut out of the bodywork
-// itself: every rear-facing triangle in the tail-light corner becomes its own
-// mesh, which then follows the car's curvature instead of hovering over it as a
-// flat block did. Returns shared geometry; each lap gets its own material.
-function extractTailLights(model: THREE.Object3D, box: THREE.Box3, skip: Set<THREE.Mesh>): THREE.BufferGeometry | null {
+// A real 911 tail light is a clean narrow band across the tail, so that is what
+// gets built: the bodywork is probed at even steps across the width and the hits
+// become a smooth strip lying on the panel. Cutting the car's own triangles out
+// instead followed the shape but left ragged, blotchy edges wherever the zone
+// sliced through them. The band ends by itself where the panel turns into the
+// flank, so its width needs no hand-tuning.
+function buildTailLightBand(model: THREE.Object3D, box: THREE.Box3, skip: Set<THREE.Mesh>): THREE.BufferGeometry | null {
   const size = box.getSize(new THREE.Vector3())
-  // Kept shallow on purpose: reaching further forward drags the patch around the
-  // whole rear wing, which read as a big smear rather than a lamp
-  const zMax = box.min.z + size.z * 0.05
-  const xMin = size.x * 0.26, xMax = size.x * 0.52
-  const yMin = box.min.y + size.y * 0.42, yMax = box.min.y + size.y * 0.50
+  const yMid = box.min.y + size.y * 0.46
+  const xReach = size.x * 0.48
+  const STEPS = 72
+  // Like the real car: chunky lamp units out on the corners, joined by a much
+  // thinner strip across the middle, with a smooth transition between the two
+  const H_OUTER = size.y * 0.024
+  const H_INNER = size.y * 0.008
+  const halfHAt = (x: number) => {
+    const t = Math.min(1, Math.max(0, (Math.abs(x) / xReach - 0.42) / 0.28))
+    return H_INNER + (H_OUTER - H_INNER) * (t * t * (3 - 2 * t))
+  }
 
-  const out: number[] = []
-  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3()
-  const e1 = new THREE.Vector3(), e2 = new THREE.Vector3()
-  const n = new THREE.Vector3(), ctr = new THREE.Vector3()
-
+  const bodies: THREE.Mesh[] = []
   model.traverse(o => {
     const m = o as THREE.Mesh
-    if (!m.isMesh || m.userData.isWheel || skip.has(m)) return   // never the wing or the glass
-    m.updateWorldMatrix(true, false)
-    const pos = m.geometry.attributes.position as THREE.BufferAttribute
-    const index = m.geometry.index
-    const count = index ? index.count : pos.count
-    for (let i = 0; i < count; i += 3) {
-      const i0 = index ? index.getX(i) : i
-      const i1 = index ? index.getX(i + 1) : i + 1
-      const i2 = index ? index.getX(i + 2) : i + 2
-      a.fromBufferAttribute(pos, i0).applyMatrix4(m.matrixWorld)
-      b.fromBufferAttribute(pos, i1).applyMatrix4(m.matrixWorld)
-      c.fromBufferAttribute(pos, i2).applyMatrix4(m.matrixWorld)
-      ctr.copy(a).add(b).add(c).multiplyScalar(1 / 3)
-      const ax = Math.abs(ctr.x)
-      if (ctr.z > zMax || ax < xMin || ax > xMax || ctr.y < yMin || ctr.y > yMax) continue
-      n.copy(e1.subVectors(b, a)).cross(e2.subVectors(c, a)).normalize()
-      if (-n.z < 0.35) continue     // inward and side-facing triangles aren't lenses
-      // Lifted off the paint by a hair so it can't z-fight with the body
-      for (const v of [a, b, c]) out.push(v.x + n.x * 0.004, v.y + n.y * 0.004, v.z + n.z * 0.004)
-    }
+    if (m.isMesh && !m.userData.isWheel && !skip.has(m)) bodies.push(m)
   })
+  if (!bodies.length) return null
+
+  const ray = new THREE.Raycaster()
+  const back = new THREE.Vector3(0, 0, 1)
+  const normalMat = new THREE.Matrix3()
+  // One probe: where does the panel sit at this x/y, and which way does it face?
+  const probe = (x: number, y: number) => {
+    ray.set(new THREE.Vector3(x, y, box.min.z - 1), back)
+    const hit = ray.intersectObjects(bodies, true)[0]
+    if (!hit?.face) return null
+    const n = hit.face.normal.clone()
+      .applyNormalMatrix(normalMat.getNormalMatrix(hit.object.matrixWorld)).normalize()
+    if (n.dot(back) > 0) n.negate()
+    if (-n.z < 0.45) return null           // panel has turned into the flank
+    return hit.point.clone().addScaledVector(n, 0.012)
+  }
+
+  const out: number[] = []
+  let prev: { top: THREE.Vector3; bot: THREE.Vector3 } | null = null
+  for (let i = 0; i <= STEPS; i++) {
+    const x = -xReach + (2 * xReach * i) / STEPS
+    const halfH = halfHAt(x)
+    const top = probe(x, yMid + halfH)
+    const bot = probe(x, yMid - halfH)
+    // One hit is enough: a crease can swallow the upper or lower probe, and
+    // dropping the whole column there would tear a hole in the middle of the band
+    let cur: { top: THREE.Vector3; bot: THREE.Vector3 } | null = null
+    if (top && bot) cur = { top, bot }
+    else if (top) cur = { top, bot: new THREE.Vector3(x, yMid - halfH, top.z) }
+    else if (bot) cur = { top: new THREE.Vector3(x, yMid + halfH, bot.z), bot }
+    if (prev && cur) {
+      // Two triangles bridging this column and the previous one. Wound so the
+      // face normal points back out of the car — the other way round the strip
+      // is culled and simply doesn't show from behind.
+      out.push(prev.top.x, prev.top.y, prev.top.z, cur.bot.x, cur.bot.y, cur.bot.z, prev.bot.x, prev.bot.y, prev.bot.z)
+      out.push(prev.top.x, prev.top.y, prev.top.z, cur.top.x, cur.top.y, cur.top.z, cur.bot.x, cur.bot.y, cur.bot.z)
+    }
+    prev = cur
+  }
   if (out.length < 9) return null
   const geo = new THREE.BufferGeometry()
   geo.setAttribute('position', new THREE.Float32BufferAttribute(out, 3))
@@ -736,7 +763,8 @@ function WeatherIcon({ kind, color }: { kind: 'sun' | 'partly' | 'cloud' | 'rain
 }
 
 export default function Replay3DViewer() {
-  const { sessions, selectedLapKeys, crosshairTime, setCrosshairTime } = useSessionStore()
+  const t = useT()
+  const { sessions, selectedLapKeys, crosshairTime, setCrosshairTime, units } = useSessionStore()
   const mountRef = useRef<HTMLDivElement>(null)
   const rafRef = useRef(0)
   const carMeshesRef = useRef<THREE.Mesh[]>([])  // holds THREE.Group[] at runtime
@@ -779,6 +807,8 @@ export default function Replay3DViewer() {
   const crosshairRef = useRef<number | null>(null)
   const cameraModeRef = useRef<'chase' | 'cockpit' | 'front' | 'tv'>('chase')
   const zoomRef = useRef(1)   // mouse wheel: >1 pulls back, <1 moves in
+  const followIdxRef = useRef(0)
+  const unitsRef = useRef<UnitSystem>('metric')   // read by the animation loop
 
   const [laps, setLaps] = useState<LapReplayData[]>([])
   const [loading, setLoading] = useState(false)
@@ -792,6 +822,8 @@ export default function Replay3DViewer() {
   const [hudScale, setHudScale] = useState(1)
   const [conditions, setConditions] = useState<TrackConditions | null>(null)
   const [weatherOpen, setWeatherOpen] = useState(true)
+  // Which lap the camera follows — index into `laps`, 0 (the fastest) by default
+  const [followIdx, setFollowIdx] = useState(0)
 
   const hudSpeedRefs  = useRef<(HTMLSpanElement  | null)[]>([])
   const hudGearRefs   = useRef<(HTMLSpanElement  | null)[]>([])
@@ -848,6 +880,10 @@ export default function Replay3DViewer() {
   }, [laps])
 
   useEffect(() => { cameraModeRef.current = cameraMode }, [cameraMode])
+  useEffect(() => { followIdxRef.current = followIdx }, [followIdx])
+  useEffect(() => { unitsRef.current = units }, [units])
+  // A new lap selection resets the camera to the first (fastest) lap
+  useEffect(() => { setFollowIdx(0); followIdxRef.current = 0 }, [laps])
   useEffect(() => {
     const obs = new MutationObserver(() =>
       setIsDark(document.documentElement.classList.contains('dark'))
@@ -861,7 +897,10 @@ export default function Replay3DViewer() {
 
   // ── Data fetch ─────────────────────────────────────────────────────────────
   useEffect(() => {
-    if (selectedLapKeys.length === 0 || sessions.length === 0) { setLaps([]); return }
+    // setLoading(false) matters here: bailing out while an earlier fetch was still
+    // running used to leave `loading` stuck on, and the loading branch renders
+    // before the empty-selection one — so the viewer sat on "Loading 3D data…"
+    if (selectedLapKeys.length === 0 || sessions.length === 0) { setLaps([]); setLoading(false); return }
     setLoading(true)
     const CHANNELS = ['Lat', 'Lon', 'Alt', 'Speed', 'Gear', 'Throttle', 'Brake', 'SteeringWheelAngle', 'FuelLevel'] as const
     // Toggling laps quickly leaves several fetches in flight — without this an
@@ -908,7 +947,10 @@ export default function Replay3DViewer() {
       if (cancelled) return   // a newer selection is already fetching
       setLaps(out)
       setLoading(false)
-    })()
+    })().catch(() => {
+      // Anything unexpected must still clear the flag, or the viewer is stuck
+      if (!cancelled) { setLaps([]); setLoading(false) }
+    })
     return () => { cancelled = true }
   }, [selectedLapKeys.join(','), sessions.length])
 
@@ -1391,7 +1433,7 @@ export default function Replay3DViewer() {
         const darkParts = shadeDarkParts(baseModel, carBox)
         // Closed-wheel car: carve the tail lights out of the bodywork. The
         // formula car has no such panel, so it keeps the built lamp.
-        const tailGeo = openWheelCar ? null : extractTailLights(baseModel, carBox, darkParts)
+        const tailGeo = openWheelCar ? null : buildTailLightBand(baseModel, carBox, darkParts)
         // Raycast the lamp seats once — same for every lap's copy of the car
         const lampSpots = computeLampSpots(baseModel, carBox, openWheelCar)
 
@@ -1444,7 +1486,6 @@ export default function Replay3DViewer() {
     ro.observe(mount)
 
     // Rolling telemetry buffers — one per lap, reset with each scene
-    const traceBuffers: { thr: number[]; brk: number[] }[] = laps.map(() => ({ thr: [], brk: [] }))
 
     // TV cam — 16 trackside positions, close to the action
     const TV_CAM_COUNT = 16
@@ -1569,7 +1610,7 @@ export default function Replay3DViewer() {
         }
 
         // Direct DOM HUD updates — bypasses React virtual DOM
-        const speed  = Math.round((lap.speed[idx] ?? 0) * 3.6)
+        const speed  = Math.round(speedFromMps(lap.speed[idx] ?? 0, unitsRef.current))
         const gear   = Math.round(lap.gear[idx] ?? 1)
         const thr    = Math.round((lap.throttle[idx] ?? 0) * 100)
         const brk    = Math.round((lap.brake[idx] ?? 0) * 100)
@@ -1585,7 +1626,8 @@ export default function Replay3DViewer() {
         const degEl   = hudDegRefs.current[li];
         if (degEl) degEl.textContent = `${Math.abs(stDeg)}°${stDeg > 1 ? 'L' : stDeg < -1 ? 'R' : ''}`
         const fuelEl  = hudFuelRefs.current[li]
-        if (fuelEl && lap.fuel.length) fuelEl.textContent = `${(lap.fuel[Math.min(idx, lap.fuel.length - 1)] ?? 0).toFixed(1)} L`
+        if (fuelEl && lap.fuel.length) fuelEl.textContent =
+          `${fuelFromL(lap.fuel[Math.min(idx, lap.fuel.length - 1)] ?? 0, unitsRef.current).toFixed(1)} ${fuelUnit(unitsRef.current)}`
 
         // Positional delta (lap i vs lap 0)
         if (li > 0 && pLap.lat.length > 1) {
@@ -1610,45 +1652,46 @@ export default function Replay3DViewer() {
           dot.setAttribute('cy', my.toFixed(1))
         }
 
-        // Rolling telemetry trace — only advance when playing, freeze on pause
-        const buf = traceBuffers[li]
-        if (playingRef.current) {
-          buf.thr.push(thr)
-          buf.brk.push(brk)
-          if (buf.thr.length > TRACE_SAMPLES) { buf.thr.shift(); buf.brk.shift() }
-        }
+        // Telemetry trace — read straight out of the lap data for the window that
+        // ends at the current position. It used to be a buffer that only grew
+        // while playing, so scrubbing left the trace frozen even though the car
+        // moved. Reading the samples means scrubbing (and going backwards) shows
+        // the trace up to wherever you are.
         const canvas = hudTraceRefs.current[li]
         if (canvas) {
           const ctx = canvas.getContext('2d')
           if (ctx) {
             const W = canvas.width, H = canvas.height
-            const n = buf.thr.length
+            const last = Math.min(idx, lap.throttle.length - 1, lap.brake.length - 1)
+            const from = Math.max(0, last - TRACE_SAMPLES + 1)
+            const n = last - from + 1
             ctx.clearRect(0, 0, W, H)
-            // Draw filled area + stroke for each channel
-            const drawChannel = (data: number[], fillColor: string, strokeColor: string) => {
+            // Draw filled area + stroke for each channel. Samples are 0–1 ratios.
+            const drawChannel = (src: number[], fillColor: string, strokeColor: string) => {
               if (n < 2) return
-              // Newest sample always anchored to right edge; trace grows left as buffer fills
+              // Newest sample always anchored to right edge; trace grows left at lap start
               const xOf = (i: number) => ((TRACE_SAMPLES - n + i) / TRACE_SAMPLES) * W
-              const xStart = xOf(0), xEnd = xOf(n - 1)
-              ctx.beginPath()
-              ctx.moveTo(xStart, H)
-              for (let i = 0; i < n; i++) {
-                ctx.lineTo(xOf(i), H - (data[i] / 100) * (H - 2) - 1)
+              const yOf = (i: number) => {
+                const v = Math.max(0, Math.min(1, src[from + i] ?? 0))
+                return H - v * (H - 2) - 1
               }
-              ctx.lineTo(xEnd, H)
+              ctx.beginPath()
+              ctx.moveTo(xOf(0), H)
+              for (let i = 0; i < n; i++) ctx.lineTo(xOf(i), yOf(i))
+              ctx.lineTo(xOf(n - 1), H)
               ctx.closePath()
               ctx.fillStyle = fillColor
               ctx.fill()
               ctx.beginPath()
               ctx.strokeStyle = strokeColor; ctx.lineWidth = 1.5; ctx.lineJoin = 'round'
               for (let i = 0; i < n; i++) {
-                const x = xOf(i), y = H - (data[i] / 100) * (H - 2) - 1
+                const x = xOf(i), y = yOf(i)
                 i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)
               }
               ctx.stroke()
             }
-            drawChannel(buf.brk, 'rgba(239,68,68,0.28)', '#ef4444')
-            drawChannel(buf.thr, 'rgba(34,197,94,0.28)', '#22c55e')
+            drawChannel(lap.brake, 'rgba(239,68,68,0.28)', '#ef4444')
+            drawChannel(lap.throttle, 'rgba(34,197,94,0.28)', '#22c55e')
           }
         }
       })
@@ -1657,7 +1700,8 @@ export default function Replay3DViewer() {
       if (frame % 9 === 0) setCurrentT(t)
 
       // Camera — three modes, all frame-rate-independent
-      const car0 = carGroups[0]
+      // Camera follows whichever lap is selected in the HUD strip, first by default
+      const car0 = carGroups[followIdxRef.current] ?? carGroups[0]
       if (car0) {
         const ry  = car0.rotation.y
         const sy  = Math.sin(ry), cy2 = Math.cos(ry)
@@ -2017,7 +2061,7 @@ export default function Replay3DViewer() {
   if (loading) {
     return (
       <div className="absolute inset-0 flex items-center justify-center bg-background">
-        <p className="text-xs text-muted-foreground">Loading 3D data…</p>
+        <p className="text-xs text-muted-foreground">{t('loading3d')}</p>
       </div>
     )
   }
@@ -2025,7 +2069,7 @@ export default function Replay3DViewer() {
   if (laps.length === 0) {
     return (
       <div className="absolute inset-0 flex items-center justify-center bg-background px-4 text-center">
-        <p className="text-xs text-muted-foreground">Select laps with GPS data to view 3D replay</p>
+        <p className="text-xs text-muted-foreground">{t('need3dGps')}</p>
       </div>
     )
   }
@@ -2054,24 +2098,24 @@ export default function Replay3DViewer() {
         {conditions && (() => {
           const c = conditions
           const rain = c.precip ?? 0
-          const sky  = c.skies != null ? (SKIES_TXT[c.skies] ?? null) : c.weatherType
+          const sky  = c.skies != null ? (SKIES_KEYS[c.skies] ? t(SKIES_KEYS[c.skies]) : null) : c.weatherType
           const kind: 'sun' | 'partly' | 'cloud' | 'rain' =
             rain > 1 ? 'rain' : c.skies == null ? 'partly' : c.skies === 0 ? 'sun' : c.skies === 1 ? 'partly' : 'cloud'
 
           // Secondary readouts — only what the session actually reports
           const rows: [string, string][] = []
-          if (c.humidity != null) rows.push(['Humidity', `${Math.round(c.humidity)}%`])
+          if (c.humidity != null) rows.push([t('wHumidity'), `${Math.round(c.humidity)}%`])
           if (c.windVel  != null) {
             const dir = c.windDir != null
               ? ` ${COMPASS[Math.round((c.windDir % (Math.PI * 2)) / (Math.PI * 2) * 8) % 8]}`
               : ''
-            rows.push(['Wind', `${(c.windVel * 3.6).toFixed(1)} km/h${dir}`])
+            rows.push([t('wWind'), `${speedFromKph(c.windVel * 3.6, units).toFixed(1)} ${speedUnit(units)}${dir}`])
           }
-          if (c.precip != null) rows.push(['Rain', `${Math.round(c.precip)}%`])
-          if (c.fog) rows.push(['Fog', `${Math.round(c.fog)}%`])
-          if (c.wetness) rows.push(['Surface', WETNESS_TXT[c.wetness] ?? '—'])
-          if (c.rubber) rows.push(['Rubber', c.rubber.replace(/ usage$/, '')])
-          if (c.timeOfDay) rows.push(['Time', c.timeOfDay])
+          if (c.precip != null) rows.push([t('wRain'), `${Math.round(c.precip)}%`])
+          if (c.fog) rows.push([t('wFog'), `${Math.round(c.fog)}%`])
+          if (c.wetness) rows.push([t('wSurface'), t(WETNESS_KEYS[c.wetness] ?? 'wetDry')])
+          if (c.rubber) rows.push([t('wRubber'), c.rubber.replace(/ usage$/, '')])
+          if (c.timeOfDay) rows.push([t('wTime'), c.timeOfDay])
           if (!rows.length && c.trackTemp == null && !sky) return null
 
           const bg     = isDark ? 'rgba(14,16,22,0.62)'     : 'rgba(255,255,255,0.62)'
@@ -2085,8 +2129,8 @@ export default function Replay3DViewer() {
 
           const temp = (label: string, v: number | null) => v == null ? null : (
             <div className="flex-1">
-              <div className="text-[7px] font-bold tracking-[0.12em] uppercase leading-none mb-0.5" style={{ color: dim }}>{label}</div>
-              <div className="text-[13px] font-black tabular-nums leading-none" style={{ color: txt }}>{v.toFixed(1)}°</div>
+              <div className="text-[7px] font-bold tracking-[0.12em] uppercase leading-none mb-0.5" style={{ color: dim }}>{label} {tempUnit(units)}</div>
+              <div className="text-[13px] font-black tabular-nums leading-none" style={{ color: txt }}>{tempFromC(v, units).toFixed(1)}°</div>
             </div>
           )
 
@@ -2105,11 +2149,11 @@ export default function Replay3DViewer() {
                   glyph and the sky, so the sky stays visible without the full card */}
               <button
                 onClick={() => setWeatherOpen(o => !o)}
-                title={weatherOpen ? 'Collapse conditions' : 'Expand conditions'}
+                title={`${weatherOpen ? t('collapse') : t('expand')} — ${t('conditions')}`}
                 className="pointer-events-auto w-full flex items-center gap-1.5 px-2.5 py-2 cursor-pointer">
                 <WeatherIcon kind={kind} color={accent} />
                 <span className="text-[9px] font-bold tracking-wide truncate" style={{ color: txt }}>
-                  {sky ?? 'Conditions'}
+                  {sky ?? t('conditions')}
                 </span>
                 <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke={dim} strokeWidth="3"
                   strokeLinecap="round" strokeLinejoin="round" className="ml-auto shrink-0"
@@ -2122,8 +2166,8 @@ export default function Replay3DViewer() {
                 {/* Temperatures — the two numbers that matter most, side by side */}
                 {(c.trackTemp != null || c.airTemp != null) && (
                   <div className="flex gap-2 px-2.5 pb-2">
-                    {temp('Track', c.trackTemp)}
-                    {temp('Air', c.airTemp)}
+                    {temp(t('track'), c.trackTemp)}
+                    {temp(t('wAir'), c.airTemp)}
                   </div>
                 )}
 
@@ -2197,11 +2241,28 @@ export default function Replay3DViewer() {
               return (
                 <div key={lap.lapKey} className="flex flex-col gap-0.5" style={{ width: 320 }}>
 
-                  {/* Lap info strip — backdrop for readability over 3D scene */}
-                  <div className="relative flex items-center gap-1.5 px-2 py-0.5 rounded-lg"
-                    style={{ background: stripBg, backdropFilter: 'blur(6px)' }}>
+                  {/* Lap info strip — also picks which car the camera follows */}
+                  <div
+                    onClick={() => setFollowIdx(li)}
+                    title={followIdx === li ? t('cameraFollows') : t('cameraFollow')}
+                    className={`relative flex items-center gap-1.5 px-2 py-0.5 rounded-lg pointer-events-auto ${
+                      followIdx === li ? '' : 'cursor-pointer'
+                    }`}
+                    style={{
+                      background: stripBg,
+                      backdropFilter: 'blur(6px)',
+                      // The followed lap is outlined in its own colour
+                      boxShadow: followIdx === li ? `inset 0 0 0 1.5px ${lapColor}` : 'none',
+                    }}>
                     <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: lapColor }} />
                     <span className="text-[9px] font-bold tracking-wider uppercase" style={{ color: stripTxt }}>L{lap.lapNumber}</span>
+                    {followIdx === li && (
+                      <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke={lapColor} strokeWidth="2.4"
+                        strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
+                        <path d="M2 7.5h11v9H2z" />
+                        <path d="M13 11l8-4v10l-8-4z" />
+                      </svg>
+                    )}
                     {fmtLapTime && (
                       <span className="text-[9px] font-mono tabular-nums" style={{ color: stripSub }}>{fmtLapTime}</span>
                     )}
@@ -2210,13 +2271,13 @@ export default function Replay3DViewer() {
                       const used = lap.fuel[0] - lap.fuel[lap.fuel.length - 1]
                       return (
                         <span className="absolute left-1/2 -translate-x-1/2 flex items-baseline gap-1 whitespace-nowrap">
-                          <span className="text-[8px] font-semibold tracking-wider uppercase" style={{ color: stripSub }}>Fuel</span>
+                          <span className="text-[8px] font-semibold tracking-wider uppercase" style={{ color: stripSub }}>{t('fuel')}</span>
                           <span ref={el => { hudFuelRefs.current[li] = el }}
                             className="text-[9px] font-bold tabular-nums" style={{ color: stripTxt }}>
-                            {lap.fuel[0].toFixed(1)} L
+                            {fuelFromL(lap.fuel[0], units).toFixed(1)} {fuelUnit(units)}
                           </span>
                           {used > 0.01 && (
-                            <span className="text-[9px] tabular-nums" style={{ color: stripSub }}>−{used.toFixed(2)}/lap</span>
+                            <span className="text-[9px] tabular-nums" style={{ color: stripSub }}>−{fuelFromL(used, units).toFixed(2)}/lap</span>
                           )}
                         </span>
                       )
@@ -2239,7 +2300,7 @@ export default function Replay3DViewer() {
                     <div className="flex items-stretch shrink-0">
                       <span className="flex items-center justify-center font-bold tracking-widest uppercase px-0.5"
                         style={{ fontSize: 6, writingMode: 'vertical-rl', transform: 'rotate(180deg)', color: textDim }}>
-                        Telemetry
+                        {t('telemetry')}
                       </span>
                       <canvas ref={el => { hudTraceRefs.current[li] = el }}
                         width={120} height={68}
@@ -2266,7 +2327,7 @@ export default function Replay3DViewer() {
                         className="font-black tabular-nums leading-none"
                         style={{ fontSize: 32, color: textMain, letterSpacing: '-0.02em' }}>1</span>
                       <span className="font-semibold tracking-widest uppercase leading-none"
-                        style={{ fontSize: 8, color: textDim }}>kph</span>
+                        style={{ fontSize: 8, color: textDim }}>{speedUnit(units)}</span>
                       <span ref={el => { hudSpeedRefs.current[li] = el }}
                         className="font-bold tabular-nums leading-none"
                         style={{ fontSize: 16, color: textMain }}>0</span>
@@ -2325,7 +2386,7 @@ export default function Replay3DViewer() {
           <button
             onClick={() => { currentTimeRef.current = tMin; setCrosshairTime(tMin) }}
             className="p-1.5 rounded-lg hover:opacity-100 transition-opacity opacity-60 hover:bg-black/5 dark:hover:bg-white/10"
-            title="Zum Anfang"
+            title={t('toStart')}
           >
             <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
               <rect x="1.5" y="2" width="2" height="10" rx="0.5" />
@@ -2369,7 +2430,7 @@ export default function Replay3DViewer() {
           <button
             onClick={() => { currentTimeRef.current = tMax; setCrosshairTime(tMax) }}
             className="p-1.5 rounded-lg hover:opacity-100 transition-opacity opacity-60 hover:bg-black/5 dark:hover:bg-white/10"
-            title="Zum Ende"
+            title={t('toEnd')}
           >
             <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
               <rect x="10.5" y="2" width="2" height="10" rx="0.5" />

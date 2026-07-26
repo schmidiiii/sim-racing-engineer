@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts'
+import { speedFromKph, speedUnit, type UnitSystem } from '@/lib/units'
 import { useSessionStore, parseLapKey, getLapColor } from '@/store/session'
 import { useT } from '@/lib/i18n'
 import { getCornersForTrack, getTrackCornerCount, type CornerDef } from '@/lib/trackCorners'
@@ -193,6 +194,7 @@ function detectCornersFromSpeed(speedKmh: number[], lapDist: number[], minSep = 
 // Match corners across laps by proximity
 function buildChartData(
   allLaps: LapCorners[],
+  units: UnitSystem,
 ): { label: string; dist: number; [key: string]: number | string }[] {
   if (allLaps.length === 0) return []
 
@@ -206,7 +208,7 @@ function buildChartData(
     }
     for (const lap of allLaps) {
       const match = lap.corners.find(c => Math.abs(c.dist - refCorner.dist) < 0.08)
-      if (match) row[lap.lapKey] = Math.round(match.minSpeed)
+      if (match) row[lap.lapKey] = Math.round(speedFromKph(match.minSpeed, units))
     }
     return row
   })
@@ -239,12 +241,13 @@ function gpsAtDist(dist: number, lapDistPct: number[], lat: number[], lon: numbe
 }
 
 const CustomTooltip = ({ active, payload, label }: { active?: boolean; payload?: { name: string; value: number; color: string }[]; label?: string }) => {
+  const { units } = useSessionStore()
   if (!active || !payload?.length) return null
   return (
     <div className="bg-card border border-border rounded-lg px-3 py-2 text-xs shadow-lg">
       <p className="font-semibold text-foreground mb-1">{label}</p>
       {payload.map((p, i) => (
-        <p key={i} style={{ color: p.color }} className="font-mono">{p.name}: {p.value} km/h</p>
+        <p key={i} style={{ color: p.color }} className="font-mono">{p.name}: {p.value} {speedUnit(units)}</p>
       ))}
     </div>
   )
@@ -254,7 +257,7 @@ const STEP = 8
 
 export default function CornerSpeed() {
   const t = useT()
-  const { sessions, selectedLapKeys } = useSessionStore()
+  const { sessions, selectedLapKeys, units } = useSessionStore()
   const [lapCorners, setLapCorners] = useState<LapCorners[]>([])
   const [loading, setLoading] = useState(false)
 
@@ -333,8 +336,8 @@ export default function CornerSpeed() {
     </div>
   )
 
-  const chartData = buildChartData(lapCorners)
-  const allSpeeds = lapCorners.flatMap(l => l.corners.map(c => c.minSpeed))
+  const chartData = buildChartData(lapCorners, units)
+  const allSpeeds = lapCorners.flatMap(l => l.corners.map(c => speedFromKph(c.minSpeed, units)))
   const yMin = Math.max(0, Math.floor((Math.min(...allSpeeds) - 20) / 10) * 10)
   const yMax = Math.ceil((Math.max(...allSpeeds) + 10) / 10) * 10
 
@@ -348,7 +351,7 @@ export default function CornerSpeed() {
 
       {/* Bar chart card */}
       <div className="bg-card rounded-xl border border-border shadow-sm p-4">
-        <h3 className="text-sm font-semibold text-foreground mb-1">{t('cornerSpeedTitle')}</h3>
+        <h3 className="text-sm font-semibold text-foreground mb-1">{t('cornerSpeedTitle')} ({speedUnit(units)})</h3>
         <div className="flex items-center gap-4 mb-4">
           {lapCorners.map(ld => (
             <span key={ld.lapKey} className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
@@ -448,7 +451,7 @@ export default function CornerSpeed() {
                     </th>
                   ))}
                   {lapCorners.length >= 2 && (
-                    <th className="text-right pb-1.5 text-muted-foreground font-medium">Δ km/h</th>
+                    <th className="text-right pb-1.5 text-muted-foreground font-medium">Δ {speedUnit(units)}</th>
                   )}
                 </tr>
               </thead>
@@ -465,7 +468,7 @@ export default function CornerSpeed() {
                       {lapCorners.map(ld => (
                         <td key={ld.lapKey} className="py-1.5 pr-3 text-right font-mono tabular-nums"
                           style={{ color: getLapColor(ld.colorIndex) }}>
-                          {row[ld.lapKey] !== undefined ? `${row[ld.lapKey]} km/h` : '–'}
+                          {row[ld.lapKey] !== undefined ? `${row[ld.lapKey]} ${speedUnit(units)}` : '–'}
                         </td>
                       ))}
                       {lapCorners.length >= 2 && delta !== null && (
@@ -479,7 +482,7 @@ export default function CornerSpeed() {
               </tbody>
             </table>
             <p className="text-[10px] text-muted-foreground/40 mt-2">
-              Δ km/h: positive = faster through corner · negative = slower
+              Δ {speedUnit(units)}: positive = faster through corner · negative = slower
             </p>
           </div>
         </div>

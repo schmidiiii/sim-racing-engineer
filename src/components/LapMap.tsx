@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { convertByUnit, unitLabel } from '@/lib/units'
 import { useSessionStore, parseLapKey, getLapColor } from '@/store/session'
 import TraceChart, { LapTrace } from '@/components/TraceChart'
 
@@ -88,7 +89,7 @@ const TELE_CHANNELS = [
 ]
 
 export default function LapMap() {
-  const { sessions, selectedLapKeys } = useSessionStore()
+  const { sessions, selectedLapKeys, units } = useSessionStore()
   const [laps, setLaps]     = useState<LapGPS[]>([])
   const [traces, setTraces] = useState<Record<string, LapTrace[]>>({})
   const [loading, setLoading] = useState(false)
@@ -143,12 +144,12 @@ export default function LapMap() {
           } catch { /* no GPS */ }
         }
 
-        for (const { ch, xform } of TELE_CHANNELS) {
+        for (const { ch, xform, unit } of TELE_CHANNELS) {
           if (!avail.has(ch)) continue
           try {
             const res = await invoke<LapChannelData[]>('get_lap_channel_data', { sessionId, lapNumbers: [lapNumber], channel: ch })
             const d = res[0]
-            if (d) tmap[ch].push({ lapNumber, colorIndex: ci, samples: d.samples.map(xform), timestamps: d.timestamps, lapDistPct: d.lap_dist_pct })
+            if (d) tmap[ch].push({ lapNumber, colorIndex: ci, samples: d.samples.map(v => convertByUnit(xform(v), unit, units)), timestamps: d.timestamps, lapDistPct: d.lap_dist_pct })
           } catch { /* skip */ }
         }
       }
@@ -177,7 +178,7 @@ export default function LapMap() {
     }
 
     go()
-  }, [selectedLapKeys.join(','), sessions.length])
+  }, [selectedLapKeys.join(','), sessions.length, units])
 
   // ── Memoised SVG geometry — only rebuilds when laps change, NOT on zoom/pan ──
 
@@ -443,7 +444,7 @@ export default function LapMap() {
               return (
                 <div key={ch} className="bg-card shrink-0">
                   <TraceChart
-                    channel={ch} unit={unit} yDomain={domain}
+                    channel={ch} unit={unitLabel(unit, units)} yDomain={domain}
                     traces={lapTraces}
                     crosshairTime={crosshairTime} onMouseMove={setCrosshairTime}
                     zoomRef={zoomRef} onZoom={handleZoom} registerRedraw={registerRedraw}

@@ -94,6 +94,36 @@ function computeYRange(
   return [lo, hi]
 }
 
+// Channels like Gear only ever hold whole numbers — halfway ticks such as "1.50"
+// would label a value the channel can't take. Bails out on the first fraction,
+// so continuous channels cost next to nothing.
+function isIntegerChannel(data: DataPt[], traces: LapTrace[]): boolean {
+  let seen = false
+  for (const pt of data) {
+    for (const tr of traces) {
+      const v = pt[`t_${tr.colorIndex}`]
+      if (typeof v !== 'number') continue
+      if (!Number.isInteger(v)) return false
+      seen = true
+    }
+  }
+  return seen
+}
+
+// Tick positions for the y axis, plus the range they span (integer channels get
+// their range widened so the steps stay whole)
+function yAxisTicks(lo: number, hi: number, integer: boolean): { ticks: number[]; lo: number; hi: number } {
+  if (!integer) {
+    const span = hi - lo || 1
+    return { ticks: Array.from({ length: 5 }, (_, i) => lo + (i * span) / 4), lo, hi }
+  }
+  const iLo = Math.floor(lo)
+  const step = Math.max(1, Math.ceil((Math.ceil(hi) - iLo) / 4))
+  const count = Math.max(1, Math.ceil((Math.ceil(hi) - iLo) / step))
+  const iHi = iLo + step * count
+  return { ticks: Array.from({ length: count + 1 }, (_, i) => iLo + i * step), lo: iLo, hi: iHi }
+}
+
 function paintChart(
   ctx: CanvasRenderingContext2D,
   data: DataPt[],
@@ -110,7 +140,9 @@ function paintChart(
 
   const tMin = data[0].t, tMax = data[data.length - 1].t
   const tSpan = tMax - tMin || 1
-  const [yLo, yHi] = computeYRange(data, traces, yDomain)
+  const [rangeLo, rangeHi] = computeYRange(data, traces, yDomain)
+  const integer = isIntegerChannel(data, traces)
+  const { ticks, lo: yLo, hi: yHi } = yAxisTicks(rangeLo, rangeHi, integer)
   const ySpan = yHi - yLo || 1
 
   const tx = (t: number) => PAD.l + (t - tMin) / tSpan * W
@@ -119,8 +151,8 @@ function paintChart(
   // Grid
   ctx.strokeStyle = dark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.09)'
   ctx.lineWidth = 1
-  for (let i = 0; i <= 4; i++) {
-    const y = Math.round(PAD.t + i / 4 * H) + 0.5
+  for (const v of ticks) {
+    const y = Math.round(ty(v)) + 0.5
     ctx.beginPath(); ctx.moveTo(PAD.l, y); ctx.lineTo(w - PAD.r, y); ctx.stroke()
   }
 
@@ -129,12 +161,11 @@ function paintChart(
   ctx.font = '10px system-ui,sans-serif'
   ctx.textAlign = 'right'
   ctx.textBaseline = 'middle'
-  for (let i = 0; i <= 4; i++) {
-    const v = yHi - i / 4 * ySpan
+  for (const v of ticks) {
     ctx.fillText(
-      Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(2),
+      integer || Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(2),
       PAD.l - 4,
-      PAD.t + i / 4 * H
+      ty(v)
     )
   }
 

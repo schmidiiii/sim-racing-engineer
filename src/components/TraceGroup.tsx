@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useSessionStore, parseLapKey } from '@/store/session'
 import { CHANNEL_GROUPS } from '@/lib/channelGroups'
+import { convertByUnit, unitLabel } from '@/lib/units'
 import TraceChart, { LapTrace } from '@/components/TraceChart'
 import SetupView from '@/components/SetupView'
 import DeltaView from '@/components/DeltaView'
@@ -30,7 +31,7 @@ function StatCard({ label, value, sub }: { label: string; value: string; sub?: s
 
 export default function TraceGroup() {
   const t = useT()
-  const { sessions, selectedLapKeys, crosshairTime, setCrosshairTime, setZoomDomain, activeSessionId, setActiveTabLabel, lapMapFullscreen, setLapMapFullscreen } = useSessionStore()
+  const { sessions, selectedLapKeys, crosshairTime, setCrosshairTime, setZoomDomain, activeSessionId, setActiveTabLabel, lapMapFullscreen, setLapMapFullscreen, units } = useSessionStore()
   const [activeGroup, setActiveGroup] = useState(0)
   const [traces, setTraces] = useState<Record<string, LapTrace[]>>({})
   const [fetchError, setFetchError] = useState<string | null>(null)
@@ -46,6 +47,7 @@ export default function TraceGroup() {
   // Cache: `${sessionId}:${lapNumber}:${channel}` → already-transformed samples+timestamps+lapDistPct
   const lapCache = useRef<Record<string, { samples: number[], timestamps: number[], lapDistPct: number[] }>>({})
   const prevGroupRef = useRef<number>(-1)
+  const prevUnitsRef = useRef<string>('')
   const fetchIdRef = useRef(0)
 
   useEffect(() => {
@@ -108,10 +110,12 @@ export default function TraceGroup() {
       return
     }
 
-    // Clear cache when switching groups (different transforms may apply)
-    if (prevGroupRef.current !== activeGroup) {
+    // Cache holds already-converted samples, so it has to go when the group or
+    // the unit system changes
+    if (prevGroupRef.current !== activeGroup || prevUnitsRef.current !== units) {
       lapCache.current = {}
       prevGroupRef.current = activeGroup
+      prevUnitsRef.current = units
     }
 
     setFetchError(null)
@@ -138,7 +142,11 @@ export default function TraceGroup() {
           const available = new Set(session.available_channels.map(c => c.name))
           if (!available.has(channel)) continue
 
-          const transform = group.transforms[channel]
+          // Metric transform first (m/s → km/h etc.), then the display unit
+          const metricUnit = group.units[channel] ?? ''
+          const base = group.transforms[channel]
+          const transform = (v: number) =>
+            convertByUnit(base ? base(v) : v, metricUnit, units)
 
           // Only fetch laps not already in cache
           const toFetch = lapNumbers.filter(
@@ -152,7 +160,7 @@ export default function TraceGroup() {
               if (fetchId !== fetchIdRef.current) return
               for (const data of results) {
                 lapCache.current[`${sessionId}:${data.lap_number}:${channel}`] = {
-                  samples: transform ? data.samples.map(transform) : data.samples,
+                  samples: data.samples.map(transform),
                   timestamps: data.timestamps,
                   lapDistPct: data.lap_dist_pct,
                 }
@@ -186,7 +194,7 @@ export default function TraceGroup() {
     }
 
     fetchAll()
-  }, [sessions, selectedLapKeys, activeGroup])
+  }, [sessions, selectedLapKeys, activeGroup, units])
 
   if (sessions.length === 0) {
     return (
@@ -316,7 +324,7 @@ export default function TraceGroup() {
             <TraceChart
               key={channel}
               channel={channel}
-              unit={group.units[channel]}
+              unit={unitLabel(group.units[channel] ?? '', units)}
               yDomain={group.yDomains[channel]}
               traces={traces[channel] ?? []}
               crosshairTime={crosshairTime}

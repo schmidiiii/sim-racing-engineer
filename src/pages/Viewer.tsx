@@ -6,8 +6,10 @@ import LapSidebar from '@/components/LapSidebar'
 import TraceGroup from '@/components/TraceGroup'
 import AiPanel from '@/components/AiPanel'
 import LapMap from '@/components/LapMap'
+import { useT } from '@/lib/i18n'
 
 export default function Viewer() {
+  const t = useT()
   const { loadLatest, loadFiles, autoLoad, lapMapFullscreen, setLapMapFullscreen } = useSessionStore()
   const autoLoadRef = useRef(autoLoad)
   useEffect(() => { autoLoadRef.current = autoLoad }, [autoLoad])
@@ -51,7 +53,7 @@ export default function Viewer() {
             <button
               onClick={() => setLapMapFullscreen(false)}
               className="h-8 px-3 flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400 hover:bg-black/10 dark:hover:bg-zinc-800 hover:text-foreground transition-colors"
-              title="Back (Esc)"
+              title={`${t('back')} (Esc)`}
             >
               <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
                 <path d="M6 2L3 5l3 3"/>

@@ -14,6 +14,7 @@ function LapRow({ sessionId, lapNumber, lapTime, isValid, colorIndex, fastestTim
   fastestTime: number
   disabled: boolean
 }) {
+  const t = useT()
   const { selectedLapKeys, toggleLap } = useSessionStore()
   const key = lapKey(sessionId, lapNumber)
   const selected = selectedLapKeys.includes(key)
@@ -32,7 +33,7 @@ function LapRow({ sessionId, lapNumber, lapTime, isValid, colorIndex, fastestTim
       className={`flex items-center gap-2.5 py-1.5 px-3 select-none transition-colors group ${
         disabled ? 'opacity-30 cursor-not-allowed' : 'hover:bg-secondary/50 cursor-pointer'
       }`}
-      title={disabled ? 'Andere Strecke oder Auto — nicht vergleichbar' : undefined}
+      title={disabled ? t('notComparable') : undefined}
     >
       <span
         className="w-3 h-3 rounded shrink-0 border-2 transition-colors"

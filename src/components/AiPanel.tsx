@@ -1,14 +1,13 @@
 import { useState } from 'react'
 import AutoFeedback from '@/components/AutoFeedback'
 import ChatThread from '@/components/ChatThread'
-import { useAiStore, LANGUAGES, type Language } from '@/store/ai'
 import { useT } from '@/lib/i18n'
 
 export default function AiPanel() {
   const t = useT()
-  const { language, setLanguage } = useAiStore()
+  // Collapsed unless the user has opened it before — the telemetry gets the width
   const [open, setOpen] = useState(() => {
-    try { return localStorage.getItem('aiPanelOpen') !== 'false' } catch { return true }
+    try { return localStorage.getItem('aiPanelOpen') === 'true' } catch { return false }
   })
 
   const toggle = () => setOpen(v => {
@@ -46,18 +45,7 @@ export default function AiPanel() {
       <div className="px-4 pt-4 pb-3 shrink-0 border-b border-border flex items-center justify-between">
         <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">{t('aiCoach')}</p>
         <div className="flex items-center gap-2">
-          <div className="relative">
-            <select
-              value={language}
-              onChange={e => setLanguage(e.target.value as Language)}
-              className="appearance-none text-xs font-medium bg-transparent border border-border text-foreground rounded-lg pl-3 pr-7 py-1.5 focus:outline-none focus:ring-1 focus:ring-ring cursor-pointer hover:bg-secondary/60 transition-colors"
-            >
-              {(Object.entries(LANGUAGES) as [Language, string][]).map(([code, name]) => (
-                <option key={code} value={code} className="bg-popover text-foreground">{name}</option>
-              ))}
-            </select>
-            <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground text-[10px]">▾</span>
-          </div>
+          {/* Language selector moved to the app header — see App.tsx */}
           <button
             onClick={toggle}
             className="w-7 h-7 flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors shrink-0"

@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
+import type { UnitSystem } from '@/lib/units'
 
 export interface Lap {
   lap_number: number
@@ -43,7 +44,7 @@ export const parseLapKey = (key: string): { sessionId: string; lapNumber: number
 }
 
 const LAP_COLORS = [
-  '#64AAB2', // EOS Teal
+  '#64AAB2', // Teal
   '#F43F5E', // Rose
   '#FBBF24', // Amber
   '#818CF8', // Indigo
@@ -73,6 +74,8 @@ interface SessionStore {
   setActiveTabLabel: (label: string) => void
   autoLoad: boolean
   setAutoLoad: (v: boolean) => void
+  units: UnitSystem
+  setUnits: (v: UnitSystem) => void
   lapMapFullscreen: boolean
   setLapMapFullscreen: (v: boolean) => void
   loadLatest: () => Promise<void>
@@ -120,6 +123,10 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
   autoLoad: localStorage.getItem('srAutoLoad') !== 'false',
   setAutoLoad: (v) => { localStorage.setItem('srAutoLoad', String(v)); set({ autoLoad: v }) },
+
+  // Metric unless explicitly switched — telemetry itself stays SI either way
+  units: (localStorage.getItem('srUnits') === 'imperial' ? 'imperial' : 'metric') as UnitSystem,
+  setUnits: (v) => { localStorage.setItem('srUnits', v); set({ units: v }) },
 
   lapMapFullscreen: false,
   setLapMapFullscreen: (v) => set({ lapMapFullscreen: v }),

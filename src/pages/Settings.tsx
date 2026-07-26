@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useAiStore, ProviderConfig, ProviderType } from '@/store/ai'
+import { useSessionStore } from '@/store/session'
 import { useT } from '@/lib/i18n'
 
 const PROVIDERS: ProviderType[] = ['Ollama', 'OpenAI', 'Gemini']
@@ -8,6 +9,7 @@ const PROVIDERS: ProviderType[] = ['Ollama', 'OpenAI', 'Gemini']
 export default function Settings() {
   const t = useT()
   const { provider, setProvider } = useAiStore()
+  const { units, setUnits } = useSessionStore()
   const [activeTab, setActiveTab] = useState<ProviderType>(provider.type)
 
   // Load persisted drafts so API keys survive app restarts and provider switches
@@ -125,6 +127,32 @@ export default function Settings() {
 
   return (
     <div className="p-6 space-y-4">
+
+      {/* Units — applies to every value on screen; telemetry stays SI underneath */}
+      <div className="bg-card rounded-xl border border-border shadow-sm px-4 py-3 flex items-center justify-between gap-4">
+        <div className="min-w-0">
+          <p className="text-xs font-semibold text-foreground">{t('units')}</p>
+          <p className="text-[11px] text-muted-foreground mt-0.5">
+            {units === 'imperial' ? t('unitsImperialHint') : t('unitsMetricHint')}
+          </p>
+        </div>
+        <div className="flex shrink-0 rounded-lg border border-border overflow-hidden">
+          {(['metric', 'imperial'] as const).map(sys => (
+            <button
+              key={sys}
+              onClick={() => setUnits(sys)}
+              className={`px-3 py-1.5 text-xs font-semibold transition-colors ${
+                units === sys
+                  ? 'bg-primary text-primary-foreground'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
+              }`}
+            >
+              {sys === 'metric' ? t('unitsMetric') : t('unitsImperial')}
+            </button>
+          ))}
+        </div>
+      </div>
+
       <p className="text-xs text-muted-foreground">{t('configureProvider')}</p>
 
       <div className="bg-card rounded-xl border border-border shadow-sm overflow-hidden">
@@ -295,7 +323,7 @@ export default function Settings() {
                     onClick={() => fetchGeminiModels(draft.type === 'Gemini' ? (draft.api_key ?? '') : '')}
                     disabled={geminiModelsStatus === 'loading' || !(draft.type === 'Gemini' && draft.api_key)}
                     className="shrink-0 text-xs px-3 py-2 rounded-lg border border-border bg-secondary hover:bg-secondary/70 text-foreground transition-colors disabled:opacity-40"
-                    title="Verfügbare Modelle laden"
+                    title={t('loadModels')}
                   >
                     {geminiModelsStatus === 'loading' ? '…' : '↻'}
                   </button>
