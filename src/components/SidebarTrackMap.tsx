@@ -252,10 +252,10 @@ export default function SidebarTrackMap() {
   const gScale = SIZE / vb.w
   const gTransform = `scale(${gScale.toFixed(6)}) translate(${(-vb.x).toFixed(4)} ${(-vb.y).toFixed(4)})`
 
-  // Stroke widths: thinner in the small collapsed map, slightly thicker when expanded
+  // Stroke widths in screen pixels (vectorEffect non-scaling-stroke keeps these constant at any zoom)
   const sw = sidebarMapExpanded
-    ? { base: 10, trace: 3, zoomed: 5 }
-    : { base: 7, trace: 3.5, zoomed: 4.5 }
+    ? { base: 4, trace: 1.5, zoomed: 2.5 }
+    : { base: 3, trace: 1.5, zoomed: 2 }
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -322,33 +322,36 @@ export default function SidebarTrackMap() {
                 >
                   <g transform={gTransform}>
                     <polyline points={polylines.base} fill="none"
-                      stroke="rgba(130,130,130,0.45)" strokeWidth={sw.base / gScale}
-                      strokeLinecap="round" strokeLinejoin="round" />
+                      stroke="rgba(130,130,130,0.45)" strokeWidth={sw.base}
+                      strokeLinecap="round" strokeLinejoin="round"
+                      vectorEffect="non-scaling-stroke" />
                     {polylines.laps.map(({ key, pts, color }) => (
                       <polyline key={key} points={pts} fill="none"
-                        stroke={color} strokeWidth={sw.trace / gScale} opacity={zoomedSegments?.length ? 0.22 : 0.9}
-                        strokeLinecap="round" strokeLinejoin="round" />
+                        stroke={color} strokeWidth={sw.trace} opacity={zoomedSegments?.length ? 0.22 : 0.9}
+                        strokeLinecap="round" strokeLinejoin="round"
+                        vectorEffect="non-scaling-stroke" />
                     ))}
                     {zoomedSegments?.map(seg => (
                       <polyline key={`${seg.key}_zoom`} points={seg.pts}
-                        fill="none" stroke={seg.color} strokeWidth={sw.zoomed / gScale} opacity={1}
-                        strokeLinecap="round" strokeLinejoin="round" />
+                        fill="none" stroke={seg.color} strokeWidth={sw.zoomed} opacity={1}
+                        strokeLinecap="round" strokeLinejoin="round"
+                        vectorEffect="non-scaling-stroke" />
                     ))}
                     {polylines.startLine && (
                       <>
-                        {/* Shadow */}
                         <line x1={polylines.startLine.x1} y1={polylines.startLine.y1}
                           x2={polylines.startLine.x2} y2={polylines.startLine.y2}
-                          stroke="rgba(0,0,0,0.5)" strokeWidth={10 / gScale} strokeLinecap="butt" />
-                        {/* White base */}
+                          stroke="rgba(0,0,0,0.5)" strokeWidth={6} strokeLinecap="butt"
+                          vectorEffect="non-scaling-stroke" />
                         <line x1={polylines.startLine.x1} y1={polylines.startLine.y1}
                           x2={polylines.startLine.x2} y2={polylines.startLine.y2}
-                          stroke="white" strokeWidth={7 / gScale} strokeLinecap="butt" />
-                        {/* Black dashes → checkered flag pattern */}
+                          stroke="white" strokeWidth={4} strokeLinecap="butt"
+                          vectorEffect="non-scaling-stroke" />
                         <line x1={polylines.startLine.x1} y1={polylines.startLine.y1}
                           x2={polylines.startLine.x2} y2={polylines.startLine.y2}
-                          stroke="black" strokeWidth={7 / gScale} strokeLinecap="butt"
-                          strokeDasharray={`${6 / gScale} ${6 / gScale}`} />
+                          stroke="black" strokeWidth={4} strokeLinecap="butt"
+                          strokeDasharray="4 4"
+                          vectorEffect="non-scaling-stroke" />
                       </>
                     )}
                     {trackDots.map(({ pt, color }, i) => (
