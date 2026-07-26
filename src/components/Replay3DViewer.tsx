@@ -339,9 +339,9 @@ export default function Replay3DViewer() {
     const h = height || 400
 
     // Scene — colors adapt to light/dark mode
-    const skyCol  = isDark ? 0x0f172a : 0xdde6f0
-    const gndCol  = isDark ? 0x0c1a2e : 0xc8d5e2
-    const roadCol = isDark ? 0x0e1b2e : 0x3a4a5c
+    const skyCol  = isDark ? 0x1c1c1e : 0xffffff
+    const gndCol  = isDark ? 0x141416 : 0xe5e5e5
+    const roadCol = isDark ? 0x2a2a2e : 0x5a6070
     const scene = new THREE.Scene()
     scene.background = new THREE.Color(skyCol)
     scene.fog = new THREE.Fog(skyCol, 300, 1200)
@@ -794,7 +794,7 @@ export default function Replay3DViewer() {
     <div className="absolute inset-0 flex flex-col overflow-hidden">
 
       {/* Three.js canvas area — bg prevents flash before canvas mounts */}
-      <div ref={mountRef} className="flex-1 min-h-0 relative overflow-hidden bg-neutral-950 dark:bg-neutral-950" style={{ backgroundColor: isDark ? '#0f172a' : '#dde6f0' }}>
+      <div ref={mountRef} className="flex-1 min-h-0 relative overflow-hidden" style={{ backgroundColor: isDark ? '#1c1c1e' : '#ffffff' }}>
 
         {/* Camera mode buttons — top-right */}
         <div className="absolute top-2 right-2 flex gap-1 select-none">
