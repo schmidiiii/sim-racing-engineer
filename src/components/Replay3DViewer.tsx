@@ -374,7 +374,7 @@ export default function Replay3DViewer() {
     // T_NEAR=20: any vertex within 20wu of track center → set to road height (flush, no float).
     // T_FAR=60:  blend to IDW beyond that.
     // Safety clamp ensures terrain ≤ closestY-0.12 in the entire near zone → no clipping.
-    const halfRoad = ROAD_WIDTH / 2
+
     const T_NEAR = 20, T_FAR = 60
     const terrainGeo = new THREE.PlaneGeometry(1600, 1600, 90, 90)
     terrainGeo.rotateX(-Math.PI / 2)
