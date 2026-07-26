@@ -170,8 +170,9 @@ function ConsistencyPanel() {
   return (
     <div className="shrink-0 border-t border-border px-3 py-1.5 bg-secondary/20">
       <div className="flex items-center gap-3">
+        <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide shrink-0">Consistency</span>
         <p className={`text-xs font-bold tabular-nums shrink-0 ${scoreColor}`}>{consistency.toFixed(1)}%</p>
-        <div className="flex-1 h-1.5 bg-secondary rounded-full overflow-hidden">
+        <div className="w-20 h-1.5 bg-secondary rounded-full overflow-hidden shrink-0">
           <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${consistency}%` }} />
         </div>
         <div className="flex items-center gap-2.5 shrink-0">
