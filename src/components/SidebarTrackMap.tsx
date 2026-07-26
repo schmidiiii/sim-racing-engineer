@@ -259,7 +259,7 @@ export default function SidebarTrackMap() {
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <div className={`border-t border-border${sidebarMapExpanded ? ' flex-1 min-h-0 flex flex-col' : ' shrink-0'}`}>
+    <div className={`border-t border-border${sidebarMapExpanded ? ' flex-[3] min-h-0 flex flex-col' : ' shrink-0'}`}>
 
       {/* Header: view selector + legend + expand toggle */}
       <div className="flex items-center px-2 pt-1.5 pb-0.5 gap-1 min-w-0">
