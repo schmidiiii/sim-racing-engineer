@@ -271,7 +271,7 @@ export default function LapSidebar() {
       </div>
 
       {/* Sessions + laps */}
-      <div className={`overflow-y-auto py-2 ${sidebarMapExpanded ? 'max-h-[180px]' : 'flex-1'}`}>
+      <div className={`overflow-y-auto py-2 ${sidebarMapExpanded ? 'max-h-[300px]' : 'flex-1'}`}>
         {sessions.map((session, si) => (
           <div key={session.id} className="group">
             <SessionCard
