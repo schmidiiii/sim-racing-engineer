@@ -125,9 +125,17 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   setLapMapFullscreen: (v) => set({ lapMapFullscreen: v }),
 
   setActiveSessionId: (id) => {
-    const { sessions } = get()
+    const { sessions, selectedLapKeys } = get()
     const session = sessions.find(s => s.id === id)
     if (!session) return
+    // Same track and car as what's already selected → keep the selection so laps
+    // from both sessions can be compared; otherwise start fresh with its 2 best
+    const selectedIds = new Set(selectedLapKeys.map(k => parseLapKey(k).sessionId))
+    const comparable = selectedLapKeys.length > 0 && [...selectedIds].every(sid => {
+      const s = sessions.find(x => x.id === sid)
+      return !s || (s.track === session.track && s.car === session.car)
+    })
+    if (comparable) { set({ activeSessionId: id }); return }
     const newKeys = session.laps
       .filter(l => l.is_valid && l.lap_time > 10)
       .sort((a, b) => a.lap_time - b.lap_time)
@@ -193,15 +201,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       set({ selectedLapKeys: selectedLapKeys.filter(k => k !== key) })
       return
     }
-    // Cap active sessions at MAX_ACTIVE_SESSIONS — adding a lap from a new session drops the oldest session's laps
-    const activeSessionIds = [...new Set(selectedLapKeys.map(k => parseLapKey(k).sessionId))]
-    if (!activeSessionIds.includes(sessionId) && activeSessionIds.length >= MAX_ACTIVE_SESSIONS) {
-      const oldest = activeSessionIds[0]
-      const trimmed = selectedLapKeys.filter(k => parseLapKey(k).sessionId !== oldest)
-      set({ selectedLapKeys: [...trimmed, key] })
-      return
-    }
-    // Cross-session guard: only allow if track AND car match all already-selected sessions
+    // Cross-session guard: only allow if track AND car match all already-selected
+    // sessions. Checked before the session cap — otherwise dropping the oldest
+    // session would let an incompatible lap slip in
     const target = sessions.find(s => s.id === sessionId)
     if (target) {
       const otherIds = new Set(selectedLapKeys.map(k => parseLapKey(k).sessionId).filter(id => id !== sessionId))
@@ -209,6 +211,14 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         const other = sessions.find(s => s.id === otherId)
         if (other && (other.track !== target.track || other.car !== target.car)) return
       }
+    }
+    // Cap active sessions at MAX_ACTIVE_SESSIONS — adding a lap from a new session drops the oldest session's laps
+    const activeSessionIds = [...new Set(selectedLapKeys.map(k => parseLapKey(k).sessionId))]
+    if (!activeSessionIds.includes(sessionId) && activeSessionIds.length >= MAX_ACTIVE_SESSIONS) {
+      const oldest = activeSessionIds[0]
+      const trimmed = selectedLapKeys.filter(k => parseLapKey(k).sessionId !== oldest)
+      set({ selectedLapKeys: [...trimmed, key] })
+      return
     }
     set({ selectedLapKeys: [...selectedLapKeys, key] })
   },

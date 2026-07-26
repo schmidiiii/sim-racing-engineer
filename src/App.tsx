@@ -43,17 +43,17 @@ export default function App() {
             <img src="/LogoSRE.png" alt="logo" className="h-11 w-11 object-contain" />
             <div>
               <div className="font-bold text-lg text-foreground tracking-tight leading-tight">Sim Racing Engineer</div>
-              {version && <div className="text-xs text-muted-foreground leading-tight">v{version}</div>}
+              {version && <div className="text-xs text-muted-foreground leading-tight">v{version} by schmidiiii</div>}
             </div>
           </div>
           <div className="ml-auto flex items-center gap-2">
             <a
-              href="https://discord.gg/XASdj3SXC3"
+              href="https://ko-fi.com/schmidiiii/donate"
               target="_blank"
               rel="noopener noreferrer"
               className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-red-600 text-white hover:bg-red-700 transition-colors"
             >
-              {t('joinDiscord')}
+              {t('donate')}
             </a>
             <button
               onClick={() => setSettingsOpen(true)}

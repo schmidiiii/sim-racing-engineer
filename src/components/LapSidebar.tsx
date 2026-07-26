@@ -226,6 +226,15 @@ export default function LapSidebar() {
   const isSessionCompatible = (s: typeof sessions[0]) =>
     !refTrack || !refCar || (s.track === refTrack && s.car === refCar)
 
+  // Laps are listed for the active session, for any session laps are already
+  // selected from, and for every session sharing the active session's track and
+  // car — those are exactly the ones that can be compared against it
+  const activeSession = sessions.find(s => s.id === activeSessionId)
+  const showsLaps = (s: typeof sessions[0]) =>
+    s.id === activeSessionId
+    || selectedSessionIds.has(s.id)
+    || (!!activeSession && s.track === activeSession.track && s.car === activeSession.car)
+
   return (
     <aside
       className="shrink-0 border-r border-border bg-card flex flex-col overflow-hidden transition-[width] duration-200"
@@ -277,7 +286,7 @@ export default function LapSidebar() {
               onRemove={() => removeSession(session.id)}
             />
             <div className="mb-1">
-              {activeSessionId === session.id && session.laps.filter(lap => lap.is_valid).map(lap => {
+              {showsLaps(session) && session.laps.filter(lap => lap.is_valid).map(lap => {
                 const k = lapKey(session.id, lap.lap_number)
                 const ci = keyColorIndex[k] ?? -1
                 const isSelected = selectedLapKeys.includes(k)

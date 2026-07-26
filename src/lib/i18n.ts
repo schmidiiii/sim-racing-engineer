@@ -108,7 +108,7 @@ const EN = {
   light: 'Light',
   toggleTheme: 'Toggle dark / light mode',
   aiCoach: 'Race Engineer',
-  joinDiscord: 'Join Discord',
+  donate: 'Donate to Support Development',
   autoLoadFiles: 'Auto-open new files',
   lapAnalyse: 'Lap Analyse',
   noDataVariance: 'This car doesn\'t model %label% dynamics',
@@ -164,7 +164,7 @@ const DICT: Record<string, Dict> = {
     idealLapInfo: 'Theoretisch schnellste Runde — berechnet aus den besten Sektorzeiten aller ausgewählten Runden kombiniert.',
     updateAvailable: 'Update verfügbar: v{v}', updateDescription: 'Eine neue Version von Sim Racing Engineer ist bereit.', updateInstalled: 'Update installiert — App neu starten für Version {v}.', installing: 'Installiere…', updateNow: 'Jetzt updaten',
     navTelemetry: 'Telemetrie', dark: 'Dunkel', light: 'Hell', toggleTheme: 'Hell/Dunkel umschalten',
-    aiCoach: 'Renningenieur', joinDiscord: 'Discord beitreten',
+    aiCoach: 'Renningenieur', donate: 'Entwicklung unterstützen',
     configureAi: 'Ingenieur verbinden', configureAiHint: 'Verbinde ein Modell für deinen persönlichen Renningenieur — direktes, datenbasiertes Feedback zu jeder Runde.', setupGuide: 'Einrichtung',
   },
   fr: {
@@ -205,7 +205,7 @@ const DICT: Record<string, Dict> = {
     idealLapInfo: 'Tour théoriquement le plus rapide — calculé en combinant les meilleurs temps sectoriels de tous les tours sélectionnés.',
     updateAvailable: 'Mise à jour disponible : v{v}', updateDescription: 'Une nouvelle version de Sim Racing Engineer est prête.', updateInstalled: 'Mise à jour installée — redémarrez pour utiliser la version {v}.', installing: 'Installation…', updateNow: 'Mettre à jour',
     navTelemetry: 'Télémétrie', dark: 'Sombre', light: 'Clair', toggleTheme: 'Basculer clair/sombre',
-    aiCoach: 'Ingénieur de course', joinDiscord: 'Rejoindre Discord',
+    aiCoach: 'Ingénieur de course', donate: 'Soutenir le développement',
     configureAi: 'Connecter l\'ingénieur', configureAiHint: 'Connectez un modèle pour votre ingénieur de course personnel — feedback direct et basé sur les données.', setupGuide: 'Guide de configuration',
   },
   es: {
@@ -246,7 +246,7 @@ const DICT: Record<string, Dict> = {
     idealLapInfo: 'Vuelta teóricamente más rápida — calculada combinando los mejores tiempos sectoriales de todas las vueltas seleccionadas.',
     updateAvailable: 'Actualización disponible: v{v}', updateDescription: 'Una nueva versión de Sim Racing Engineer está lista.', updateInstalled: 'Actualización instalada — reinicia para usar la versión {v}.', installing: 'Instalando…', updateNow: 'Actualizar ahora',
     navTelemetry: 'Telemetría', dark: 'Oscuro', light: 'Claro', toggleTheme: 'Cambiar claro/oscuro',
-    aiCoach: 'Ingeniero de carrera', joinDiscord: 'Unirse a Discord',
+    aiCoach: 'Ingeniero de carrera', donate: 'Apoyar el desarrollo',
     configureAi: 'Conectar ingeniero', configureAiHint: 'Conecta un modelo para tu ingeniero de carrera personal — feedback directo y basado en datos.', setupGuide: 'Guía de configuración',
   },
   it: {
@@ -287,7 +287,7 @@ const DICT: Record<string, Dict> = {
     idealLapInfo: 'Giro teoricamente più veloce — calcolato combinando i migliori tempi settoriali di tutti i giri selezionati.',
     updateAvailable: 'Aggiornamento disponibile: v{v}', updateDescription: 'Una nuova versione di Sim Racing Engineer è pronta.', updateInstalled: 'Aggiornamento installato — riavvia per usare la versione {v}.', installing: 'Installazione…', updateNow: 'Aggiorna ora',
     navTelemetry: 'Telemetria', dark: 'Scuro', light: 'Chiaro', toggleTheme: 'Cambia chiaro/scuro',
-    aiCoach: 'Ingegnere di gara', joinDiscord: 'Unisciti a Discord',
+    aiCoach: 'Ingegnere di gara', donate: 'Sostieni lo sviluppo',
     configureAi: 'Collega ingegnere', configureAiHint: 'Collega un modello per il tuo ingegnere di gara personale — feedback diretto e basato sui dati.', setupGuide: 'Guida alla configurazione',
   },
   pt: {
@@ -328,7 +328,7 @@ const DICT: Record<string, Dict> = {
     idealLapInfo: 'Volta teoricamente mais rápida — calculada combinando os melhores tempos sectoriais de todas as voltas selecionadas.',
     updateAvailable: 'Atualização disponível: v{v}', updateDescription: 'Uma nova versão do Sim Racing Engineer está pronta.', updateInstalled: 'Atualização instalada — reinicia para usar a versão {v}.', installing: 'A instalar…', updateNow: 'Atualizar agora',
     navTelemetry: 'Telemetria', dark: 'Escuro', light: 'Claro', toggleTheme: 'Alternar claro/escuro',
-    aiCoach: 'Engenheiro de corrida', joinDiscord: 'Entrar no Discord',
+    aiCoach: 'Engenheiro de corrida', donate: 'Apoiar o desenvolvimento',
     configureAi: 'Ligar engenheiro', configureAiHint: 'Liga um modelo para o teu engenheiro de corrida pessoal — feedback direto e baseado em dados.', setupGuide: 'Guia de configuração',
   },
   nl: {
@@ -369,7 +369,7 @@ const DICT: Record<string, Dict> = {
     idealLapInfo: 'Theoretisch snelste ronde — berekend door de beste sectortijden van alle geselecteerde ronden te combineren.',
     updateAvailable: 'Update beschikbaar: v{v}', updateDescription: 'Een nieuwe versie van Sim Racing Engineer is klaar.', updateInstalled: 'Update geïnstalleerd — herstart voor versie {v}.', installing: 'Installeren…', updateNow: 'Nu updaten',
     navTelemetry: 'Telemetrie', dark: 'Donker', light: 'Licht', toggleTheme: 'Donker/licht wisselen',
-    aiCoach: 'Race-ingenieur', joinDiscord: 'Discord joinen',
+    aiCoach: 'Race-ingenieur', donate: 'Steun de ontwikkeling',
     configureAi: 'Ingenieur verbinden', configureAiHint: 'Verbind een model voor je persoonlijke race-ingenieur — directe, data-gedreven feedback op elke ronde.', setupGuide: 'Installatiegids',
   },
   pl: {
@@ -410,7 +410,7 @@ const DICT: Record<string, Dict> = {
     idealLapInfo: 'Teoretycznie najszybsze okrążenie — obliczone przez połączenie najlepszych czasów sektorów ze wszystkich wybranych okrążeń.',
     updateAvailable: 'Aktualizacja dostępna: v{v}', updateDescription: 'Nowa wersja Sim Racing Engineer jest gotowa.', updateInstalled: 'Aktualizacja zainstalowana — uruchom ponownie dla wersji {v}.', installing: 'Instalowanie…', updateNow: 'Zaktualizuj teraz',
     navTelemetry: 'Telemetria', dark: 'Ciemny', light: 'Jasny', toggleTheme: 'Przełącz ciemny/jasny',
-    aiCoach: 'Inżynier wyścigowy', joinDiscord: 'Dołącz do Discord',
+    aiCoach: 'Inżynier wyścigowy', donate: 'Wesprzyj rozwój',
     configureAi: 'Podłącz inżyniera', configureAiHint: 'Podłącz model dla swojego osobistego inżyniera wyścigowego — bezpośredni feedback oparty na danych.', setupGuide: 'Przewodnik konfiguracji',
   },
   ru: {
@@ -451,7 +451,7 @@ const DICT: Record<string, Dict> = {
     idealLapInfo: 'Теоретически самый быстрый круг — рассчитывается путём объединения лучших секторных времён из всех выбранных кругов.',
     updateAvailable: 'Обновление доступно: v{v}', updateDescription: 'Новая версия Sim Racing Engineer готова.', updateInstalled: 'Обновление установлено — перезапустите для версии {v}.', installing: 'Установка…', updateNow: 'Обновить сейчас',
     navTelemetry: 'Телеметрия', dark: 'Тёмный', light: 'Светлый', toggleTheme: 'Переключить тему',
-    aiCoach: 'Гоночный инженер', joinDiscord: 'Присоединиться к Discord',
+    aiCoach: 'Гоночный инженер', donate: 'Поддержать разработку',
     configureAi: 'Подключить инженера', configureAiHint: 'Подключите модель для вашего личного гоночного инженера — прямая обратная связь на основе данных.', setupGuide: 'Руководство по настройке',
   },
   ja: {
@@ -492,7 +492,7 @@ const DICT: Record<string, Dict> = {
     idealLapInfo: '理論上の最速ラップ — 選択した全ラップの最高セクタータイムを組み合わせて算出。',
     updateAvailable: 'アップデート利用可能: v{v}', updateDescription: 'Sim Racing Engineerの新バージョンが準備できました。', updateInstalled: 'アップデート完了 — バージョン{v}を使用するには再起動してください。', installing: 'インストール中…', updateNow: '今すぐ更新',
     navTelemetry: 'テレメトリー', dark: 'ダーク', light: 'ライト', toggleTheme: 'テーマ切替',
-    aiCoach: 'レースエンジニア', joinDiscord: 'Discordに参加',
+    aiCoach: 'レースエンジニア', donate: '開発を支援する',
     configureAi: 'エンジニアを接続', configureAiHint: 'モデルを接続してパーソナルレースエンジニアを起動しましょう。', setupGuide: 'セットアップガイド',
   },
   zh: {
@@ -533,7 +533,7 @@ const DICT: Record<string, Dict> = {
     idealLapInfo: '理论最快圈速 — 通过组合所有选定圈次的最佳分段时间计算得出。',
     updateAvailable: '有可用更新：v{v}', updateDescription: '新版本的Sim Racing Engineer已准备就绪。', updateInstalled: '更新已安装 — 重启应用以使用版本{v}。', installing: '安装中…', updateNow: '立即更新',
     navTelemetry: '遥测', dark: '深色', light: '浅色', toggleTheme: '切换主题',
-    aiCoach: '赛车工程师', joinDiscord: '加入Discord',
+    aiCoach: '赛车工程师', donate: '支持开发',
     configureAi: '连接工程师', configureAiHint: '连接模型以获得您的个人赛车工程师 — 基于数据的直接反馈。', setupGuide: '设置指南',
   },
 }
