@@ -73,20 +73,18 @@ function SessionCard({ session, active, onActivate, onRemove }: {
       }`}
       onClick={onActivate}
     >
-      <div className="flex items-start gap-2 px-3 pt-2.5 pb-1.5">
+      <div className="flex items-center gap-2 px-3 py-1.5">
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-1.5 mb-0.5">
-            {active && (
-              <span className="inline-block w-1.5 h-1.5 rounded-full bg-primary shrink-0" />
-            )}
-            <span className="text-xs font-semibold text-foreground truncate leading-tight">{session.track}</span>
+          <div className="flex items-center gap-1.5">
+            {active && <span className="inline-block w-1.5 h-1.5 rounded-full bg-primary shrink-0" />}
+            <span className="text-[11px] font-semibold text-foreground truncate leading-tight">{session.track}</span>
+            <span className="text-[10px] text-muted-foreground/60 shrink-0">{session.date.slice(0, 10)}</span>
           </div>
-          <span className="text-[11px] text-muted-foreground truncate block leading-tight">{session.car}</span>
-          <div className="flex items-center justify-between mt-0.5">
-            <span className="text-[10px] text-muted-foreground/60">{session.date.slice(0, 10)}</span>
+          <div className="flex items-center gap-2 mt-0.5">
+            <span className="text-[10px] text-muted-foreground truncate leading-tight">{session.car}</span>
             <button
               onClick={openTrackGuide}
-              className="text-[10px] font-medium text-muted-foreground hover:text-primary transition-colors flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-primary/10"
+              className="text-[9px] font-medium text-muted-foreground hover:text-primary transition-colors flex items-center gap-0.5 shrink-0 hover:underline"
               title={t('trackGuide')}
             >
               ▶ {t('trackGuide')}
@@ -95,7 +93,7 @@ function SessionCard({ session, active, onActivate, onRemove }: {
         </div>
         <button
           onClick={e => { e.stopPropagation(); onRemove() }}
-          className="text-muted-foreground/40 hover:text-destructive transition-colors mt-0.5 shrink-0 p-0.5 rounded hover:bg-destructive/10"
+          className="text-muted-foreground/40 hover:text-destructive transition-colors shrink-0 p-0.5 rounded hover:bg-destructive/10"
           title={t('removeSession')}
         >
           <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
@@ -170,53 +168,36 @@ function ConsistencyPanel() {
   const idealDelta = idealTime != null ? best - idealTime : null
 
   return (
-    <div className="shrink-0 border-t border-border px-3 py-2.5 bg-secondary/20">
-      <div className="flex items-center justify-between mb-1.5">
-        <div className="flex items-center gap-1.5">
-          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">{t('consistencyScore')}</p>
-          {/* Info tooltip */}
-          <div className="relative group">
-            <button className="text-muted-foreground/50 hover:text-muted-foreground transition-colors leading-none">
-              <svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="7" cy="7" r="6" />
-                <path d="M7 6.5v4M7 4.5v.5" />
-              </svg>
-            </button>
-            <div className="absolute bottom-full left-0 mb-2 w-60 hidden group-hover:block z-50 pointer-events-none">
-              <div className="bg-popover border border-border rounded-lg shadow-lg px-3 py-2.5 text-[10px] text-muted-foreground leading-relaxed">
-                <p className="font-semibold text-foreground mb-1">{t('consistencyScore')}</p>
-                <p className="mb-2">{t('consistencyScoreInfo')}</p>
-                <p className="font-semibold text-foreground mb-1">{t('idealLap')}</p>
-                <p>{t('idealLapInfo')}</p>
-              </div>
-            </div>
-          </div>
+    <div className="shrink-0 border-t border-border px-3 py-1.5 bg-secondary/20">
+      {/* Row 1: label + bar + score */}
+      <div className="flex items-center gap-2 mb-1">
+        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest shrink-0">{t('consistencyScore')}</p>
+        <div className="flex-1 h-1 bg-secondary rounded-full overflow-hidden">
+          <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${consistency}%` }} />
         </div>
-        <p className={`text-sm font-bold tabular-nums ${scoreColor}`}>{consistency.toFixed(1)}%</p>
+        <p className={`text-[11px] font-bold tabular-nums shrink-0 ${scoreColor}`}>{consistency.toFixed(1)}%</p>
       </div>
-      <div className="h-1 bg-secondary rounded-full mb-2 overflow-hidden">
-        <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${consistency}%` }} />
-      </div>
-      <div className="grid grid-cols-3 gap-x-2">
+      {/* Row 2: best / spread / ideal inline */}
+      <div className="flex gap-3">
         <div>
-          <p className="text-[10px] text-muted-foreground/60 uppercase tracking-wide">Best</p>
-          <p className="text-xs font-mono text-foreground tabular-nums">{fmtTime(best)}</p>
+          <span className="text-[9px] text-muted-foreground/60 uppercase tracking-wide">Best </span>
+          <span className="text-[10px] font-mono text-foreground tabular-nums">{fmtTime(best)}</span>
         </div>
         <div>
-          <p className="text-[10px] text-muted-foreground/60 uppercase tracking-wide">{t('lapSpread')}</p>
-          <p className="text-xs font-mono text-foreground tabular-nums">+{spread.toFixed(3)}s</p>
+          <span className="text-[9px] text-muted-foreground/60 uppercase tracking-wide">{t('lapSpread')} </span>
+          <span className="text-[10px] font-mono text-foreground tabular-nums">+{spread.toFixed(3)}s</span>
         </div>
         <div>
-          <p className="text-[10px] text-muted-foreground/60 uppercase tracking-wide">{t('idealLap')}</p>
+          <span className="text-[9px] text-muted-foreground/60 uppercase tracking-wide">{t('idealLap')} </span>
           {idealTime != null ? (
             <>
-              <p className="text-xs font-mono text-foreground tabular-nums">{fmtTime(idealTime)}</p>
+              <span className="text-[10px] font-mono text-foreground tabular-nums">{fmtTime(idealTime)}</span>
               {idealDelta != null && Math.abs(idealDelta) > 0.01 && (
-                <p className="text-[10px] font-mono text-sky-500 tabular-nums">-{Math.abs(idealDelta).toFixed(3)}s</p>
+                <span className="text-[9px] font-mono text-sky-500 tabular-nums ml-1">-{Math.abs(idealDelta).toFixed(3)}s</span>
               )}
             </>
           ) : (
-            <p className="text-xs font-mono text-muted-foreground/40">–</p>
+            <span className="text-[10px] font-mono text-muted-foreground/40">–</span>
           )}
         </div>
       </div>
