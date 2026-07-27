@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { useSessionStore, getLapColor, lapKey, type Session } from '@/store/session'
 import SidebarTrackMap from '@/components/SidebarTrackMap'
 import { useT } from '@/lib/i18n'
+import { Spinner } from '@/components/LoadingIndicator'
 
 function LapRow({ sessionId, lapNumber, lapTime, isValid, colorIndex, fastestTime, disabled }: {
   sessionId: string
@@ -246,7 +247,11 @@ export default function LapSidebar() {
       <div className="px-3 pt-2.5 pb-2 border-b border-border shrink-0 flex items-center gap-2">
         <div className="flex-1 min-w-0">
           <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">{t('sessions')}</p>
-          {loading && <p className="text-[10px] text-muted-foreground">{t('loading')}</p>}
+          {loading && (
+            <span className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+              <Spinner size={11} /> {t('loading')}
+            </span>
+          )}
           {error && <p className="text-[10px] text-destructive truncate" title={error}>{t('errorLoadingFile')}</p>}
           {sessions.length === 0 && !loading && (
             <p className="text-[10px] text-muted-foreground/50">{t('noSessionLoaded')}</p>

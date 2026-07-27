@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::State;
 use crate::ibt::{IbtFile, Session, LapChannelData};
 
 pub struct AppState {
-    pub sessions: Mutex<HashMap<String, (Session, Vec<u8>)>>,
+    // Arc, not Vec: the raw file is up to 110 MB and every channel request used
+    // to clone it outright — 33 channels x 3 laps meant gigabytes of memcpy
+    pub sessions: Mutex<HashMap<String, (Session, Arc<Vec<u8>>)>>,
 }
 
 impl AppState {
@@ -31,10 +33,10 @@ fn latest_ibt_in_dir(dir: &PathBuf) -> Option<PathBuf> {
     files.last().map(|e| e.path())
 }
 
-fn load_from_path(state: &State<AppState>, path: String) -> Result<Session, String> {
+fn load_from_path(state: &State<'_, AppState>, path: String) -> Result<Session, String> {
     // Read file once, parse from bytes — no double-read
-    let data = std::fs::read(&path).map_err(|e| e.to_string())?;
-    let ibt = IbtFile::from_bytes(data.clone())?;
+    let data = Arc::new(std::fs::read(&path).map_err(|e| e.to_string())?);
+    let ibt = IbtFile::from_bytes(Arc::clone(&data))?;
     let session = ibt.parse_session(path)?;
     let id = session.id.clone();
     state.sessions.lock().unwrap().insert(id, (session.clone(), data));
@@ -42,7 +44,7 @@ fn load_from_path(state: &State<AppState>, path: String) -> Result<Session, Stri
 }
 
 #[tauri::command]
-pub fn get_latest_session(state: State<AppState>) -> Result<Session, String> {
+pub async fn get_latest_session(state: State<'_, AppState>) -> Result<Session, String> {
     let dir = iracing_telemetry_dir();
     let path = latest_ibt_in_dir(&dir)
         .ok_or_else(|| format!("No .ibt files found in {:?}", dir))?;
@@ -50,42 +52,45 @@ pub fn get_latest_session(state: State<AppState>) -> Result<Session, String> {
 }
 
 #[tauri::command]
-pub fn load_session(state: State<AppState>, path: String) -> Result<Session, String> {
+pub async fn load_session(state: State<'_, AppState>, path: String) -> Result<Session, String> {
     load_from_path(&state, path)
 }
 
 #[tauri::command]
-pub fn get_lap_channel_data(
-    state: State<AppState>,
+pub async fn get_lap_channel_data(
+    state: State<'_, AppState>,
     session_id: String,
     lap_numbers: Vec<i32>,
     channel: String,
+    stride: Option<usize>,
 ) -> Result<Vec<LapChannelData>, String> {
     // Clone data under the lock, then drop the lock before doing any I/O or parsing
     let (session, raw) = {
         let sessions = state.sessions.lock().unwrap();
         let (s, r) = sessions.get(&session_id)
             .ok_or_else(|| format!("Session {} not found", session_id))?;
-        (s.clone(), r.clone())
+        (s.clone(), Arc::clone(r))
     }; // lock released here
 
-    let ibt = IbtFile::from_bytes(raw)?;
-
-    let results: Vec<LapChannelData> = session.laps.iter()
-        .filter(|l| lap_numbers.contains(&l.lap_number))
-        .filter_map(|lap| ibt.get_lap_channel_data(lap, &channel))
-        .collect();
-
-    Ok(results)
+    // Off the async runtime's worker too — parsing a lap is pure CPU work
+    tauri::async_runtime::spawn_blocking(move || {
+        let ibt = IbtFile::from_bytes(raw)?;
+        Ok(session.laps.iter()
+            .filter(|l| lap_numbers.contains(&l.lap_number))
+            .filter_map(|lap| ibt.get_lap_channel_data_strided(lap, &channel, stride.unwrap_or(1)))
+            .collect())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub fn get_session_yaml(state: State<AppState>, session_id: String) -> Result<String, String> {
+pub async fn get_session_yaml(state: State<'_, AppState>, session_id: String) -> Result<String, String> {
     let raw = {
         let sessions = state.sessions.lock().unwrap();
         let (_, r) = sessions.get(&session_id)
             .ok_or_else(|| format!("Session {} not found", session_id))?;
-        r.clone()
+        Arc::clone(r)
     };
     let ibt = IbtFile::from_bytes(raw)?;
     Ok(ibt.session_info_yaml())
@@ -97,8 +102,8 @@ pub fn get_telemetry_folder() -> String {
 }
 
 #[tauri::command]
-pub fn compute_ideal_lap(
-    state: State<AppState>,
+pub async fn compute_ideal_lap(
+    state: State<'_, AppState>,
     session_id: String,
     lap_numbers: Vec<i32>,
 ) -> Result<f64, String> {
@@ -108,7 +113,7 @@ pub fn compute_ideal_lap(
         let sessions = state.sessions.lock().unwrap();
         let (s, r) = sessions.get(&session_id)
             .ok_or_else(|| format!("Session {} not found", session_id))?;
-        (s.clone(), r.clone())
+        (s.clone(), Arc::clone(r))
     };
 
     let ibt = IbtFile::from_bytes(raw)?;

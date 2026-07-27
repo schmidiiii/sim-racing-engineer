@@ -218,14 +218,18 @@ function computeTransform(lats: number[], lons: number[]) {
   const minLat = Math.min(...lats), maxLat = Math.max(...lats)
   const minLon = Math.min(...lons), maxLon = Math.max(...lons)
   const latRange = maxLat - minLat || 1, lonRange = maxLon - minLon || 1
+  // A degree of longitude is only cos(lat) as long as one of latitude, so without
+  // this the track comes out stretched east-west and corners land in the wrong spot
+  const lonScale = Math.cos(((minLat + maxLat) / 2) * Math.PI / 180)
+  const lonSpan = lonRange * lonScale
   // 0.80 leaves 20% margin so corner labels don't get clipped
-  const scale = Math.min(200 / lonRange, 200 / latRange) * 0.80
-  const ox = (200 - lonRange * scale) / 2, oy = (200 - latRange * scale) / 2
-  return { minLat, minLon, scale, ox, oy }
+  const scale = Math.min(200 / lonSpan, 200 / latRange) * 0.80
+  const ox = (200 - lonSpan * scale) / 2, oy = (200 - latRange * scale) / 2
+  return { minLat, minLon, scale, lonScale, ox, oy }
 }
 
 function project(lat: number, lon: number, tf: ReturnType<typeof computeTransform>) {
-  return { x: (lon - tf.minLon) * tf.scale + tf.ox, y: 200 - (lat - tf.minLat) * tf.scale - tf.oy }
+  return { x: (lon - tf.minLon) * tf.scale * tf.lonScale + tf.ox, y: 200 - (lat - tf.minLat) * tf.scale - tf.oy }
 }
 
 // Find GPS position for a given lap_dist_pct value

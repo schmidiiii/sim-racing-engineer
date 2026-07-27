@@ -60,7 +60,7 @@ pub async fn auto_analyze(
         let sessions = state.sessions.lock().unwrap();
         let (s, r) = sessions.get(&session_id)
             .ok_or("Session not found")?;
-        (s.clone(), r.clone())
+        (s.clone(), std::sync::Arc::clone(r))
     };
 
     let ibt = crate::ibt::IbtFile::from_bytes(raw)?;

@@ -2,14 +2,26 @@ import { useEffect, useRef, useState, useMemo, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useSessionStore, parseLapKey, getLapColor } from '@/store/session'
 import { useT } from '@/lib/i18n'
+import LoadingIndicator from '@/components/LoadingIndicator'
 import { speedFromMps, speedUnit, tempFromC, tempUnit, fuelFromL, fuelUnit, speedFromKph, type UnitSystem } from '@/lib/units'
 import * as THREE from 'three'
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js'
 
-const ALT_SCALE = 0.2 // world units per metre of altitude
 const MAX_TRACK_PTS = 1500
-const ROAD_WIDTH = 10  // world units (visible road surface width)
-const LINE_WIDTH  = 0.12 // per-lap driving line width (world units)
+// Scene dimensions are metres, converted with tf.unitsPerMetre. They used to be
+// fixed world units, which only worked while every track had a similar footprint:
+// the world is always 400 units across, so the Nordschleife (6 km wide, 3x Spa)
+// got a 152 m wide road and a 21 m long car, and neighbouring sections simply
+// overlapped. Deliberately about twice life size, so the track still reads
+// clearly from the chase camera.
+const ROAD_WIDTH_M = 24    // visible road surface
+const LINE_WIDTH_M = 0.5   // per-lap driving line
+const CURB_W_M = 2.2       // kerb width
+const CURB_STRIPE_M = 5    // length of one red/white block
+const RUNOFF_W_M = 30      // gravel trap width
+const TREE_CLEAR_M = 45    // trees start this far beyond the road edge
+const CAR_WIDTH_M = 4      // car models are fitted to this
+const TREE_MIN_M = 9, TREE_MAX_M = 22
 const SPEEDS = [0.25, 0.5, 1, 2, 4]
 const TRACE_SAMPLES = 220 // rolling telemetry history length (frames)
 
@@ -41,9 +53,29 @@ interface LapReplayData {
   steering: number[] // radians
   fuel: number[]     // litres — empty when the session didn't log FuelLevel
   distPct: number[]  // progress along the track, 0–1
+  // Measured attitude. Signs verified against the data: Pitch correlates -0.99
+  // with the uphill gradient (so positive = nose down) and Roll is positive in a
+  // right-hand corner (left side down). Yaw needs a per-session offset, see
+  // calibrateYaw. Empty when the session didn't log them.
+  yaw: number[]
+  pitch: number[]
+  roll: number[]
+  // Per corner, indexed LF/RF/LR/RR. Wheel speed in m/s, tyre temp in °C,
+  // tread remaining in % across the three bands (inner / middle / outer).
+  wheelSpeed: Record<Corner, number[]>
+  tyreTemp: Record<Corner, number[]>
+  // Same three bands as the wear: inner / middle / outer surface temperature
+  tyreTempBands: Record<Corner, { l: number[]; m: number[]; r: number[] }>
+  tyreWear: Record<Corner, { l: number[]; m: number[]; r: number[] }>
+  absActive: number[]   // 1 while the ABS is reducing brake pressure
   timestamps: number[]
 }
 
+export type Corner = 'LF' | 'RF' | 'LR' | 'RR'
+
+
+// HUD cards on the right share one width
+const CARD_W = 128
 
 // Base sky colours — weather tints these toward grey
 const SKY_LIGHT = 0x9ec8e8
@@ -86,6 +118,8 @@ interface WorldTF {
   centerLon: number
   minAlt: number
   scale: number
+  lonScale: number        // cos(centerLat) — a degree of longitude is shorter than one of latitude
+  unitsPerMetre: number   // everything sized in metres multiplies by this
 }
 
 // Floor search: largest index where arr[i] <= target — guarantees frac ∈ [0,1) for interpolation
@@ -123,18 +157,31 @@ function buildWorldTF(lats: number[], lons: number[], alts: number[]): WorldTF {
   }
   const latR = maxLat - minLat || 1e-9
   const lonR = maxLon - minLon || 1e-9
+  const centerLat = (minLat + maxLat) / 2
+  // Without this the track comes out stretched east-west by 1/cos(lat) — 1.57x at
+  // Spa, 1.40x at Imola. That distorts the shape, the corner radii the geometry
+  // is built from, and the heading, which is what made the measured Yaw disagree
+  // with the driven path by ~10°.
+  const lonScale = Math.cos(centerLat * Math.PI / 180)
+  const scale = 400 / Math.max(latR, lonR * lonScale)
   return {
-    centerLat: (minLat + maxLat) / 2,
+    centerLat,
     centerLon: (minLon + maxLon) / 2,
     minAlt,
-    scale: 400 / Math.max(latR, lonR),
+    scale,
+    lonScale,
+    // A degree of latitude is 111_320 m anywhere, so this converts the
+    // degrees-based scale into units per metre
+    unitsPerMetre: scale / 111320,
   }
 }
 
 function toWorld(lat: number, lon: number, alt: number, tf: WorldTF): THREE.Vector3 {
   return new THREE.Vector3(
-    (lon - tf.centerLon) * tf.scale,
-    (alt - tf.minAlt) * ALT_SCALE,
+    (lon - tf.centerLon) * tf.scale * tf.lonScale,
+    // Same scale as the ground: a fixed vertical factor exaggerated relief
+    // threefold on a track as large as the Nordschleife
+    (alt - tf.minAlt) * tf.unitsPerMetre,
     -(lat - tf.centerLat) * tf.scale,
   )
 }
@@ -150,6 +197,16 @@ function pathTangent(pts: THREE.Vector3[], i: number, lastTan: THREE.Vector3): T
   tan.normalize()
   lastTan.copy(tan)
   return tan
+}
+
+// Stretch a thinned series back onto the full sample count, so callers can keep
+// indexing it with the same idx they use for the core channels
+function resample(src: number[], length: number): number[] {
+  if (src.length === 0 || src.length === length) return src
+  const out = new Array<number>(length)
+  const ratio = (src.length - 1) / Math.max(1, length - 1)
+  for (let i = 0; i < length; i++) out[i] = src[Math.round(i * ratio)] ?? 0
+  return out
 }
 
 // Sample a lap into a track centreline. Walking the samples in time order turns
@@ -180,7 +237,18 @@ function sampleCentreline(lap: LapReplayData, tf: WorldTF): { pts: THREE.Vector3
     return { pts, back: 0 }
   }
 
-  const stepPct = travelled / MAX_TRACK_PTS
+  // Point count follows the lap length instead of being fixed: 1500 points is
+  // 2 m apart at Winton but 14 m on the Nordschleife, where the road turns into
+  // visible facets. Capped, because the terrain build is O(vertices x points).
+  let spanUnits = 0
+  for (let i = 1; i < n; i++) {
+    const a = toWorld(lap.lat[i - 1], lap.lon[i - 1], 0, tf)
+    const b = toWorld(lap.lat[i], lap.lon[i], 0, tf)
+    spanUnits += Math.hypot(b.x - a.x, b.z - a.z)
+  }
+  const lengthM = spanUnits / Math.max(tf.unitsPerMetre, 1e-9)
+  const target = Math.max(900, Math.min(2200, Math.round(lengthM / 5)))
+  const stepPct = travelled / target
   const pts: THREE.Vector3[] = []
   let mark = -Infinity, back = 0
   for (let i = 0; i < n; i++) {
@@ -197,11 +265,21 @@ function sampleCentreline(lap: LapReplayData, tf: WorldTF): { pts: THREE.Vector3
   return { pts, back: back / n }
 }
 
-// Light moving average over a centreline. GPS samples land ~0.25 world units
-// apart, so raw jitter reads as phantom micro-corners: it makes every offset
-// strip zig-zag and produces bogus corner radii for the limiter below.
-function smoothPath(pts: THREE.Vector3[], w = 4): THREE.Vector3[] {
+// Light moving average over a centreline. Raw GPS jitter reads as phantom
+// micro-corners: it makes every offset strip zig-zag and produces bogus corner
+// radii for the limiter below.
+//
+// The window is a distance, not a sample count. As a fixed count it covered
+// ±57 m on the Nordschleife (1500 points spread over 20 km) versus ±9 m at
+// Winton, which cut whole corners off the generated track — the road ended up
+// tens of metres away from the line the car actually drove.
+function smoothPath(pts: THREE.Vector3[], windowMetres: number, unitsPerMetre: number): THREE.Vector3[] {
   const n = pts.length
+  if (n < 3) return pts.map(p => p.clone())
+  let span = 0
+  for (let i = 1; i < n; i++) span += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z)
+  const spacingM = span / (n - 1) / Math.max(unitsPerMetre, 1e-9)
+  const w = Math.max(1, Math.min(8, Math.round(windowMetres / Math.max(spacingM, 0.01))))
   return pts.map((p, i) => {
     let sx = 0, sz = 0, c = 0
     for (let k = Math.max(0, i - w); k <= Math.min(n - 1, i + w); k++) { sx += pts[k].x; sz += pts[k].z; c++ }
@@ -213,7 +291,6 @@ function smoothPath(pts: THREE.Vector3[], w = 4): THREE.Vector3[] {
 // (three adjacent samples are far too short a baseline to be meaningful).
 // posR/negR hold the radius for the side the path bends toward; the other side
 // is Infinity since offsetting away from a corner never folds.
-const RADIUS_ARC = 2.0
 function lateralLimits(pts: THREE.Vector3[]): { perp: THREE.Vector3[]; posR: Float64Array; negR: Float64Array } {
   const n = pts.length
   const perp: THREE.Vector3[] = new Array(n)
@@ -223,6 +300,9 @@ function lateralLimits(pts: THREE.Vector3[]): { perp: THREE.Vector3[]; posR: Flo
 
   const cum = new Float64Array(n)
   for (let i = 1; i < n; i++) cum[i] = cum[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z)
+  // Baseline for the radius, taken from the line's own sample spacing so it
+  // scales with the track instead of assuming a fixed world size
+  const RADIUS_ARC = Math.max((cum[n - 1] / Math.max(1, n - 1)) * 4, 1e-6)
   const atArc = (i: number, d: number) => {
     const t = cum[i] + d
     let lo = 0, hi = n - 1
@@ -262,6 +342,39 @@ function lateralLimits(pts: THREE.Vector3[]): { perp: THREE.Vector3[]; posR: Flo
 // in tight corners. Never reaches it, so the offset can't fold through the centre,
 // and unlike a hard clamp it tapers instead of kinking.
 const softOffset = (d: number, R: number) => Number.isFinite(R) ? d / (1 + d / R) : d
+
+// How far a strip may reach sideways before it runs into a *different* part of
+// the track. Corner radius alone isn't enough: the Nordschleife folds back on
+// itself constantly, and sections that are minutes apart along the lap pass
+// within 26 m of each other — with up to 24 m of height between them. A 140 m
+// apron then cuts clean through the tarmac of its neighbour. Each point gets
+// half the distance to the nearest section that is far away along the lap, so
+// two neighbours meet at the midpoint instead of overlapping.
+function selfClearance(pts: THREE.Vector3[], perp: THREE.Vector3[], minArcSep: number) {
+  const n = pts.length
+  const pos = new Float64Array(n).fill(Infinity)
+  const neg = new Float64Array(n).fill(Infinity)
+  const cum = new Float64Array(n)
+  for (let i = 1; i < n; i++) cum[i] = cum[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z)
+  const total = cum[n - 1]
+
+  for (let i = 0; i < n; i++) {
+    const pi = pts[i], pe = perp[i]
+    for (let j = 0; j < n; j++) {
+      // Arc distance the short way round, so the start/finish join isn't
+      // mistaken for two separate sections
+      let along = Math.abs(cum[i] - cum[j])
+      along = Math.min(along, total - along)
+      if (along < minArcSep) continue                 // same stretch of road
+      const dx = pts[j].x - pi.x, dz = pts[j].z - pi.z
+      const d = Math.hypot(dx, dz)
+      if (dx * pe.x + dz * pe.z > 0) { if (d < pos[i]) pos[i] = d }
+      else                           { if (d < neg[i]) neg[i] = d }
+    }
+  }
+  for (let i = 0; i < n; i++) { pos[i] *= 0.5; neg[i] *= 0.5 }
+  return { pos, neg }
+}
 
 // Offset a centreline sideways by a signed distance, limited so it can never
 // fold through a corner (see lateralLimits).
@@ -328,9 +441,11 @@ export interface CarWheel {
   pivot: THREE.Object3D  // carries the steering angle (front wheels only)
   mesh: THREE.Mesh       // spins about its own axle
   front: boolean
+  corner: Corner         // which of the four wheels this is
   radius: number         // world units — sets the rolling speed
   axis: 'x' | 'z'        // axle direction in model space
   spinSign: 1 | -1       // rotation direction that rolls the car forwards
+  mat: THREE.MeshLambertMaterial   // per car and wheel, so tyre temp can tint it
 }
 
 // The car models name their parts "part 007" / "default3", so wheels have to be
@@ -339,15 +454,30 @@ export interface CarWheel {
 // the four wheels on the Porsche (axle along X) and the F1 (axle along Z).
 // Run once on the shared base model: it re-homes each wheel on its own axle and
 // tags it, so every per-lap clone inherits ready-to-spin wheels.
-function prepareWheels(model: THREE.Object3D, forward: { axis: 'x' | 'z'; sign: 1 | -1 }) {
+//
+// This runs *after* the model's rotation.y correction, and Box3 measures world
+// space, so both cars arrive here in the same frame regardless of how their OBJ
+// was authored: nose at +Z, axles along X. Taking the models' native orientation
+// here instead is what previously mislabelled the corners.
+function prepareWheels(model: THREE.Object3D) {
   const box  = new THREE.Box3().setFromObject(model)
   const size = box.getSize(new THREE.Vector3())
   const mid  = box.getCenter(new THREE.Vector3())
-  const lon = forward.axis                              // model's longitudinal axis
-  const lat: 'x' | 'z' = lon === 'x' ? 'z' : 'x'        // axle axis
+  const lon = 'z' as const                              // longitudinal axis
+  const lat = 'x' as const                              // axle axis
   const lonLen = size[lon]
-  // Rolling forwards turns the top of the wheel toward the car's nose
-  const spinSign: 1 | -1 = ((lat === 'x' ? 1 : -1) * forward.sign) as 1 | -1
+
+  // Two frames are in play. The corners above are read off the world-space box,
+  // where both cars sit nose at +Z. The spin, though, is written to
+  // mesh.rotation, which lives in the model's *own* frame — so the axle has to
+  // be named there. Expressing the world X axis (the axle) in that frame gives
+  // both the axis and its direction:
+  const c = Math.cos(model.rotation.y), s = Math.sin(model.rotation.y)
+  const axis: 'x' | 'z' = Math.abs(c) >= Math.abs(s) ? 'x' : 'z'
+  // Rolling forwards carries the top of the wheel toward the nose, which about
+  // world +X is a positive rotation — negated when the model's axle runs the
+  // other way, as it does on both of these cars
+  const spinSign: 1 | -1 = ((axis === 'x' ? c : s) > 0 ? 1 : -1)
 
   const meshes: THREE.Mesh[] = []
   model.traverse(c => { const m = c as THREE.Mesh; if (m.isMesh) meshes.push(m) })
@@ -380,9 +510,14 @@ function prepareWheels(model: THREE.Object3D, forward: { axis: 'x' | 'z'; sign: 
     mesh.material = wheelMat
     // userData survives clone(), so each lap's copy is recognisable again
     mesh.userData.isWheel = true
-    mesh.userData.wheelFront = forward.sign > 0 ? mc[lon] > mid[lon] : mc[lon] < mid[lon]
+    const isFront = mc[lon] > mid[lon]
+    // Turning left raises rotation.y, which swings the nose from +z toward +x,
+    // so +x is the driver's left
+    const isLeft = mc[lat] > mid[lat]
+    mesh.userData.wheelFront = isFront
+    mesh.userData.wheelCorner = (isFront ? (isLeft ? 'LF' : 'RF') : (isLeft ? 'LR' : 'RR'))
     mesh.userData.wheelRadius = dia / 2
-    mesh.userData.wheelAxis = lat
+    mesh.userData.wheelAxis = axis
     mesh.userData.wheelSpin = spinSign
   }
 }
@@ -699,13 +834,18 @@ function collectWheels(model: THREE.Object3D): CarWheel[] {
   model.traverse(c => {
     const mesh = c as THREE.Mesh
     if (!mesh.isMesh || !mesh.userData.isWheel || !mesh.parent) return
+    // clone() shares materials — each wheel needs its own to show its own temperature
+    const mat = new THREE.MeshLambertMaterial({ color: TYRE_BASE })
+    mesh.material = mat
     out.push({
       pivot: mesh.parent,
       mesh,
       front: mesh.userData.wheelFront,
+      corner: mesh.userData.wheelCorner,
       radius: mesh.userData.wheelRadius,
       axis: mesh.userData.wheelAxis,
       spinSign: mesh.userData.wheelSpin,
+      mat,
     })
   })
   return out
@@ -726,15 +866,58 @@ function fitToWorldUnits(model: THREE.Object3D, targetWidth = 2.5) {
 }
 
 // Fallback box-car used while the OBJ is loading
-function buildPlaceholderCar(): THREE.Group {
+function buildPlaceholderCar(scale = 1): THREE.Group {
   const group = new THREE.Group()
   // Yaw first, pitch about the already-turned lateral axis — with the default
   // XYZ order the pitch would tilt about the world X axis and roll the car
   group.rotation.order = 'YXZ'
-  const body = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.55, 3.5), new THREE.MeshLambertMaterial({ color: 0x555555 }))
-  body.position.y = 0.35
+  const body = new THREE.Mesh(new THREE.BoxGeometry(1.4 * scale, 0.55 * scale, 3.5 * scale), new THREE.MeshLambertMaterial({ color: 0x555555 }))
+  body.position.y = 0.35 * scale
   group.add(body)
   return group
+}
+
+
+// ── Tyre temperature colouring ───────────────────────────────────────────────
+// Measured range in a Cup car stint: ~30 °C cold, 100 °C hot. Blue → green →
+// red across that, kept dark so the wheels still read as tyres rather than sweets.
+const TYRE_BASE = 0x141414
+const TYRE_COLD = 55, TYRE_HOT = 110   // dead black up to 55 °C, then into the red
+const tyreColor = (() => {
+  // Black when cold, glowing toward red as the tyre heats up — a tyre should look
+  // like a tyre at rest, so the colour only creeps in with temperature
+  const cold = new THREE.Color(TYRE_BASE)
+  const warm = new THREE.Color(0x6b1512)   // dark red
+  const hot  = new THREE.Color(0xe8442c)   // bright red
+  const out  = new THREE.Color()
+  return (c: number) => {
+    const t = Math.max(0, Math.min(1, (c - TYRE_COLD) / (TYRE_HOT - TYRE_COLD)))
+    if (t < 0.5) out.copy(cold).lerp(warm, t * 2)
+    else out.copy(warm).lerp(hot, (t - 0.5) * 2)
+    return out
+  }
+})()
+
+// iRacing's Yaw is in its own frame, so it needs a per-session offset to line up
+// with the viewer's world. Averaged over the lap the car points where it is
+// going, so the mean difference between GPS heading and Yaw is that offset —
+// measured at 1.5° residual scatter, and the leftover is the slip angle itself.
+function calibrateYaw(lap: LapReplayData, tf: WorldTF): number | null {
+  if (lap.yaw.length !== lap.lat.length || lap.lat.length < 60) return null
+  let sumS = 0, sumC = 0, n = 0
+  for (let i = 10; i < lap.lat.length - 10; i += 3) {
+    // Fast samples only: at low speed the GPS heading is noisy and the car is
+    // often sideways anyway, both of which drag the offset off. Measured scatter
+    // over fast samples is 1.5°, which is the slip angle itself.
+    if ((lap.speed[i] ?? 0) < 15) continue
+    const a = toWorld(lap.lat[i - 10], lap.lon[i - 10], 0, tf)
+    const b = toWorld(lap.lat[i + 10], lap.lon[i + 10], 0, tf)
+    const dx = b.x - a.x, dz = b.z - a.z
+    if (dx * dx + dz * dz < 0.04) continue        // barely moving, heading is noise
+    const d = Math.atan2(dx, dz) - lap.yaw[i]
+    sumS += Math.sin(d); sumC += Math.cos(d); n++
+  }
+  return n > 30 ? Math.atan2(sumS / n, sumC / n) : null
 }
 
 // Line-art weather glyph for the conditions card
@@ -833,6 +1016,12 @@ export default function Replay3DViewer() {
   const hudDegRefs    = useRef<(HTMLSpanElement  | null)[]>([])
   const hudFuelRefs   = useRef<(HTMLSpanElement  | null)[]>([])
   const hudDeltaRefs  = useRef<(HTMLSpanElement  | null)[]>([])
+  // Tyre card: one entry per corner, three bands each, plus the wear readout
+  const tyreBandRefs  = useRef<Record<string, (HTMLDivElement | null)[]>>({ LF: [], RF: [], LR: [], RR: [] })
+  const tyreWearRefs  = useRef<Record<string, HTMLSpanElement | null>>({ LF: null, RF: null, LR: null, RR: null })
+  const absLampRef    = useRef<HTMLSpanElement | null>(null)
+  const spinLampRef   = useRef<HTMLSpanElement | null>(null)
+  const [tyresOpen, setTyresOpen] = useState(true)
   const mapDotRefs       = useRef<(SVGCircleElement | null)[]>([])
   const hudTraceRefs     = useRef<(HTMLCanvasElement | null)[]>([])
   const trackMapDataRef  = useRef<{ d: string; startXY: [number, number]; toMapXY: (lat: number, lon: number) => [number, number] } | null>(null)
@@ -852,9 +1041,12 @@ export default function Replay3DViewer() {
     const minLon = Math.min(...lap.lon), maxLon = Math.max(...lap.lon)
     const latR = maxLat - minLat || 0.001
     const lonR = maxLon - minLon || 0.001
-    const scale = 90 / Math.max(latR, lonR)
+    // Same longitude correction as the world transform, or the minimap shows a
+    // differently distorted track than the 3D scene next to it
+    const lonScale = Math.cos(((minLat + maxLat) / 2) * Math.PI / 180)
+    const scale = 90 / Math.max(latR, lonR * lonScale)
     const toMapXY = (lat: number, lon: number): [number, number] => [
-      5 + (lon - minLon) * scale,
+      5 + (lon - minLon) * scale * lonScale,
       95 - (lat - minLat) * scale,
     ]
     const step = Math.max(1, Math.floor(lap.lat.length / 400))
@@ -902,6 +1094,9 @@ export default function Replay3DViewer() {
     // before the empty-selection one — so the viewer sat on "Loading 3D data…"
     if (selectedLapKeys.length === 0 || sessions.length === 0) { setLaps([]); setLoading(false); return }
     setLoading(true)
+    // Only what the scene needs to appear. The rest arrives afterwards — a
+    // Nordschleife lap is 26k samples, so all 33 channels at once means ~6.6 MB
+    // per lap over the IPC bridge, and parsing that blocks the UI outright.
     const CHANNELS = ['Lat', 'Lon', 'Alt', 'Speed', 'Gear', 'Throttle', 'Brake', 'SteeringWheelAngle', 'FuelLevel'] as const
     // Toggling laps quickly leaves several fetches in flight — without this an
     // older one can land last and overwrite the current selection's data
@@ -940,6 +1135,19 @@ export default function Replay3DViewer() {
             steering: fill(steeringD),
             fuel: fuelD ? fuelD.samples : [],
             distPct: latD.lap_dist_pct ?? [],
+            // Filled in by the second pass — see the extras effect below
+            yaw: [], pitch: [], roll: [],
+            wheelSpeed: { LF: [], RF: [], LR: [], RR: [] },
+            tyreTemp: { LF: [], RF: [], LR: [], RR: [] },
+            tyreTempBands: {
+              LF: { l: [], m: [], r: [] }, RF: { l: [], m: [], r: [] },
+              LR: { l: [], m: [], r: [] }, RR: { l: [], m: [], r: [] },
+            },
+            tyreWear: {
+              LF: { l: [], m: [], r: [] }, RF: { l: [], m: [], r: [] },
+              LR: { l: [], m: [], r: [] }, RR: { l: [], m: [], r: [] },
+            },
+            absActive: [],
             timestamps: latD.timestamps,
           })
         } catch { /* no GPS */ }
@@ -953,6 +1161,59 @@ export default function Replay3DViewer() {
     })
     return () => { cancelled = true }
   }, [selectedLapKeys.join(','), sessions.length])
+
+
+  // ── Extra channels, loaded after the scene is up ───────────────────────────
+  // Attitude, wheel speeds, tyre temperatures, wear and ABS are 24 more channels.
+  // Fetching them with the core data pushed a Nordschleife lap to ~6.6 MB over
+  // the IPC bridge and locked the window. They arrive afterwards, one at a time,
+  // and are written into the existing lap objects: the scene reads these arrays
+  // every frame, so filling them in takes effect without rebuilding anything.
+  useEffect(() => {
+    if (!laps.length) return
+    let cancelled = false
+    const wire: [string, (lap: LapReplayData, v: number[]) => void][] = [
+      ['Yaw',   (l, v) => { l.yaw = v }],
+      ['Pitch', (l, v) => { l.pitch = v }],
+      ['Roll',  (l, v) => { l.roll = v }],
+      ['BrakeABSactive', (l, v) => { l.absActive = v }],
+    ]
+    for (const c of ['LF', 'RF', 'LR', 'RR'] as Corner[]) {
+      wire.push([`${c}speed`, (l, v) => { l.wheelSpeed[c] = v }])
+      wire.push([`${c}tempL`, (l, v) => { l.tyreTempBands[c].l = v }])
+      wire.push([`${c}tempM`, (l, v) => { l.tyreTempBands[c].m = v; l.tyreTemp[c] = v }])
+      wire.push([`${c}tempR`, (l, v) => { l.tyreTempBands[c].r = v }])
+      wire.push([`${c}wearL`, (l, v) => { l.tyreWear[c].l = v }])
+      wire.push([`${c}wearM`, (l, v) => { l.tyreWear[c].m = v }])
+      wire.push([`${c}wearR`, (l, v) => { l.tyreWear[c].r = v }])
+    }
+
+    ;(async () => {
+      for (const lap of laps) {
+        const { sessionId, lapNumber } = parseLapKey(lap.lapKey)
+        const sess = sessions.find(s => s.id === sessionId)
+        if (!sess) continue
+        const avail = new Set(sess.available_channels.map(c => c.name))
+        // Thin these out: they drive colours and flags, not motion, so one value
+        // every ~0.1 s is plenty. A 26k-sample lap becomes 4k values per channel.
+        const stride = Math.max(1, Math.round(lap.timestamps.length / 4000))
+        for (const [channel, assign] of wire) {
+          if (cancelled) return
+          if (!avail.has(channel)) continue
+          try {
+            const r = await invoke<LapChannelData[]>('get_lap_channel_data',
+              { sessionId, lapNumbers: [lapNumber], channel, stride })
+            if (cancelled) return
+            // Stretch back to the core series' length so the same index works
+            if (r[0]) assign(lap, resample(r[0].samples, lap.timestamps.length))
+          } catch { /* channel missing or unreadable — feature stays off */ }
+          // Yield between channels so the UI keeps breathing on long laps
+          await new Promise(res => setTimeout(res, 0))
+        }
+      }
+    })()
+    return () => { cancelled = true }
+  }, [laps, sessions])
 
   // ── Track / weather conditions ─────────────────────────────────────────────
   // Live channel values (averaged over the primary lap) with the session YAML
@@ -1053,49 +1314,66 @@ export default function Replay3DViewer() {
     const cleanest = sampled.reduce((best, s) => s.back < best.back ? s : best, sampled[0])
     // Everything below (road, curbs, runoff, terrain, trees) is offset from this
     // line, so it also has to be free of GPS jitter — see smoothPath
-    const basePts = smoothPath(cleanest.pts)
+    const basePts = smoothPath(cleanest.pts, 12, tf.unitsPerMetre)   // ±12 m of track
+    // Metres to world units for this track — see the *_M constants
+    const M = tf.unitsPerMetre
+    const ROAD_WIDTH = ROAD_WIDTH_M * M
+    const CAM_BACK = 21 * M, CAM_UP = 8 * M   // chase camera offsets, in metres
+    const LINE_WIDTH = LINE_WIDTH_M * M
 
     // ── Elevation terrain grid ─────────────────────────────────────────────
     // T_NEAR=20: any vertex within 20wu of track center → set to road height (flush, no float).
     // T_FAR=60:  blend to IDW beyond that.
     // Safety clamp ensures terrain ≤ closestY-0.12 in the entire near zone → no clipping.
 
-    const T_NEAR = 20, T_FAR = 60
-    const terrainGeo = new THREE.PlaneGeometry(1600, 1600, 90, 90)
+    // The blend radii must not fall below the terrain's own resolution, or no
+    // grid vertex lands inside them and the road floats free of the ground. One
+    // cell is 17.8 units — 92 m at Spa but 270 m on the Nordschleife.
+    const TERRAIN_CELLS = 160
+    const TERRAIN_CELL = 1600 / TERRAIN_CELLS
+    const T_NEAR = Math.max(45 * M, TERRAIN_CELL * 1.6)
+    const T_FAR  = Math.max(140 * M, TERRAIN_CELL * 4.5)
+    const terrainGeo = new THREE.PlaneGeometry(1600, 1600, TERRAIN_CELLS, TERRAIN_CELLS)
     terrainGeo.rotateX(-Math.PI / 2)
     const tPos = terrainGeo.attributes.position as THREE.BufferAttribute
-    const T_NEAR_SQ = T_NEAR * T_NEAR
-    for (let vi = 0; vi < tPos.count; vi++) {
-      const vx = tPos.getX(vi), vz = tPos.getZ(vi)
-      // j+=1: find true nearest road point — j+=2 could skip odd-index nearest → wrong closestY → clipping
+    // Shielding radius kept local: taking the lowest road point across the whole
+    // T_NEAR ring pulled the ground down by the elevation change over that ring —
+    // 77 m on the Nordschleife, where T_NEAR spans 430 m.
+    const SHIELD = Math.max(TERRAIN_CELL * 1.2, 30 * M)
+    const SHIELD_SQ = SHIELD * SHIELD
+    // Falloff for the distance weighting, in metres rather than a fixed unit
+    // count: the old constant behaved like 680 m on a big track, which averaged
+    // the whole lap into one flat height.
+    const IDW_SOFT = (30 * M) * (30 * M)
+    const groundHeightAt = (vx: number, vz: number): number => {
       let minD2 = Infinity, closestY = 0, minNearY = Infinity
+      // j+=1: find true nearest road point — j+=2 could skip odd-index nearest → wrong closestY → clipping
       for (let j = 0; j < basePts.length; j++) {
         const dx = basePts[j].x - vx, dz = basePts[j].z - vz
         const d2 = dx * dx + dz * dz
         if (d2 < minD2) { minD2 = d2; closestY = basePts[j].y }
-        if (d2 < T_NEAR_SQ) minNearY = Math.min(minNearY, basePts[j].y)
+        if (d2 < SHIELD_SQ) minNearY = Math.min(minNearY, basePts[j].y)
       }
       // IDW with j+=2 is fine for smooth height (nearby jitter negligible)
       let totalW = 0, weightedY = 0
       for (let j = 0; j < basePts.length; j += 2) {
         const dx = basePts[j].x - vx, dz = basePts[j].z - vz
-        const w = 1 / (dx * dx + dz * dz + 2000)
+        const w = 1 / (dx * dx + dz * dz + IDW_SOFT)
         weightedY += basePts[j].y * w; totalW += w
       }
-      const idwY = weightedY / totalW - 0.1
-      // Use lowest road Y within T_NEAR so terrain dips into valleys instead of floating above them
-      const floorY = (minNearY < Infinity ? minNearY : closestY) - 0.35
-      const minD   = Math.sqrt(minD2)
-      let finalY: number
-      if (minD <= T_NEAR) {
-        finalY = floorY
-      } else if (minD < T_FAR) {
+      const idwY = weightedY / totalW - 0.5 * M
+      // Stay under the nearby tarmac so the ground never pokes through it
+      const floorY = Math.min(closestY, minNearY < Infinity ? minNearY : closestY) - 1.8 * M
+      const minD = Math.sqrt(minD2)
+      if (minD <= T_NEAR) return floorY
+      if (minD < T_FAR) {
         const st = (minD - T_NEAR) / (T_FAR - T_NEAR)
-        finalY = Math.min(floorY * (1 - st) + idwY * st, floorY)
-      } else {
-        finalY = idwY
+        return Math.min(floorY * (1 - st) + idwY * st, floorY)
       }
-      tPos.setY(vi, finalY)
+      return idwY
+    }
+    for (let vi = 0; vi < tPos.count; vi++) {
+      tPos.setY(vi, groundHeightAt(tPos.getX(vi), tPos.getZ(vi)))
     }
     tPos.needsUpdate = true
     terrainGeo.computeVertexNormals()
@@ -1141,7 +1419,7 @@ export default function Replay3DViewer() {
         buildRibbon(lapPts, LINE_WIDTH, true),
         new THREE.MeshBasicMaterial({ color: new THREE.Color(getLapColor(lap.colorIndex)), side: THREE.DoubleSide }),
       )
-      lapMesh.position.y = 0.06
+      lapMesh.position.y = 0.12 * M
       scene.add(lapMesh)
     }
 
@@ -1149,7 +1427,7 @@ export default function Replay3DViewer() {
     const halfW = ROAD_WIDTH / 2
     const edgeMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide })
     for (const sign of [-1, 1])
-      scene.add(new THREE.Mesh(buildRibbon(offsetPath(basePts, sign * halfW, 0.12), 0.55, true), edgeMat))
+      scene.add(new THREE.Mesh(buildRibbon(offsetPath(basePts, sign * halfW, 0.25 * M), 1.1 * M, true), edgeMat))
 
     // ── Corner detection → curbs only at corners ───────────────────────────
     // Compute smoothed signed curvature (XZ cross product of consecutive direction vectors)
@@ -1182,11 +1460,11 @@ export default function Replay3DViewer() {
     // Helper: build alternating red/white curb from a slice of basePts, offset to one side
     const curbRed = new THREE.MeshBasicMaterial({ color: isDark ? 0x991111 : 0xdd1111, side: THREE.DoubleSide })
     const curbWht = new THREE.MeshBasicMaterial({ color: isDark ? 0xa8a8a8 : 0xffffff, side: THREE.DoubleSide })
-    const CURB_W = 1.2, CURB_STRIPE = 4.0
+    const CURB_W = CURB_W_M * M, CURB_STRIPE = CURB_STRIPE_M * M
     const addCurb = (pts: THREE.Vector3[], side: number) => {
       if (pts.length < 2) return
       // 0.275 = half the edge-strip width so curb inner edge is flush with white strip outer edge
-      const strip = offsetPath(pts, side * (halfW + 0.275 + CURB_W / 2), 0.09)
+      const strip = offsetPath(pts, side * (halfW + 0.55 * M + CURB_W / 2), 0.18 * M)
       let dist = 0, ss = 0, ci = 0
       for (let i = 1; i <= strip.length; i++) {
         if (i < strip.length) dist += strip[i].distanceTo(strip[i - 1])
@@ -1233,8 +1511,8 @@ export default function Replay3DViewer() {
     }
 
     // ── Gravel/sand runoff areas (outside of corners only) ────────────────
-    const RUNOFF_W    = 9.0
-    const RUNOFF_INNER = halfW + 0.275 + CURB_W + 0.4   // starts just past outer curb edge
+    const RUNOFF_W    = RUNOFF_W_M * M
+    const RUNOFF_INNER = halfW + 0.5 * M + CURB_W + 0.8 * M   // starts just past outer curb edge
     // Stamp noise-based vertex colours onto a ribbon so sand doesn't look uniformly flat
     const noiseRibbon = (geo: THREE.BufferGeometry, c1: THREE.Color, c2: THREE.Color, c3: THREE.Color) => {
       const p = geo.attributes.position as THREE.BufferAttribute
@@ -1258,15 +1536,56 @@ export default function Replay3DViewer() {
     const fringeC3 = new THREE.Color(isDark ? 0x342a1e : 0xcaaa60)
     const gravelMat = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide })
     const fringeMat = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide })
-    const addRunoff  = (pts: THREE.Vector3[], side: number) => {
-      if (pts.length < 2) return
-      const mkStrip = (lateralDist: number, yOff: number) => offsetPath(pts, side * lateralDist, yOff)
-      // Main gravel — Y at terrain level (≈ p.y − 0.35) with tiny lift for no z-fight
-      scene.add(new THREE.Mesh(
-        noiseRibbon(buildRibbon(mkStrip(RUNOFF_INNER + RUNOFF_W / 2, -0.32), RUNOFF_W, false), gravelC1, gravelC2, gravelC3), gravelMat))
+
+    // Limits for everything that runs alongside the road, measured once on the
+    // centreline: the corner radius (so a strip can't fold through a hairpin)
+    // and the clearance to other sections (so it can't cross them).
+    const baseLim   = lateralLimits(basePts)
+    const baseClear = selfClearance(basePts, baseLim.perp, 150 * M)
+    // A strip between two lateral distances, following the centreline. Both
+    // edges obey the limits above, so where a neighbouring section crowds in the
+    // strip narrows and finally disappears rather than cutting through it.
+    const sideStrip = (
+      s: number, e: number, side: number, innerD: number, outerD: number,
+      yIn:  (p: THREE.Vector3, x: number, z: number) => number,
+      yOut: (p: THREE.Vector3, x: number, z: number) => number,
+    ) => {
+      const cnt = e - s + 1
+      const pos = new Float32Array(cnt * 6)
+      const idx: number[] = []
+      for (let k = 0; k < cnt; k++) {
+        const i = s + k
+        const p = basePts[i], pe = baseLim.perp[i]
+        const R   = side > 0 ? baseLim.posR[i] : baseLim.negR[i]
+        const cap = side > 0 ? baseClear.pos[i] : baseClear.neg[i]
+        const di = Math.min(softOffset(innerD, R), cap)
+        const dO = Math.min(softOffset(outerD, R), cap)
+        const ix = p.x + pe.x * side * di, iz = p.z + pe.z * side * di
+        const ox = p.x + pe.x * side * dO, oz = p.z + pe.z * side * dO
+        const o = k * 6
+        pos[o]     = ix; pos[o + 1] = yIn(p, ix, iz);  pos[o + 2] = iz
+        pos[o + 3] = ox; pos[o + 4] = yOut(p, ox, oz); pos[o + 5] = oz
+        if (k < cnt - 1) { const a = k * 2, b = a + 1, c = a + 2, d = a + 3; idx.push(a, b, d, a, d, c) }
+      }
+      const geo = new THREE.BufferGeometry()
+      geo.setAttribute('position', new THREE.BufferAttribute(pos, 3))
+      geo.setIndex(idx)
+      geo.computeVertexNormals()
+      return geo
+    }
+
+    const addRunoff = (s: number, e: number, side: number) => {
+      if (e - s < 1) return
+      // Gravel sits a little below the tarmac, like a real trap
+      const gravelY = (p: THREE.Vector3) => p.y - 0.35 * M
+      const fringeY = (p: THREE.Vector3) => p.y - 0.40 * M
+      scene.add(new THREE.Mesh(noiseRibbon(
+        sideStrip(s, e, side, RUNOFF_INNER, RUNOFF_INNER + RUNOFF_W, gravelY, gravelY),
+        gravelC1, gravelC2, gravelC3), gravelMat))
       // Blend fringe (darker sand-to-grass) at outer edge — softens the hard cutoff
-      scene.add(new THREE.Mesh(
-        noiseRibbon(buildRibbon(mkStrip(RUNOFF_INNER + RUNOFF_W + 1.5, -0.34), 3.0, false), fringeC1, fringeC2, fringeC3), fringeMat))
+      scene.add(new THREE.Mesh(noiseRibbon(
+        sideStrip(s, e, side, RUNOFF_INNER + RUNOFF_W, RUNOFF_INNER + RUNOFF_W + 3 * M, fringeY, fringeY),
+        fringeC1, fringeC2, fringeC3), fringeMat))
     }
     const RUNOFF_CURV_THR = 0.09   // only at sharp corners (gentle bends stay clean)
     // Collect runoff ranges per side, then merge so adjacent corners share one continuous zone
@@ -1281,7 +1600,48 @@ export default function Replay3DViewer() {
     }
     for (const [side, segs] of Object.entries(runoffSegs)) {
       for (const seg of mergeSegs(segs)) {
-        addRunoff(basePts.slice(seg.s, seg.e + 1), Number(side))
+        addRunoff(seg.s, Math.min(seg.e, n - 1), Number(side))
+      }
+    }
+
+
+    // ── Verge: ties the road to the ground ────────────────────────────────────
+    // The terrain grid samples height at vertices up to half a cell away — 50 m
+    // on the Nordschleife — so it can never meet the tarmac exactly, and the road
+    // was left floating a good 20 m in the air. This strip runs the length of the
+    // track: its inner edge sits at road level, its outer edge on the ground the
+    // terrain actually draws, closing the gap regardless of grid resolution.
+    // Where two sections crowd each other the strip stops at the midpoint, and
+    // since both sides end on groundHeightAt of the same spot they meet flush.
+    {
+      const inner = RUNOFF_INNER + RUNOFF_W + 4 * M
+      const outer = inner + 90 * M
+      const vergeMat = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide })
+      const c1 = new THREE.Color(gndCol)
+      const c2 = new THREE.Color(isDark ? 0x1e2a18 : 0x3d5c22)
+      // Same grass tones as the terrain, mottled so it doesn't read as a band
+      const paint = (geo: THREE.BufferGeometry) => {
+        const cnt = (geo.attributes.position as THREE.BufferAttribute).count
+        const col = new Float32Array(cnt * 3)
+        for (let v = 0; v < cnt; v++) {
+          const t = (Math.sin((v >> 1) * 0.21) * 0.5 + 0.5) * 0.65
+          const ci = new THREE.Color().copy(c1).lerp(c2, t)
+          col[v * 3] = ci.r; col[v * 3 + 1] = ci.g; col[v * 3 + 2] = ci.b
+        }
+        geo.setAttribute('color', new THREE.BufferAttribute(col, 3))
+        return geo
+      }
+      for (const side of [-1, 1]) {
+        // Flat apron from the road edge out to where the verge starts. Gravel is
+        // only laid at corners, so everywhere else this is the only thing
+        // covering the ground between tarmac and terrain. It sits half a metre
+        // below the road, which keeps the gravel and kerbs on top of it.
+        scene.add(new THREE.Mesh(paint(sideStrip(0, n - 1, side, halfW, inner,
+          p => p.y - 0.5 * M, p => p.y - 0.6 * M)), vergeMat))
+        // …and from there down to the terrain, picking up exactly the height the
+        // grid draws so the two meet flush
+        scene.add(new THREE.Mesh(paint(sideStrip(0, n - 1, side, inner, outer,
+          p => p.y - 0.6 * M, (_p, x, z) => groundHeightAt(x, z))), vergeMat))
       }
     }
 
@@ -1343,7 +1703,7 @@ export default function Replay3DViewer() {
       ? [0x0d1f0a, 0x101c0d, 0x0a1808, 0x121e0f, 0x0c1a09, 0x0f1c0c]
       : [0x2d6a1e, 0x3d7a26, 0x4a8c30, 0x3b7322, 0x527d38, 0x245c18]
     ).map(c => new THREE.MeshLambertMaterial({ color: c }))
-    const TREE_CLEAR = halfW + 20    // trees start well clear of road + runoff
+    const TREE_CLEAR = halfW + TREE_CLEAR_M * M    // trees start well clear of road + runoff
     const TREE_CLEAR_SQ = TREE_CLEAR * TREE_CLEAR
     const tooClose = (px: number, pz: number): boolean => {
       for (let j = 0; j < basePts.length; j++) {
@@ -1360,40 +1720,15 @@ export default function Replay3DViewer() {
         const next = basePts[Math.min(basePts.length - 1, i + 1)]
         const tan  = new THREE.Vector3().subVectors(next, prev).normalize()
         const perp = new THREE.Vector3(-tan.z, 0, tan.x)
-        const lateral = 16 + seededRand(i * 11 + side * 7) * 30
-        const fwdJitter = (seededRand(i * 23 + side) - 0.5) * 7
-        const treeH = 3.5 + seededRand(i * 19 + side * 3) * 5.5
+        const lateral = (32 + seededRand(i * 11 + side * 7) * 60) * M
+        const fwdJitter = (seededRand(i * 23 + side) - 0.5) * 14 * M
+        const treeH = (TREE_MIN_M + seededRand(i * 19 + side * 3) * (TREE_MAX_M - TREE_MIN_M)) * M
         const pos = basePts[i].clone().addScaledVector(perp, side * lateral).addScaledVector(tan, fwdJitter)
         if (tooClose(pos.x, pos.z)) continue
-        // Ground tree with exact terrain-grid formula at the tree's world position
-        let tMD2 = Infinity, tCY = 0, tMNY = Infinity
-        for (let j = 0; j < basePts.length; j++) {
-          const dx2 = basePts[j].x - pos.x, dz2 = basePts[j].z - pos.z
-          const d2 = dx2 * dx2 + dz2 * dz2
-          if (d2 < tMD2) { tMD2 = d2; tCY = basePts[j].y }
-          if (d2 < T_NEAR_SQ) tMNY = Math.min(tMNY, basePts[j].y)
-        }
-        const tFloor = (tMNY < Infinity ? tMNY : tCY) - 0.35
-        const tMinD  = Math.sqrt(tMD2)
-        if (tMinD <= T_NEAR) {
-          pos.y = tFloor
-        } else {
-          let tw = 0, wy = 0
-          for (let j = 0; j < basePts.length; j += 2) {
-            const dx2 = basePts[j].x - pos.x, dz2 = basePts[j].z - pos.z
-            const w = 1 / (dx2 * dx2 + dz2 * dz2 + 2000)
-            wy += basePts[j].y * w; tw += w
-          }
-          const tIdwY = wy / tw - 0.1
-          if (tMinD < T_FAR) {
-            const st = (tMinD - T_NEAR) / (T_FAR - T_NEAR)
-            pos.y = Math.min(tFloor * (1 - st) + tIdwY * st, tFloor)
-          } else {
-            pos.y = tIdwY
-          }
-        }
+        // Same height rule the ground uses, so trees stand on it rather than in it
+        pos.y = groundHeightAt(pos.x, pos.z)
         const trunkH = treeH * 0.32
-        const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.22, trunkH, 5), trunkMat)
+        const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.35 * M, 0.55 * M, trunkH, 5), trunkMat)
         trunk.position.set(pos.x, pos.y + trunkH / 2, pos.z)
         scene.add(trunk)
         const crown = new THREE.Mesh(new THREE.ConeGeometry(treeH * 0.40, treeH * 0.78, 6), crownMats[treeIdx % crownMats.length])
@@ -1403,9 +1738,56 @@ export default function Replay3DViewer() {
       }
     }
 
+    // ── Tyre smoke ────────────────────────────────────────────────────────
+    // A shared pool of billboards. Locking or spinning wheels spawn one at the
+    // contact patch; it drifts up, grows and fades. Recycled oldest-first so the
+    // count is fixed no matter how long the lock lasts.
+    const SMOKE_MAX = 90
+    const smokeGeo = new THREE.PlaneGeometry(1, 1)
+    const smokeMat = new THREE.MeshBasicMaterial({
+      color: 0xd8d8d8, transparent: true, opacity: 0, depthWrite: false,
+    })
+    type Puff = { mesh: THREE.Mesh; mat: THREE.MeshBasicMaterial; life: number; max: number; size: number; vy: number }
+    const puffs: Puff[] = []
+    for (let i = 0; i < SMOKE_MAX; i++) {
+      const mat = smokeMat.clone()
+      const mesh = new THREE.Mesh(smokeGeo, mat)
+      mesh.visible = false
+      mesh.frustumCulled = false
+      scene.add(mesh)
+      puffs.push({ mesh, mat, life: 0, max: 1, size: 1, vy: 0 })
+    }
+    let puffNext = 0
+    let frameNow = 0            // animate() stamps this each frame
+    const puffPos = new THREE.Vector3()
+    // Throttled per wheel so one long lock doesn't burn the whole pool at 60 fps
+    const lastPuff: number[][] = laps.map(() => [0, 0, 0, 0])
+    const CORNER_IDX: Record<Corner, number> = { LF: 0, RF: 1, LR: 2, RR: 3 }
+    const puffSmoke = (li: number, w: CarWheel, strength: number) => {
+      const slot = CORNER_IDX[w.corner]
+      if (frameNow - lastPuff[li][slot] < 45) return    // ~22 puffs/s per wheel
+      lastPuff[li][slot] = frameNow
+      w.mesh.getWorldPosition(puffPos)
+      const p = puffs[puffNext]
+      puffNext = (puffNext + 1) % SMOKE_MAX
+      p.mesh.position.copy(puffPos)
+      p.mesh.position.y -= w.radius * 0.8               // down at the contact patch
+      p.life = 0
+      p.max = 0.5 + strength * 0.7                      // seconds
+      p.size = w.radius * (0.9 + strength * 1.6)
+      p.vy = 0.6 + strength * 1.2
+      p.mesh.visible = true
+      p.mat.opacity = 0.30 + strength * 0.28
+      p.mesh.scale.setScalar(p.size)
+    }
+
+    // Computed lazily: Yaw arrives with the extras, after the scene is built.
+    // undefined = not tried yet, null = no usable data.
+    const yawOffsets: (number | null | undefined)[] = laps.map(() => undefined)
+
     // Car placeholder groups (shown immediately while OBJ loads)
     const carGroups: THREE.Group[] = laps.map(() => {
-      const g = buildPlaceholderCar()
+      const g = buildPlaceholderCar(CAR_WIDTH_M * M / 1.4)
       scene.add(g)
       return g
     })
@@ -1423,10 +1805,10 @@ export default function Replay3DViewer() {
         // its racing line, and every zone measured from the box was off with it.
         // Porsche faces -Z natively → flip 180°; F1 faces +X natively → rotate -90°
         baseModel.rotation.y = openWheelCar ? -Math.PI / 2 : Math.PI
-        fitToWorldUnits(baseModel, 1.4)
+        fitToWorldUnits(baseModel, CAR_WIDTH_M * M)
         // Split the wheels off before cloning — clones share geometry, so the
         // re-homing must happen exactly once
-        prepareWheels(baseModel, openWheelCar ? { axis: 'x', sign: 1 } : { axis: 'z', sign: -1 })
+        prepareWheels(baseModel)
         // Measured after the rotation correction, so the box is already in the
         // car frame the lights are placed in (nose at +Z)
         const carBox = new THREE.Box3().setFromObject(baseModel)
@@ -1497,8 +1879,8 @@ export default function Replay3DViewer() {
       const tan   = new THREE.Vector3().subVectors(basePts[nextIdx], basePts[prevIdx]).normalize()
       const right = new THREE.Vector3(-tan.z, 0, tan.x)
       const side  = i % 2 === 0 ? 1 : -1
-      const dist  = 5 + (i % 3) * 1.5   // 5, 6.5, 8 units — tight trackside
-      const height = 5 + (i % 4) * 1.0  // 5 → 8 units — elevated enough to see cars on track
+      const dist  = (12 + (i % 3) * 4) * M   // 12–20 m — tight trackside
+      const height = (12 + (i % 4) * 3) * M  // 12–21 m — high enough to see cars on track
       tvCamPositions.push(
         basePts[ptIdx].clone()
           .addScaledVector(right, side * dist)
@@ -1517,6 +1899,7 @@ export default function Replay3DViewer() {
     const tMax = pLap.timestamps[pLap.timestamps.length - 1]
 
     const animate = (now: number) => {
+      frameNow = now      // puffSmoke() runs outside this closure and needs the clock
       rafRef.current = requestAnimationFrame(animate)
       const dt = lastMs != null ? Math.min((now - lastMs) / 1000, 0.05) : 0
       lastMs = now
@@ -1561,41 +1944,79 @@ export default function Replay3DViewer() {
         }
         const pos = toWorld(lat, lon, alt, tf)
         group.position.copy(pos)
-        group.position.y += 0.35  // just above road ribbon so car appears on its trace
-        // Heading: look a few samples ahead from the interpolated position
-        const dIdx = Math.min(idx + 5, lap.lat.length - 1)
-        if (dIdx > idx) {
-          const nPos = toWorld(lap.lat[dIdx], lap.lon[dIdx], lap.alt[dIdx], tf)
-          const dir = nPos.clone().sub(pos)
-          if (dir.lengthSq() > 0.001) group.rotation.y = Math.atan2(dir.x, dir.z)
-        }
-        // Pitch: nose follows the gradient, otherwise the car looks like it's
-        // flying over crests and dips. Measured over a longer baseline than the
-        // heading because raw GPS altitude is noisy, then eased in over ~5 frames.
-        const pIdx = Math.min(idx + 20, lap.lat.length - 1)
-        const qIdx = Math.max(idx - 20, 0)
-        if (pIdx > qIdx) {
-          const aPos = toWorld(lap.lat[qIdx], lap.lon[qIdx], lap.alt[qIdx], tf)
-          const bPos = toWorld(lap.lat[pIdx], lap.lon[pIdx], lap.alt[pIdx], tf)
-          const run = Math.hypot(bPos.x - aPos.x, bPos.z - aPos.z)
-          if (run > 0.05) {
-            // Positive rotation.x drops the nose, so the slope goes in negated
-            const target = -Math.atan2(bPos.y - aPos.y, run)
-            group.rotation.x += (target - group.rotation.x) * (1 - Math.pow(0.75, dt * 60))
+        group.position.y += 0.8 * M  // just above road ribbon so car appears on its trace
+        // Attitude: measured Yaw/Pitch/Roll where the session logged them, so the
+        // car shows what it actually did — oversteer, kerb strikes, dive under
+        // braking. Falls back to deriving heading and gradient from the path.
+        if (yawOffsets[li] === undefined && lap.yaw.length) yawOffsets[li] = calibrateYaw(lap, tf)
+        const yawOff = yawOffsets[li]
+        if (yawOff != null && lap.yaw.length > idx) {
+          group.rotation.y = lap.yaw[idx] + yawOff
+        } else {
+          const dIdx = Math.min(idx + 5, lap.lat.length - 1)
+          if (dIdx > idx) {
+            const nPos = toWorld(lap.lat[dIdx], lap.lon[dIdx], lap.alt[dIdx], tf)
+            const dir = nPos.clone().sub(pos)
+            if (dir.lengthSq() > 0.001) group.rotation.y = Math.atan2(dir.x, dir.z)
           }
         }
+        if (lap.pitch.length > idx) {
+          // Pitch is nose-down positive (correlates -0.99 with the uphill
+          // gradient), and so is rotation.x — no sign flip needed
+          group.rotation.x = lap.pitch[idx]
+        } else {
+          // No attitude channel: read the gradient off the path instead. Longer
+          // baseline than the heading because raw GPS altitude is noisy.
+          const pIdx = Math.min(idx + 20, lap.lat.length - 1)
+          const qIdx = Math.max(idx - 20, 0)
+          if (pIdx > qIdx) {
+            const aPos = toWorld(lap.lat[qIdx], lap.lon[qIdx], lap.alt[qIdx], tf)
+            const bPos = toWorld(lap.lat[pIdx], lap.lon[pIdx], lap.alt[pIdx], tf)
+            const run = Math.hypot(bPos.x - aPos.x, bPos.z - aPos.z)
+            if (run > 0.05) {
+              const target = -Math.atan2(bPos.y - aPos.y, run)
+              group.rotation.x += (target - group.rotation.x) * (1 - Math.pow(0.75, dt * 60))
+            }
+          }
+        }
+        // Roll is the car's attitude in the world, so it is dominated by track
+        // banking rather than body roll — on the Karussell it reaches 14 deg,
+        // far past any suspension travel, and there the car leans *into* the
+        // corner. Measured over the steepest points of a Nordschleife lap, a
+        // left-hander always gives a negative Roll, i.e. negative = left side
+        // down. rotation.z positive lifts the left side (+x), so it goes in
+        // as-is: negative Roll then drops the left side to match.
+        if (lap.roll.length > idx) group.rotation.z = lap.roll[idx]
 
-        // Wheels: roll with road speed, front pair also takes the steering angle.
-        // True wheel speed (v / r ≈ 150 rad/s at 190 km/h) strobes badly at 60 fps,
-        // so it saturates smoothly — correct when crawling, readable when quick.
+        // Wheels: each one rolls at its own measured speed, so a locked wheel
+        // actually stops and a spinning one races ahead. True wheel speed
+        // (v / r ~ 150 rad/s at 190 km/h) strobes badly at 60 fps, so it
+        // saturates smoothly — correct when crawling, readable when quick.
         const wheels = carWheelsRef.current[li]
         if (wheels?.length) {
-          const v = Math.abs(lap.speed[idx] ?? 0)                 // m/s
-          const omega = 16 * Math.tanh(v / (0.34 * 16))           // rad/s, capped near 16
+          const carV = Math.abs(lap.speed[idx] ?? 0)              // m/s
           const steer = Math.max(-0.55, Math.min(0.55, (lap.steering[idx] ?? 0) / 8))
           for (const w of wheels) {
-            w.mesh.rotation[w.axis] += omega * w.spinSign * dt
+            const ws = lap.wheelSpeed[w.corner]
+            const v = ws.length > idx ? Math.abs(ws[idx]) : carV
+            // Only advance while playing: dt keeps running when paused, which had
+            // the wheels spinning under a stationary car
+            if (playingRef.current) {
+              const omega = 16 * Math.tanh(v / (0.34 * 16))       // rad/s, capped near 16
+              w.mesh.rotation[w.axis] += omega * w.spinSign * dt
+            }
             if (w.front) w.pivot.rotation.y = steer
+
+            // Tyre temperature tints the wheel
+            const temps = lap.tyreTemp[w.corner]
+            if (temps.length > idx) w.mat.color.copy(tyreColor(temps[idx]))
+
+            // Slip: wheel turning slower than the car = locking, faster = spinning.
+            // Below walking pace the ratio is meaningless, so it's skipped.
+            if (ws.length > idx && carV > 6) {
+              const slip = (Math.abs(ws[idx]) - carV) / carV
+              if (Math.abs(slip) > 0.15) puffSmoke(li, w, Math.min(1, (Math.abs(slip) - 0.15) / 0.5))
+            }
           }
         }
 
@@ -1644,6 +2065,59 @@ export default function Replay3DViewer() {
           }
         }
 
+        // Tyre card — only for the lap the camera follows, since the card shows one car
+        if (li === followIdxRef.current) {
+          for (const c of ['LF', 'RF', 'LR', 'RR'] as Corner[]) {
+            const bands = tyreBandRefs.current[c]
+            const temp = lap.tyreTemp[c]
+            const wear = lap.tyreWear[c]
+            // Bands are inner / middle / outer, each with its own surface
+            // temperature — that spread is what reveals camber and pressure
+            const tb = lap.tyreTempBands[c]
+            const bandTemp = [tb.l, tb.m, tb.r]
+            for (let bi = 0; bi < 3; bi++) {
+              const el = bands[bi]
+              if (!el) continue
+              const src = bandTemp[bi].length > idx ? bandTemp[bi] : temp
+              if (src.length > idx) el.style.background = '#' + tyreColor(src[idx]).getHexString()
+            }
+            const wl = wear.l.length > idx ? wear.l[idx] : null
+            const wm = wear.m.length > idx ? wear.m[idx] : null
+            const wr = wear.r.length > idx ? wear.r[idx] : null
+            // Tread left shortens the band, so a worn edge is visible at a glance.
+            // The channels are 0-1 ratios despite their '%' unit.
+            const setH = (el: HTMLDivElement | null, ratio: number | null) => {
+              if (!el) return
+              el.style.height = `${Math.max(3, Math.min(15, (ratio ?? 1) * 15))}px`
+            }
+            setH(bands[0], wl); setH(bands[1], wm); setH(bands[2], wr)
+            const el = tyreWearRefs.current[c]
+            if (el) {
+              const avg = [wl, wm, wr].filter((x): x is number => x != null)
+              // One decimal: a stint often only moves a couple of percent
+              el.textContent = avg.length
+                ? `${(avg.reduce((a, b) => a + b, 0) / avg.length * 100).toFixed(1)}%` : '—'
+            }
+          }
+          // ABS is measured; wheelspin is derived — see the driven-wheel slip below
+          const absOn = (lap.absActive[idx] ?? 0) > 0.5
+          const absEl = absLampRef.current
+          if (absEl) {
+            absEl.style.color = absOn ? '#ffffff' : (isDark ? 'rgba(255,255,255,0.30)' : 'rgba(15,23,42,0.30)')
+            absEl.style.background = absOn ? '#e0a020' : 'transparent'
+          }
+          const rearSlip = (['LR', 'RR'] as Corner[]).some(c => {
+            const ws = lap.wheelSpeed[c]
+            const v = Math.abs(lap.speed[idx] ?? 0)
+            return ws.length > idx && v > 6 && (Math.abs(ws[idx]) - v) / v > 0.06 && (lap.throttle[idx] ?? 0) > 0.15
+          })
+          const spinEl = spinLampRef.current
+          if (spinEl) {
+            spinEl.style.color = rearSlip ? '#ffffff' : (isDark ? 'rgba(255,255,255,0.30)' : 'rgba(15,23,42,0.30)')
+            spinEl.style.background = rearSlip ? '#d8402c' : 'transparent'
+          }
+        }
+
         // Minimap dot
         const dot = mapDotRefs.current[li]
         if (dot && trackMapDataRef.current) {
@@ -1667,7 +2141,8 @@ export default function Replay3DViewer() {
             const n = last - from + 1
             ctx.clearRect(0, 0, W, H)
             // Draw filled area + stroke for each channel. Samples are 0–1 ratios.
-            const drawChannel = (src: number[], fillColor: string, strokeColor: string) => {
+            const drawChannel = (src: number[], fillColor: string, strokeColor: string,
+                                 flag?: (sampleIdx: number) => boolean, flagColor?: string) => {
               if (n < 2) return
               // Newest sample always anchored to right edge; trace grows left at lap start
               const xOf = (i: number) => ((TRACE_SAMPLES - n + i) / TRACE_SAMPLES) * W
@@ -1682,15 +2157,31 @@ export default function Replay3DViewer() {
               ctx.closePath()
               ctx.fillStyle = fillColor
               ctx.fill()
-              ctx.beginPath()
-              ctx.strokeStyle = strokeColor; ctx.lineWidth = 1.5; ctx.lineJoin = 'round'
-              for (let i = 0; i < n; i++) {
-                const x = xOf(i), y = yOf(i)
-                i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)
+              // Stroke in runs so a flagged stretch can take its own colour —
+              // that's how the ABS section shows up inside the brake trace
+              let i = 0
+              while (i < n - 1) {
+                const flagged = flag?.(from + i) ?? false
+                // j always ends up > i, so the loop advances even for a run of
+                // one sample. `i = j - 1` did not: with a flag that flips every
+                // sample — which is exactly how ABS behaves under braking — i
+                // never moved and the frame loop hung the whole window.
+                let j = i + 1
+                while (j < n - 1 && (flag?.(from + j) ?? false) === flagged) j++
+                ctx.beginPath()
+                ctx.strokeStyle = flagged ? (flagColor ?? strokeColor) : strokeColor
+                ctx.lineWidth = flagged ? 2 : 1.5
+                ctx.lineJoin = 'round'
+                ctx.moveTo(xOf(i), yOf(i))
+                for (let k = i + 1; k <= j; k++) ctx.lineTo(xOf(k), yOf(k))
+                ctx.stroke()
+                i = j
               }
-              ctx.stroke()
             }
-            drawChannel(lap.brake, 'rgba(239,68,68,0.28)', '#ef4444')
+            // Brake trace turns amber wherever the ABS was cutting in
+            const absArr = lap.absActive
+            drawChannel(lap.brake, 'rgba(239,68,68,0.28)', '#ef4444',
+              absArr.length ? (k: number) => (absArr[k] ?? 0) > 0.5 : undefined, '#f5a524')
             drawChannel(lap.throttle, 'rgba(34,197,94,0.28)', '#22c55e')
           }
         }
@@ -1721,23 +2212,23 @@ export default function Replay3DViewer() {
           camera.updateProjectionMatrix()
         }
         if (cameraModeRef.current === 'chase') {
-          const behind = new THREE.Vector3(car0.position.x - sy * 9 * zoom, carY + 3.5 * zoom, car0.position.z - cy2 * 9 * zoom)
+          const behind = new THREE.Vector3(car0.position.x - sy * CAM_BACK * zoom, carY + CAM_UP * zoom, car0.position.z - cy2 * CAM_BACK * zoom)
           cameraPosRef.current.lerp(behind, posAlpha)
-          const ahead = new THREE.Vector3(car0.position.x + sy * 7, carY + 0.8, car0.position.z + cy2 * 7)
+          const ahead = new THREE.Vector3(car0.position.x + sy * 16 * M, carY + 2 * M, car0.position.z + cy2 * 16 * M)
           cameraTargetRef.current.lerp(ahead, lookAlpha)
         } else if (cameraModeRef.current === 'cockpit') {
           // Bonnet cam — sits just over the nose, snappier follow than the chase
           // cam so the car's rotation reads as the world turning around you
           const cockAlpha = 1 - Math.pow(0.55, dt * 60)
-          const eye = new THREE.Vector3(car0.position.x + sy * 1.1, carY + 0.85, car0.position.z + cy2 * 1.1)
+          const eye = new THREE.Vector3(car0.position.x + sy * 2.6 * M, carY + 2.0 * M, car0.position.z + cy2 * 2.6 * M)
           cameraPosRef.current.lerp(eye, cockAlpha)
-          const ahead = new THREE.Vector3(car0.position.x + sy * 30, carY + 1.1, car0.position.z + cy2 * 30)
+          const ahead = new THREE.Vector3(car0.position.x + sy * 70 * M, carY + 2.6 * M, car0.position.z + cy2 * 70 * M)
           cameraTargetRef.current.lerp(ahead, cockAlpha)
         } else if (cameraModeRef.current === 'front') {
           // Camera in front of car, looking back
-          const front = new THREE.Vector3(car0.position.x + sy * 9 * zoom, carY + 1.8 * zoom, car0.position.z + cy2 * 9 * zoom)
+          const front = new THREE.Vector3(car0.position.x + sy * CAM_BACK * zoom, carY + 4.2 * M * zoom, car0.position.z + cy2 * CAM_BACK * zoom)
           cameraPosRef.current.lerp(front, posAlpha)
-          const carCenter = new THREE.Vector3(car0.position.x, carY + 0.6, car0.position.z)
+          const carCenter = new THREE.Vector3(car0.position.x, carY + 1.4 * M, car0.position.z)
           cameraTargetRef.current.lerp(carCenter, lookAlpha)
         } else if (cameraModeRef.current === 'tv') {
           const n = tvCamPositions.length
@@ -1765,7 +2256,7 @@ export default function Replay3DViewer() {
             // Fixed vantage point — pan look-at to car
             cameraPosRef.current.copy(tvCamPositions[tvCamIndex])
             cameraTargetRef.current.lerp(
-              new THREE.Vector3(car0.position.x, carY + 0.5, car0.position.z),
+              new THREE.Vector3(car0.position.x, carY + 1.2 * M, car0.position.z),
               1 - Math.pow(0.90, dt * 60)
             )
             // Smooth drift to distance-based FOV — car stays visible at any range
@@ -1777,6 +2268,18 @@ export default function Replay3DViewer() {
 
         camera.position.copy(cameraPosRef.current)
         camera.lookAt(cameraTargetRef.current)
+      }
+
+      // Tyre smoke: rise, swell, fade, then go back in the pool
+      for (const p of puffs) {
+        if (!p.mesh.visible) continue
+        p.life += dt
+        const k = p.life / p.max
+        if (k >= 1) { p.mesh.visible = false; continue }
+        p.mesh.position.y += p.vy * dt
+        p.mesh.scale.setScalar(p.size * (1 + k * 1.8))
+        p.mat.opacity = (1 - k) * (1 - k) * 0.55
+        p.mesh.quaternion.copy(camera.quaternion)        // billboard
       }
 
       // Drift clouds slowly in wind direction; wrap at terrain boundary
@@ -1933,8 +2436,9 @@ export default function Replay3DViewer() {
     // ── Rain ─────────────────────────────────────────────────────────────────
     if (rain > 0.01) {
       const count  = Math.round(350 + rain * 1800)
-      const box    = 130, height = 95
-      const streak = 0.8 + 1.4 * rain
+      const rm = tf?.unitsPerMetre ?? 0.2
+      const box    = 60 * rm, height = 45 * rm   // metres around the camera
+      const streak = (0.4 + 0.7 * rain) * rm
       const local  = new Float32Array(count * 3)
       const world  = new Float32Array(count * 6)
       for (let i = 0; i < count; i++) {
@@ -1956,9 +2460,9 @@ export default function Replay3DViewer() {
       group.add(mesh)
       rainRef.current = {
         mesh, local, world, count, streak, box, height,
-        fall: 45 + 30 * rain,
-        dx: Math.sin(windRad) * windSpd * 0.8,
-        dz: Math.cos(windRad) * windSpd * 0.8,
+        fall: (22 + 15 * rain) * rm,
+        dx: Math.sin(windRad) * windSpd * 0.8 * rm,
+        dz: Math.cos(windRad) * windSpd * 0.8 * rm,
       }
     } else {
       rainRef.current = null
@@ -2061,7 +2565,7 @@ export default function Replay3DViewer() {
   if (loading) {
     return (
       <div className="absolute inset-0 flex items-center justify-center bg-background">
-        <p className="text-xs text-muted-foreground">{t('loading3d')}</p>
+        <LoadingIndicator label={t('loading3d')} hint={t('loadingBig')} />
       </div>
     )
   }
@@ -2093,6 +2597,68 @@ export default function Replay3DViewer() {
             </button>
           ))}
         </div>
+
+        {/* Right-hand HUD column: the cards stack, so the tyre card follows the
+            weather card's height instead of guessing an offset from the top */}
+        <div className="absolute top-9 right-2 flex flex-col gap-1.5 items-end">
+
+        {/* Tyres — temperature per band, tread left, and the driver aids.
+            Shows the lap the camera follows; values are written straight to the
+            DOM each frame like the rest of the HUD. */}
+        {laps.length > 0 && (() => {
+          const bg     = isDark ? 'rgba(14,16,22,0.62)'    : 'rgba(255,255,255,0.62)'
+          const border = isDark ? 'rgba(255,255,255,0.10)' : 'rgba(15,23,42,0.09)'
+          const txt    = isDark ? 'rgba(255,255,255,0.92)' : 'rgba(15,23,42,0.92)'
+          const dim    = isDark ? 'rgba(255,255,255,0.42)' : 'rgba(15,23,42,0.45)'
+          const tyre = (corner: Corner) => (
+            <div className="flex flex-col items-center gap-0.5">
+              <div className="text-[7px] font-bold tracking-widest" style={{ color: dim }}>{corner}</div>
+              {/* three bands: inner, middle, outer */}
+              <div className="flex gap-[2px]">
+                {[0, 1, 2].map(b => (
+                  <div key={b}
+                    ref={el => { tyreBandRefs.current[corner][b] = el }}
+                    style={{ width: 6, height: 15, borderRadius: 2, background: '#141414' }} />
+                ))}
+              </div>
+              <span ref={el => { tyreWearRefs.current[corner] = el }}
+                className="text-[8px] font-semibold tabular-nums" style={{ color: txt }}>—</span>
+            </div>
+          )
+          return (
+            <div className="pointer-events-none select-none rounded-xl overflow-hidden"
+              style={{
+                order: 2, width: CARD_W,
+                background: bg,
+                backdropFilter: 'blur(14px) saturate(1.3)',
+                WebkitBackdropFilter: 'blur(14px) saturate(1.3)',
+                border: `1px solid ${border}`,
+                boxShadow: isDark ? '0 6px 20px rgba(0,0,0,0.40)' : '0 6px 18px rgba(15,23,42,0.13)',
+              }}>
+              <button
+                onClick={() => setTyresOpen(o => !o)}
+                className="pointer-events-auto w-full flex items-center gap-1 px-2 py-1.5 cursor-pointer">
+                <span className="text-[9px] font-bold tracking-wide" style={{ color: txt }}>{t('tyres')}</span>
+                <span ref={absLampRef}
+                  className="ml-auto text-[7px] font-bold tracking-widest px-1 rounded"
+                  style={{ color: dim, background: 'transparent' }}>ABS</span>
+                <span ref={spinLampRef}
+                  className="text-[7px] font-bold tracking-widest px-1 rounded"
+                  style={{ color: dim, background: 'transparent' }}>SPIN</span>
+                <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke={dim} strokeWidth="3"
+                  strokeLinecap="round" strokeLinejoin="round" className="shrink-0"
+                  style={{ transform: tyresOpen ? 'rotate(0deg)' : 'rotate(180deg)', transition: 'transform 150ms' }}>
+                  <path d="M5 15l7-7 7 7" />
+                </svg>
+              </button>
+              {tyresOpen && (
+                <div className="grid grid-cols-2 gap-y-1.5 px-2 pb-2 justify-items-center">
+                  {tyre('LF')}{tyre('RF')}{tyre('LR')}{tyre('RR')}
+                </div>
+              )}
+            </div>
+          )
+        })()}
 
         {/* Track & weather conditions — glass card, top-right below the camera buttons */}
         {conditions && (() => {
@@ -2135,9 +2701,9 @@ export default function Replay3DViewer() {
           )
 
           return (
-            <div className="absolute top-9 right-2 pointer-events-none select-none rounded-xl overflow-hidden"
+            <div className="pointer-events-none select-none rounded-xl overflow-hidden"
               style={{
-                width: weatherOpen ? 146 : 'auto',
+                order: 1, width: weatherOpen ? CARD_W : 'auto',
                 background: bg,
                 backdropFilter: 'blur(14px) saturate(1.3)',
                 WebkitBackdropFilter: 'blur(14px) saturate(1.3)',
@@ -2150,7 +2716,7 @@ export default function Replay3DViewer() {
               <button
                 onClick={() => setWeatherOpen(o => !o)}
                 title={`${weatherOpen ? t('collapse') : t('expand')} — ${t('conditions')}`}
-                className="pointer-events-auto w-full flex items-center gap-1.5 px-2.5 py-2 cursor-pointer">
+                className="pointer-events-auto w-full flex items-center gap-1.5 px-2 py-1.5 cursor-pointer">
                 <WeatherIcon kind={kind} color={accent} />
                 <span className="text-[9px] font-bold tracking-wide truncate" style={{ color: txt }}>
                   {sky ?? t('conditions')}
@@ -2165,7 +2731,7 @@ export default function Replay3DViewer() {
               {weatherOpen && (<>
                 {/* Temperatures — the two numbers that matter most, side by side */}
                 {(c.trackTemp != null || c.airTemp != null) && (
-                  <div className="flex gap-2 px-2.5 pb-2">
+                  <div className="flex gap-2 px-2 pb-1.5">
                     {temp(t('track'), c.trackTemp)}
                     {temp(t('wAir'), c.airTemp)}
                   </div>
@@ -2174,7 +2740,7 @@ export default function Replay3DViewer() {
                 {rows.length > 0 && (
                   <>
                     <div style={{ height: 1, background: line }} />
-                    <div className="grid gap-x-2 gap-y-1 px-2.5 py-1.5" style={{ gridTemplateColumns: 'auto auto' }}>
+                    <div className="grid gap-x-2 gap-y-0.5 px-2 py-1.5" style={{ gridTemplateColumns: 'auto auto' }}>
                       {rows.map(([label, value]) => (
                         <div key={label} className="contents">
                           <span className="text-[7px] font-bold tracking-[0.10em] uppercase self-center" style={{ color: dim }}>{label}</span>
@@ -2188,6 +2754,8 @@ export default function Replay3DViewer() {
             </div>
           )
         })()}
+
+        </div>
 
         {/* Track minimap — top-left, bare SVG on canvas */}
         {trackMapData && (

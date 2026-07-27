@@ -40,12 +40,16 @@ function computeTransform(lats: number[], lons: number[]) {
   }
   const latR = maxLat - minLat || 1e-6
   const lonR = maxLon - minLon || 1e-6
-  const scale = Math.min(SIZE / lonR, SIZE / latR) * 0.9
-  return { minLat, minLon, scale, ox: (SIZE - lonR * scale) / 2, oy: (SIZE - latR * scale) / 2 }
+  // A degree of longitude is cos(lat) as long as a degree of latitude — without
+  // this the track is drawn stretched east-west (1.57x at Spa, 1.40x at Imola)
+  const lonScale = Math.cos(((minLat + maxLat) / 2) * Math.PI / 180)
+  const lonSpan = lonR * lonScale
+  const scale = Math.min(SIZE / lonSpan, SIZE / latR) * 0.9
+  return { minLat, minLon, scale, lonScale, ox: (SIZE - lonSpan * scale) / 2, oy: (SIZE - latR * scale) / 2 }
 }
 
 function project(lat: number, lon: number, tf: ReturnType<typeof computeTransform>) {
-  return { x: (lon - tf.minLon) * tf.scale + tf.ox, y: SIZE - (lat - tf.minLat) * tf.scale - tf.oy }
+  return { x: (lon - tf.minLon) * tf.scale * tf.lonScale + tf.ox, y: SIZE - (lat - tf.minLat) * tf.scale - tf.oy }
 }
 
 function buildPolyline(lat: number[], lon: number[], tf: ReturnType<typeof computeTransform>, step: number) {

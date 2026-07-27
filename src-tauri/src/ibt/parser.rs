@@ -4,14 +4,14 @@ use crate::ibt::binary::*;
 use crate::ibt::types::*;
 
 pub struct IbtFile {
-    data: Vec<u8>,
+    data: std::sync::Arc<Vec<u8>>,
     pub header: IbtHeader,
     pub disk_header: DiskSubHeader,
     pub var_headers: Vec<VarHeader>,
 }
 
 impl IbtFile {
-    pub fn from_bytes(data: Vec<u8>) -> Result<Self, String> {
+    pub fn from_bytes(data: std::sync::Arc<Vec<u8>>) -> Result<Self, String> {
         if data.len() < 144 {
             return Err("Data too small to be a valid IBT file".into());
         }
@@ -38,7 +38,7 @@ impl IbtFile {
     #[allow(dead_code)]
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, String> {
         let data = fs::read(&path).map_err(|e| e.to_string())?;
-        Self::from_bytes(data)
+        Self::from_bytes(std::sync::Arc::new(data))
     }
 
     pub fn channels(&self) -> Vec<Channel> {
@@ -189,15 +189,24 @@ impl IbtFile {
     }
 
     pub fn get_lap_channel_data(&self, lap: &Lap, channel: &str) -> Option<LapChannelData> {
+        self.get_lap_channel_data_strided(lap, channel, 1)
+    }
+
+    /// `stride` > 1 returns every n-th sample. Slow-moving channels can be
+    /// thinned this way, which keeps long laps off the IPC bridge: a 26k-sample
+    /// lap at stride 10 is 2.6k values instead.
+    pub fn get_lap_channel_data_strided(&self, lap: &Lap, channel: &str, stride: usize) -> Option<LapChannelData> {
         let st_var = self.find_var("SessionTime")?;
         let ldp_var = self.find_var("LapDistPct");
         let total = self.disk_header.session_record_count as usize;
         let seg_start = lap.start_sample;
         let seg_end = lap.end_sample.min(total);
 
+        let step = stride.max(1);
         let lap_dist_pct: Vec<f64> = match ldp_var {
-            Some(v) => (seg_start..seg_end).map(|i| self.read_f64(i, v)).collect(),
-            None => (0..(seg_end - seg_start)).map(|i| i as f64 / (seg_end - seg_start).max(1) as f64).collect(),
+            Some(v) => (seg_start..seg_end).step_by(step).map(|i| self.read_f64(i, v)).collect(),
+            None => (0..(seg_end - seg_start)).step_by(step)
+                .map(|i| i as f64 / (seg_end - seg_start).max(1) as f64).collect(),
         };
 
         // Computed slip-ratio channels: e.g. "LFslipRatio" → (LFspeed - Speed) / Speed * 100
@@ -205,12 +214,12 @@ impl IbtFile {
             let speed_var = self.find_var("Speed")?;
             let wheel_var = self.find_var(&format!("{}speed", corner))?;
             let t0 = self.read_f64(seg_start, st_var);
-            let samples: Vec<f64> = (seg_start..seg_end).map(|i| {
+            let samples: Vec<f64> = (seg_start..seg_end).step_by(step).map(|i| {
                 let car_spd = self.read_f64(i, speed_var);
                 let whl_spd = self.read_f64(i, wheel_var);
                 if car_spd > 0.5 { (whl_spd - car_spd) / car_spd * 100.0 } else { 0.0 }
             }).collect();
-            let timestamps: Vec<f64> = (seg_start..seg_end)
+            let timestamps: Vec<f64> = (seg_start..seg_end).step_by(step)
                 .map(|i| self.read_f64(i, st_var) - t0)
                 .collect();
             return Some(LapChannelData {
@@ -222,10 +231,10 @@ impl IbtFile {
         let ch_var = self.find_var(channel)?;
         let t0 = self.read_f64(seg_start, st_var);
 
-        let samples: Vec<f64> = (seg_start..seg_end)
+        let samples: Vec<f64> = (seg_start..seg_end).step_by(step)
             .map(|i| self.read_f64(i, ch_var))
             .collect();
-        let timestamps: Vec<f64> = (seg_start..seg_end)
+        let timestamps: Vec<f64> = (seg_start..seg_end).step_by(step)
             .map(|i| self.read_f64(i, st_var) - t0)
             .collect();
 
