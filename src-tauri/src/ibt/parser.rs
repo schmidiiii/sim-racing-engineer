@@ -171,6 +171,7 @@ impl IbtFile {
             .unwrap_or_else(|| "Unknown Track".into());
         let track_id = extract_yaml_field(&yaml, "TrackID")
             .and_then(|v| v.trim().parse::<i32>().ok());
+        let driver = extract_driver_name(&yaml);
         let car = extract_driver_car_name(&yaml)
             .unwrap_or_else(|| "Unknown Car".into());
         let date = chrono::DateTime::from_timestamp(self.disk_header.session_start_date, 0)
@@ -182,6 +183,7 @@ impl IbtFile {
             file_path,
             track,
             track_id,
+            driver,
             car,
             date,
             tick_rate: self.header.tick_rate,
@@ -301,7 +303,26 @@ pub fn extract_yaml_field(yaml: &str, key: &str) -> Option<String> {
 
 /// Extract the user's own car name by matching DriverCarIdx → Drivers[N].CarScreenName.
 /// Falls back to the first non-safety CarScreenName if the index lookup fails.
+/// The driver's own name, taken from the same block as their car. Everyone in
+/// the session is listed, so it has to be the entry matching DriverCarIdx —
+/// picking the first would name whoever happened to be first on the grid.
+fn extract_driver_name(yaml: &str) -> Option<String> {
+    extract_driver_field(yaml, "UserName")
+}
+
 fn extract_driver_car_name(yaml: &str) -> Option<String> {
+    extract_driver_field(yaml, "CarScreenName").or_else(|| {
+        // Fallback: first car name that isn't the pace or safety car
+        yaml.lines()
+            .filter(|l| l.trim().starts_with("CarScreenName:"))
+            .find_map(|l| {
+                let v = l.splitn(2, ':').nth(1)?.trim().trim_matches('"').to_string();
+                if v.is_empty() || v.to_lowercase().starts_with("safety ") { None } else { Some(v) }
+            })
+    })
+}
+
+fn extract_driver_field(yaml: &str, field: &str) -> Option<String> {
     let driver_idx: usize = extract_yaml_field(yaml, "DriverCarIdx")
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
@@ -325,9 +346,9 @@ fn extract_driver_car_name(yaml: &str) -> Option<String> {
         }
 
         if in_driver_block {
-            if trimmed.starts_with("CarScreenName:") {
-                return trimmed.splitn(2, ':').nth(1)
-                    .map(|v| v.trim().trim_matches('"').to_string());
+            if let Some(rest) = trimmed.strip_prefix(field).and_then(|r| r.strip_prefix(':')) {
+                let v = rest.trim().trim_matches('"').to_string();
+                return if v.is_empty() { None } else { Some(v) };
             }
             // Next driver entry starts → we've passed our block
             if trimmed.starts_with("- CarIdx:") && !is_exact_entry(trimmed) {
@@ -336,13 +357,7 @@ fn extract_driver_car_name(yaml: &str) -> Option<String> {
         }
     }
 
-    // Fallback: first CarScreenName that isn't a pace/safety car
-    yaml.lines()
-        .filter(|l| l.trim().starts_with("CarScreenName:"))
-        .find_map(|l| {
-            let v = l.splitn(2, ':').nth(1)?.trim().trim_matches('"').to_string();
-            if v.is_empty() || v.to_lowercase().starts_with("safety ") { None } else { Some(v) }
-        })
+    None
 }
 
 #[cfg(test)]

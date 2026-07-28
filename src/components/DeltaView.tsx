@@ -141,6 +141,22 @@ function DeltaChart({
   const zY = yS(0)
   const buf = zRange * 0.01
 
+  // Interpolated, not the nearest point: the series is sampled every fraction of
+  // a percent and the nearest one can be several hundredths of a second away.
+  const deltaAt = (pts: { pct: number; delta: number }[], pct: number): number | null => {
+    if (pts.length === 0) return null
+    if (pct <= pts[0].pct) return pts[0].delta
+    if (pct >= pts[pts.length - 1].pct) return pts[pts.length - 1].delta
+    let lo = 0, hi = pts.length - 1
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >> 1
+      if (pts[mid].pct <= pct) lo = mid; else hi = mid
+    }
+    const a = pts[lo], b = pts[hi]
+    const span = b.pct - a.pct
+    return span > 0 ? a.delta + (b.delta - a.delta) * ((pct - a.pct) / span) : a.delta
+  }
+
   const pctFromEvent = (e: React.MouseEvent<SVGSVGElement>) => {
     const rect = e.currentTarget.getBoundingClientRect()
     const vbX = ((e.clientX - rect.left) / rect.width) * VW
@@ -269,14 +285,148 @@ function DeltaChart({
         })}
       </g>
 
-      {/* Crosshair cursor line (synced from crosshairTime via reference lap) */}
+      {/* Crosshair cursor line (synced from crosshairTime via reference lap),
+          with each lap's delta read off at that point. The line alone showed
+          where you were but not what it was worth. */}
       {cursorPct !== null && cursorPct >= zMin && cursorPct <= zMax && (
-        <line
-          x1={xS(cursorPct)} y1={PT}
-          x2={xS(cursorPct)} y2={VH - PB}
-          stroke="hsl(var(--foreground))" strokeWidth={1.5}
-          opacity={0.5} strokeDasharray="3 2"
-        />
+        <g>
+          <line
+            x1={xS(cursorPct)} y1={PT}
+            x2={xS(cursorPct)} y2={VH - PB}
+            stroke="hsl(var(--foreground))" strokeWidth={1.5}
+            opacity={0.5} strokeDasharray="3 2"
+          />
+          {nonRef.map((e, i) => {
+            const d = deltaAt(e.deltaPoints, cursorPct)
+            if (d === null) return null
+            const y = yS(d)
+            // Same red-slower / green-faster reading as the line itself
+            const col = d >= 0 ? '#ef4444' : '#22c55e'
+            // Flip the label to the left near the right edge so it stays inside
+            const right = xS(cursorPct) > PL + IW * 0.8
+            return (
+              <g key={i}>
+                <circle cx={xS(cursorPct)} cy={y} r={3} fill={col} />
+                <text
+                  x={xS(cursorPct) + (right ? -6 : 6)}
+                  y={y - 5}
+                  textAnchor={right ? 'end' : 'start'}
+                  className="text-[9px] font-semibold"
+                  fill={col}
+                  style={{ paintOrder: 'stroke', stroke: 'hsl(var(--background))', strokeWidth: 3 }}
+                >
+                  {d >= 0 ? '+' : ''}{d.toFixed(3)}s
+                </text>
+              </g>
+            )
+          })}
+        </g>
+      )}
+    </svg>
+  )
+}
+
+// ── Delta map ──────────────────────────────────────────────────────────────────
+//
+// The chart says how much time is in it; this says where. Each piece of track is
+// coloured by how fast the gap is opening or closing *there* — the slope of the
+// delta, not its value. A lap that is half a second down all the way round is
+// losing nothing through the last sector, and colouring by the raw gap would
+// paint the whole of it red.
+function DeltaMap({ path, points, cursorPct }: {
+  path: { lat: number[]; lon: number[]; pct: number[] }
+  points: { pct: number; delta: number }[]
+  cursorPct: number | null
+}) {
+  const W = 560, H = 300, PAD = 18
+
+  const geom = useMemo(() => {
+    const { lat, lon } = path
+    let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity
+    for (let i = 0; i < lat.length; i++) {
+      if (lat[i] < minLat) minLat = lat[i]
+      if (lat[i] > maxLat) maxLat = lat[i]
+      if (lon[i] < minLon) minLon = lon[i]
+      if (lon[i] > maxLon) maxLon = lon[i]
+    }
+    // A degree of longitude is cos(latitude) as long as one of latitude — without
+    // this the track comes out stretched east to west
+    const cosLat = Math.cos(((minLat + maxLat) / 2) * Math.PI / 180)
+    const w = (maxLon - minLon) * cosLat || 1e-9
+    const h = (maxLat - minLat) || 1e-9
+    const scale = Math.min((W - PAD * 2) / w, (H - PAD * 2) / h)
+    const ox = (W - w * scale) / 2, oy = (H - h * scale) / 2
+    return {
+      x: (lo: number) => ox + (lo - minLon) * cosLat * scale,
+      y: (la: number) => H - oy - (la - minLat) * scale,
+    }
+  }, [path])
+
+  // Slope of the delta over the lap, sampled on the same grid as the path
+  const slope = useMemo(() => {
+    if (points.length < 3) return null
+    const at = (pct: number) => {
+      if (pct <= points[0].pct) return points[0].delta
+      if (pct >= points[points.length - 1].pct) return points[points.length - 1].delta
+      let lo = 0, hi = points.length - 1
+      while (hi - lo > 1) { const m = (lo + hi) >> 1; if (points[m].pct <= pct) lo = m; else hi = m }
+      const a = points[lo], b = points[hi], span = b.pct - a.pct
+      return span > 0 ? a.delta + (b.delta - a.delta) * ((pct - a.pct) / span) : a.delta
+    }
+    // Over a window rather than point to point: at this sampling the difference
+    // between neighbours is mostly noise
+    const WIN = 1.5
+    const vals = path.pct.map(p => at(Math.min(100, p + WIN)) - at(Math.max(0, p - WIN)))
+    const mag = vals.map(Math.abs).sort((a, b) => a - b)
+    const strong = mag[Math.floor(mag.length * 0.92)] || 1e-6
+    return { vals, strong }
+  }, [points, path])
+
+  const segs: { d: string; col: string }[] = []
+  const STEP = Math.max(1, Math.round(path.lat.length / 400))
+  for (let i = STEP; i < path.lat.length; i += STEP) {
+    const a = i - STEP
+    const x1 = geom.x(path.lon[a]), y1 = geom.y(path.lat[a])
+    const x2 = geom.x(path.lon[i]), y2 = geom.y(path.lat[i])
+    let col = 'hsl(var(--muted-foreground))'
+    if (slope) {
+      const v = slope.vals[i] / slope.strong
+      const t = Math.max(-1, Math.min(1, v))
+      // Grey where nothing is happening, so the places that matter stand out
+      col = Math.abs(t) < 0.18 ? 'hsl(var(--muted-foreground) / 0.35)'
+          : t > 0 ? `rgba(239, 68, 68, ${(0.35 + Math.abs(t) * 0.65).toFixed(2)})`
+                  : `rgba(34, 197, 94, ${(0.35 + Math.abs(t) * 0.65).toFixed(2)})`
+    }
+    segs.push({ d: `M${x1.toFixed(1)} ${y1.toFixed(1)}L${x2.toFixed(1)} ${y2.toFixed(1)}`, col })
+  }
+
+  // Where the chart's crosshair sits, on the track. The lap position is the one
+  // thing both views share, so it is what ties them together.
+  let marker: { x: number; y: number } | null = null
+  if (cursorPct !== null && path.pct.length > 1) {
+    let lo = 0, hi = path.pct.length - 1
+    if (cursorPct <= path.pct[0]) hi = 1
+    else if (cursorPct >= path.pct[hi]) lo = hi - 1
+    else while (hi - lo > 1) { const m = (lo + hi) >> 1; if (path.pct[m] <= cursorPct) lo = m; else hi = m }
+    const span = path.pct[hi] - path.pct[lo]
+    const t = span > 0 ? Math.max(0, Math.min(1, (cursorPct - path.pct[lo]) / span)) : 0
+    const x1 = geom.x(path.lon[lo]), y1 = geom.y(path.lat[lo])
+    const x2 = geom.x(path.lon[hi]), y2 = geom.y(path.lat[hi])
+    marker = { x: x1 + (x2 - x1) * t, y: y1 + (y2 - y1) * t }
+  }
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto" style={{ maxHeight: 320 }}>
+      {segs.map((sg, i) => (
+        <path key={i} d={sg.d} stroke={sg.col} strokeWidth={5} strokeLinecap="round" fill="none" />
+      ))}
+      {marker && (
+        <g>
+          {/* Ringed in the background colour so it stays visible whichever
+              colour the track happens to be underneath it */}
+          <circle cx={marker.x} cy={marker.y} r={6} fill="hsl(var(--background))" opacity={0.9} />
+          <circle cx={marker.x} cy={marker.y} r={4} fill="hsl(var(--foreground))" />
+        </g>
       )}
     </svg>
   )
@@ -288,6 +438,9 @@ export default function DeltaView() {
   const t = useT()
   const { sessions, selectedLapKeys, crosshairTime, setCrosshairTime } = useSessionStore()
   const [entries, setEntries] = useState<DeltaEntry[]>([])
+  // Position of the reference lap, for the map. Fetched separately because the
+  // delta itself needs only lap distance.
+  const [refPath, setRefPath] = useState<{ lat: number[]; lon: number[]; pct: number[] } | null>(null)
   const [status, setStatus] = useState<'idle' | 'loading' | 'ok' | 'nodata'>('idle')
   const [zoom, setZoom] = useState<[number, number] | null>(null)
 
@@ -349,6 +502,15 @@ export default function DeltaView() {
         sectorTimes: computeSectorTimes(lap),
       })))
       setStatus('ok')
+
+      try {
+        const [la, lo] = await Promise.all(['Lat', 'Lon'].map(ch =>
+          invoke<LapChannelData[]>('get_lap_channel_data',
+            { sessionId: ref.sessionId, lapNumbers: [ref.lapNumber], channel: ch })))
+        if (la[0] && lo[0] && la[0].samples.length === ref.samples.length)
+          setRefPath({ lat: la[0].samples, lon: lo[0].samples, pct: ref.samples.map(v => v * 100) })
+        else setRefPath(null)
+      } catch { setRefPath(null) }
     }
 
     fetchAll()
@@ -426,6 +588,30 @@ export default function DeltaView() {
           ★ = {t('refLap')} · {t('deltaHint')}
         </p>
       </div>
+
+      {/* Where the time went, on the track itself */}
+      {refPath && entries.some(e => e.deltaPoints.length > 0) && (
+        <div className="bg-card rounded-xl border border-border shadow-sm overflow-hidden">
+          <div className="flex items-center px-4 py-2.5 border-b border-border">
+            <p className="flex-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              {t('deltaMap')}
+            </p>
+            <span className="text-[9px] text-muted-foreground/60">
+              <span className="text-red-500">■</span> {t('losing')}
+              {'  '}
+              <span className="text-green-500">■</span> {t('gaining')}
+            </span>
+          </div>
+          <div className="p-3">
+            <DeltaMap
+              path={refPath}
+              points={(entries.find(e => e.deltaPoints.length > 0) ?? entries[0]).deltaPoints}
+              cursorPct={cursorPct}
+            />
+          </div>
+          <p className="text-[10px] text-muted-foreground/50 px-4 pb-2">{t('deltaMapHint')}</p>
+        </div>
+      )}
 
       {/* Sector table card */}
       <div className="bg-card rounded-xl border border-border shadow-sm overflow-hidden">

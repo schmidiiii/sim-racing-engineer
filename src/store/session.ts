@@ -23,6 +23,8 @@ export interface Session {
   track: string
   /** iRacing's id for track *and* layout — keys the stored centreline */
   track_id: number | null
+  /** The driver this file recorded, when the session listed them */
+  driver: string | null
   car: string
   date: string
   tick_rate: number

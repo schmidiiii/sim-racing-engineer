@@ -28,3 +28,4 @@ installer/
 
 # Downloaded orthophoto tiles (regenerated on demand)
 scripts/.ortho-cache/
+scripts/.buildable.json

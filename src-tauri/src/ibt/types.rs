@@ -10,6 +10,8 @@ pub struct Session {
     /// which the display name cannot: "Circuit de Spa-Francorchamps" covers
     /// several layouts that do not share geometry.
     pub track_id: Option<i32>,
+    /// The driver whose car this file recorded, if the session listed them
+    pub driver: Option<String>,
     pub car: String,
     pub date: String,
     pub tick_rate: i32,

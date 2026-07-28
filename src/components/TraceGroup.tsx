@@ -250,7 +250,7 @@ export default function TraceGroup() {
 
         {/* KPI row */}
         {selectedLapKeys.length > 0 && (
-          <div className="grid grid-cols-3 gap-2">
+          <div className={`grid gap-2 ${session?.driver ? 'grid-cols-4' : 'grid-cols-3'}`}>
             <StatCard
               label={t('fastestSelected')}
               value={fastestStr}
@@ -266,6 +266,15 @@ export default function TraceGroup() {
               value={session?.car ?? '–'}
               sub={`${session?.laps.length ?? 0} ${t('lapsTotal')}`}
             />
+            {/* Only when the session named a driver — older files and some
+                offline sessions do not carry one, and an empty card is worse
+                than none */}
+            {session?.driver && (
+              <StatCard
+                label={t('driver')}
+                value={session.driver}
+              />
+            )}
           </div>
         )}
 

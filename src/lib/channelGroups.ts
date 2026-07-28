@@ -72,22 +72,6 @@ export const CHANNEL_GROUPS: ChannelGroupDef[] = [
     yDomains: { Throttle: [0, 100], Brake: [0, 100], Speed: [0, 'auto'], Gear: [0, 'auto'] },
   },
   {
-    label: 'Braking',
-    viewType: 'braking',
-    channels: [],
-    units: {},
-    transforms: {},
-    yDomains: {},
-  },
-  {
-    label: 'Corner Speed',
-    viewType: 'cornerSpeed',
-    channels: [],
-    units: {},
-    transforms: {},
-    yDomains: {},
-  },
-  {
     label: 'Delta',
     viewType: 'delta',
     channels: [],
@@ -175,6 +159,23 @@ export const CHANNEL_GROUPS: ChannelGroupDef[] = [
   {
     label: 'Setup',
     viewType: 'setup',
+    channels: [],
+    units: {},
+    transforms: {},
+    yDomains: {},
+  },
+  // ── Analysis views, kept last: they are read after the traces, not with them
+  {
+    label: 'Braking',
+    viewType: 'braking',
+    channels: [],
+    units: {},
+    transforms: {},
+    yDomains: {},
+  },
+  {
+    label: 'Corner Speed',
+    viewType: 'cornerSpeed',
     channels: [],
     units: {},
     transforms: {},

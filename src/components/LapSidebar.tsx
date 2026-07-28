@@ -83,7 +83,9 @@ function SessionCard({ session, active, onActivate, onRemove }: {
             <span className="text-[10px] text-muted-foreground/60 shrink-0">{session.date.slice(0, 10)}</span>
           </div>
           <div className="flex items-center gap-2 mt-0.5">
-            <span className="text-[10px] text-muted-foreground truncate leading-tight">{session.car}</span>
+            <span className="text-[10px] text-muted-foreground truncate leading-tight">
+              {session.car}{session.driver ? ` · ${session.driver}` : ''}
+            </span>
             <button
               onClick={openTrackGuide}
               className="text-[9px] font-medium text-muted-foreground hover:text-primary transition-colors flex items-center gap-0.5 shrink-0 hover:underline"
@@ -91,6 +93,14 @@ function SessionCard({ session, active, onActivate, onRemove }: {
             >
               ▶ {t('trackGuide')}
             </button>
+          </div>
+          {/* The file this came from. Two sessions on the same track and car are
+              otherwise told apart only by their timestamp. */}
+          <div
+            className="text-[9px] text-muted-foreground/50 truncate leading-tight mt-0.5"
+            title={session.file_path}
+          >
+            {session.file_path.split(/[\\/]/).pop()}
           </div>
         </div>
         <button

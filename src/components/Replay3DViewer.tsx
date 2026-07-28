@@ -255,6 +255,24 @@ function pathTangent(pts: THREE.Vector3[], i: number, lastTan: THREE.Vector3): T
 // frames — the car's heading froze and then jumped, and it read as the car
 // twitching left and right. Interpolating instead gives the steady sweep the
 // channel actually described.
+// Channels that are angles, and so cannot simply be interpolated as numbers
+const ANGULAR = new Set(['Yaw', 'YawNorth', 'Pitch', 'Roll'])
+
+// Remove the +-pi wraps so the series runs continuously
+function unwrapAngles(src: number[]): number[] {
+  if (src.length < 2) return src
+  const out = new Array<number>(src.length)
+  out[0] = src[0]
+  let shift = 0
+  for (let i = 1; i < src.length; i++) {
+    let d = src[i] - src[i - 1]
+    if (d > Math.PI) shift -= 2 * Math.PI
+    else if (d < -Math.PI) shift += 2 * Math.PI
+    out[i] = src[i] + shift
+  }
+  return out
+}
+
 function resample(src: number[], length: number): number[] {
   if (src.length === 0 || src.length === length) return src
   const out = new Array<number>(length)
@@ -1371,8 +1389,13 @@ export default function Replay3DViewer() {
             const r = await invoke<LapChannelData[]>('get_lap_channel_data',
               { sessionId, lapNumbers: [lapNumber], channel, stride })
             if (cancelled) return
-            // Stretch back to the core series' length so the same index works
-            if (r[0]) assign(lap, resample(r[0].samples, lap.timestamps.length))
+            // Stretch back to the core series' length so the same index works.
+            // Angles have to be made continuous first: yaw steps from +pi to -pi
+            // once a lap, and interpolating across that jump sweeps the car
+            // through every heading in between — it flicked sideways for a
+            // fraction of a second. Values beyond +-pi are fine for three.js.
+            if (r[0]) assign(lap, resample(ANGULAR.has(channel) ? unwrapAngles(r[0].samples) : r[0].samples,
+                                           lap.timestamps.length))
           } catch { /* channel missing or unreadable — feature stays off */ }
           // Yield between channels so the UI keeps breathing on long laps
           await new Promise(res => setTimeout(res, 0))
@@ -2297,11 +2320,23 @@ export default function Replay3DViewer() {
         if (yawOff != null && lap.yaw.length > idx) {
           group.rotation.y = lerpAt(lap.yaw, true) + yawOff
         } else {
+          // Used only while the yaw channel is missing or still loading. The old
+          // threshold was 0.001 in world units — a couple of centimetres — so at
+          // low speed the heading came out of GPS noise and the car could snap
+          // round a full turn between frames. A metre of travel is the shortest
+          // baseline that actually points anywhere, and the heading is eased in
+          // rather than set, so a bad sample cannot spin the car on its own.
           const dIdx = Math.min(idx + 5, lap.lat.length - 1)
           if (dIdx > idx) {
             const nPos = toWorld(lap.lat[dIdx], lap.lon[dIdx], lap.alt[dIdx], tf)
             const dir = nPos.clone().sub(pos)
-            if (dir.lengthSq() > 0.001) group.rotation.y = Math.atan2(dir.x, dir.z)
+            if (Math.hypot(dir.x, dir.z) > 1 * M) {
+              const want = Math.atan2(dir.x, dir.z)
+              let d = want - group.rotation.y
+              while (d > Math.PI) d -= 2 * Math.PI
+              while (d < -Math.PI) d += 2 * Math.PI
+              group.rotation.y += d * (1 - Math.pow(0.7, dt * 60))
+            }
           }
         }
         if (lap.pitch.length > idx) {
