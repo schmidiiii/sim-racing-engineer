@@ -6,6 +6,10 @@ pub struct Session {
     pub id: String,
     pub file_path: String,
     pub track: String,
+    /// iRacing's own id for the track *and* layout. Keys the stored centreline,
+    /// which the display name cannot: "Circuit de Spa-Francorchamps" covers
+    /// several layouts that do not share geometry.
+    pub track_id: Option<i32>,
     pub car: String,
     pub date: String,
     pub tick_rate: i32,

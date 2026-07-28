@@ -90,9 +90,91 @@ pub fn cstr_to_string(bytes: &[u8]) -> String {
     String::from_utf8_lossy(&bytes[..end]).into_owned()
 }
 
+/// Windows-1252 differs from Latin-1 only in 0x80..=0x9F, where it carries
+/// punctuation instead of control codes. Above that the two agree, and a byte
+/// maps straight to the code point of the same value.
+fn cp1252_char(b: u8) -> char {
+    const HIGH: [char; 32] = [
+        '€', '\u{81}', '‚', 'ƒ', '„', '…', '†', '‡',
+        'ˆ', '‰', 'Š', '‹', 'Œ', '\u{8d}', 'Ž', '\u{8f}',
+        '\u{90}', '‘', '’', '“', '”', '•', '–', '—',
+        '˜', '™', 'š', '›', 'œ', '\u{9d}', 'ž', 'Ÿ',
+    ];
+    if (0x80..=0x9f).contains(&b) { HIGH[(b - 0x80) as usize] } else { b as char }
+}
+
+/// Decode the session YAML, which is not written in a single encoding.
+///
+/// Track and driver names arrive as Windows-1252 — "Hockenheimring
+/// Baden-Württemberg" carries a bare 0xFC — while fields iRacing fills from its
+/// own database, such as the country flair, are UTF-8. Both turn up in the same
+/// file: 14 of the 96 sample files hold "Bela Brünger" as 1252 and "Türkiye" as
+/// UTF-8 side by side. Decoding wholesale either way therefore mangles the
+/// other, and `from_utf8_lossy` simply dropped every 1252 character.
+///
+/// So each sequence is judged on its own: taken as UTF-8 where the bytes form a
+/// valid one, and as Windows-1252 otherwise.
+pub fn decode_session_text(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() + 16);
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b < 0x80 {
+            out.push(b as char);
+            i += 1;
+            continue;
+        }
+        // Length this byte claims as a UTF-8 lead byte, if it is one at all
+        let width = match b {
+            0xc2..=0xdf => 2,
+            0xe0..=0xef => 3,
+            0xf0..=0xf4 => 4,
+            _ => 1,
+        };
+        if width > 1 && i + width <= bytes.len() {
+            if let Ok(s) = std::str::from_utf8(&bytes[i..i + width]) {
+                out.push_str(s);
+                i += width;
+                continue;
+            }
+        }
+        out.push(cp1252_char(b));
+        i += 1;
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decodes_windows_1252_track_names() {
+        // "Baden-Württemberg" as iRacing writes it: a bare 0xFC
+        let mut b = b"Baden-W".to_vec();
+        b.push(0xfc);
+        b.extend_from_slice(b"rttemberg");
+        assert_eq!(decode_session_text(&b), "Baden-Württemberg");
+    }
+
+    #[test]
+    fn keeps_utf8_where_it_is_already_utf8() {
+        assert_eq!(decode_session_text("Türkiye".as_bytes()), "Türkiye");
+    }
+
+    #[test]
+    fn handles_both_encodings_in_one_document() {
+        // Exactly the mix found in 14 of the sample files
+        let mut b = b"UserName: Bela Br".to_vec();
+        b.push(0xfc);                                   // 1252
+        b.extend_from_slice(b"nger\nFlairName: T");
+        b.extend_from_slice("ü".as_bytes());            // UTF-8
+        b.extend_from_slice(b"rkiye\n");
+        assert_eq!(
+            decode_session_text(&b),
+            "UserName: Bela Brünger\nFlairName: Türkiye\n"
+        );
+    }
 
     #[test]
     fn ibt_header_is_112_bytes() {

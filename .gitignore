@@ -25,3 +25,6 @@ installer/
 *.njsproj
 *.sln
 *.sw?
+
+# Downloaded orthophoto tiles (regenerated on demand)
+scripts/.ortho-cache/

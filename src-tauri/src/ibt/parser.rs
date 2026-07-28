@@ -74,7 +74,7 @@ impl IbtFile {
         if start + len > self.data.len() {
             return String::new();
         }
-        String::from_utf8_lossy(&self.data[start..start + len])
+        decode_session_text(&self.data[start..start + len])
             .trim_end_matches('\0')
             .to_string()
     }
@@ -169,6 +169,8 @@ impl IbtFile {
         let yaml = self.session_info_yaml();
         let track = extract_yaml_field(&yaml, "TrackDisplayName")
             .unwrap_or_else(|| "Unknown Track".into());
+        let track_id = extract_yaml_field(&yaml, "TrackID")
+            .and_then(|v| v.trim().parse::<i32>().ok());
         let car = extract_driver_car_name(&yaml)
             .unwrap_or_else(|| "Unknown Car".into());
         let date = chrono::DateTime::from_timestamp(self.disk_header.session_start_date, 0)
@@ -179,6 +181,7 @@ impl IbtFile {
             id: uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, file_path.as_bytes()).to_string(),
             file_path,
             track,
+            track_id,
             car,
             date,
             tick_rate: self.header.tick_rate,
