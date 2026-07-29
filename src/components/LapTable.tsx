@@ -164,8 +164,6 @@ export default function LapTable() {
     // Worst case matters more than the average when deciding whether the fuel
     // lasts: a stint planned on the average runs dry on the heavy laps.
     const maxFuel = fuelPer.length ? Math.max(...fuelPer) : 0
-    const last = summaries[summaries.length - 1]
-    const tank = last?.fuel_left ?? 0
     return {
       best,
       median: median(times),
@@ -173,12 +171,9 @@ export default function LapTable() {
       cleanCount: clean.length,
       avgFuel,
       maxFuel,
-      tank,
-      lapsLeft: avgFuel > 0 ? tank / avgFuel : 0,
-      lapsLeftWorst: maxFuel > 0 ? tank / maxFuel : 0,
       offs: pace.reduce((a, m) => a + m.off_track, 0),
     }
-  }, [pace, summaries])
+  }, [pace])
 
   // Best time per sector across the pace laps — the "ideal lap" split by split
   const bestSectors = useMemo(() => {
@@ -303,7 +298,7 @@ export default function LapTable() {
   return (
     <div className="flex-1 overflow-auto bg-background p-4 space-y-4">
       {/* Stint at a glance */}
-      <div className="grid gap-2 grid-cols-2 sm:grid-cols-3 lg:grid-cols-6">
+      <div className="grid gap-2 grid-cols-2 sm:grid-cols-3 lg:grid-cols-5">
         <Stat label={t('lapTablePaceLaps')} value={String(pace.length)}
               hint={`${summaries.length} ${t('lapTableTotal')}`} />
         <Stat label={t('lapTableBest')} value={fmtLap(stint.best)} />
@@ -312,13 +307,8 @@ export default function LapTable() {
         <Stat label={t('lapTableConsistency')} value={`±${stint.spread.toFixed(3)}s`}
               hint={`${stint.cleanCount} ${t('lapTableWithin3')}`} />
         <Stat label={t('lapTableFuelPerLap')}
-              value={stint.avgFuel > 0 ? `${fuelFromL(stint.avgFuel, units).toFixed(2)} ${fu}` : '–'}
+              value={stint.avgFuel > 0 ? `Ø ${fuelFromL(stint.avgFuel, units).toFixed(2)} ${fu}` : '–'}
               hint={stint.maxFuel > 0 ? `${t('lapTableWorst')} ${fuelFromL(stint.maxFuel, units).toFixed(2)}` : undefined} />
-        <Stat label={t('lapTableTank')}
-              value={`${fuelFromL(stint.tank, units).toFixed(1)} ${fu}`}
-              hint={stint.lapsLeft > 0
-                ? `${stint.lapsLeftWorst.toFixed(1)}–${stint.lapsLeft.toFixed(1)} ${t('lapTableLapsLeft')}`
-                : undefined} />
       </div>
 
       <div className="flex items-center gap-2 flex-wrap">
