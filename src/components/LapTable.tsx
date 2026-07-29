@@ -124,6 +124,8 @@ export default function LapTable() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [groups, setGroups] = useState<Set<ColGroup>>(loadGroups)
+  /** Name of the file just written, so the export confirms it did something */
+  const [exported, setExported] = useState<string | null>(null)
 
   const session = sessions.find(s => s.id === activeSessionId) ?? sessions[0]
 
@@ -189,7 +191,7 @@ export default function LapTable() {
 
   const idealLap = bestSectors.reduce((a, b) => a + b, 0)
 
-  const exportCsv = () => {
+  const exportCsv = async () => {
     // The export ignores the column switches — hiding a column on screen is
     // about reading the table, not about what belongs in the file.
     const nSec = bestSectors.length
@@ -218,12 +220,34 @@ export default function LapTable() {
     ])
     // Exported in SI throughout, whatever the display is set to — a file that
     // silently changes units depending on a screen toggle is a trap.
-    const csv = [head, ...rows].map(r => r.join(',')).join('\r\n')
+    // The byte order mark is for Excel, which otherwise reads the file as the
+    // system code page and mangles anything that is not ASCII.
+    const csv = '﻿' + [head, ...rows].map(r => r.join(',')).join('\r\n')
     const name = (session?.file_path.split(/[\\/]/).pop() ?? 'session').replace(/\.ibt$/i, '')
+    const file = `${name}-laps.csv`
+
+    if ('__TAURI_INTERNALS__' in window) {
+      const { save } = await import('@tauri-apps/plugin-dialog')
+      const path = await save({
+        defaultPath: file,
+        filters: [{ name: 'CSV', extensions: ['csv'] }],
+      })
+      if (!path) return                       // the user cancelled
+      try {
+        await invoke('save_text_file', { path, contents: csv })
+        setExported(path.split(/[\\/]/).pop() ?? file)
+        setTimeout(() => setExported(null), 4000)
+      } catch (e) {
+        setError(String(e))
+      }
+      return
+    }
+
+    // Outside Tauri — the browser route still works there
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
     const a = document.createElement('a')
     a.href = url
-    a.download = `${name}-laps.csv`
+    a.download = file
     a.click()
     URL.revokeObjectURL(url)
   }
@@ -322,7 +346,9 @@ export default function LapTable() {
         </button>
       </div>
 
-      <p className="text-[11px] text-muted-foreground">{t('lapTableHint')}</p>
+      <p className="text-[11px] text-muted-foreground">
+        {exported ? `${t('lapTableExported')} ${exported}` : t('lapTableHint')}
+      </p>
 
       {/* A card like every other panel, with the table scrolling inside it so
           the page never scrolls sideways */}

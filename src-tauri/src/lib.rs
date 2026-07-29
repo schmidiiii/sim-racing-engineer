@@ -12,6 +12,17 @@ fn open_url(url: String) {
     let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
 }
 
+/// Write a text file the user has already chosen a path for.
+///
+/// The browser route — a blob URL and a synthetic click on a download link —
+/// does nothing inside the Tauri webview: WebView2 never treats it as a
+/// download, so the export silently failed. The frontend asks for a path with
+/// the dialog plugin and hands it here.
+#[tauri::command]
+fn save_text_file(path: String, contents: String) -> Result<(), String> {
+    std::fs::write(&path, contents).map_err(|e| format!("{}: {}", path, e))
+}
+
 #[tauri::command]
 async fn list_ollama_models(base_url: String) -> Result<Vec<String>, String> {
     let url = format!("{}/api/tags", base_url.trim_end_matches('/'));
@@ -72,6 +83,7 @@ pub fn run() {
             ai::commands::query_ai,
             ai::commands::auto_analyze,
             open_url,
+            save_text_file,
             list_ollama_models,
             preload_ollama_model,
         ])
