@@ -121,7 +121,10 @@ export type Corner = 'LF' | 'RF' | 'LR' | 'RR'
 
 
 // HUD cards on the right share one width
-const CARD_W = 128
+// Wide enough for two tyres side by side with air between them: three bands of
+// 17px plus their gaps is 53px a tyre, and at 128 the two corners touched once
+// the bands carried a temperature.
+const CARD_W = 146
 
 // Base sky colours — weather tints these toward grey
 const SKY_LIGHT = 0x9ec8e8
@@ -3626,7 +3629,7 @@ export default function Replay3DViewer() {
                 </svg>
               </button>
               {tyresOpen && (
-                <div className="grid grid-cols-2 gap-y-1.5 px-2 pb-2 justify-items-center">
+                <div className="grid grid-cols-2 gap-x-2 gap-y-2 px-2 pb-2 justify-items-center">
                   {tyre('LF')}{tyre('RF')}{tyre('LR')}{tyre('RR')}
                 </div>
               )}
