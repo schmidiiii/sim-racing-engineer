@@ -394,12 +394,20 @@ export default function LapTable() {
               const selected = selIdx >= 0
               const paceLap = isPaceLap(m)
               const isBest = paceLap && m.lap_time === stint.best
+              // The rest of the app only compares laps iRacing timed in full —
+              // the sidebar does not even list the others. Letting them be
+              // picked here just leaves the delta view with nothing to compare.
+              const selectable = m.is_valid
               return (
                 <tr
                   key={m.lap_number}
-                  onClick={() => toggleLap(session.id, m.lap_number)}
-                  className={`border-b border-border/40 last:border-0 cursor-pointer transition-colors ${
-                    selected ? 'bg-primary/10' : 'odd:bg-secondary/15 hover:bg-secondary/40'
+                  onClick={() => selectable && toggleLap(session.id, m.lap_number)}
+                  title={selectable ? undefined : t('lapTableNotTimed')}
+                  className={`border-b border-border/40 last:border-0 transition-colors ${
+                    selectable ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'
+                  } ${
+                    selected ? 'bg-primary/10'
+                      : `odd:bg-secondary/15 ${selectable ? 'hover:bg-secondary/40' : ''}`
                   } ${paceLap ? '' : 'text-muted-foreground'}`}
                 >
                   <td className="px-2 py-1.5 text-left font-semibold">

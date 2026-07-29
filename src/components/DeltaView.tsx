@@ -459,12 +459,19 @@ export default function DeltaView() {
 
   // iRacing's own sector lines, taken from the session the first selected lap
   // came from. The leading 0 is a start point, not a crossing, so it goes.
-  const sectorBounds = useMemo(() => {
+  //
+  // Keyed on a string rather than the sessions array: the bounds feed the
+  // loading effect below, and an array that is rebuilt on every render would
+  // restart that effect on every render with it.
+  const sectorKey = (() => {
     const first = selectedLapKeys[0]
     const session = first ? sessions.find(s => s.id === parseLapKey(first).sessionId) : undefined
-    const interior = (session?.sector_starts ?? []).filter(v => v > 1e-4 && v < 1)
-    return interior.length ? interior : EVEN_THIRDS
-  }, [sessions, lapKeyStr])
+    return (session?.sector_starts ?? []).filter(v => v > 1e-4 && v < 1).join(',')
+  })()
+  const sectorBounds = useMemo(
+    () => (sectorKey ? sectorKey.split(',').map(Number) : EVEN_THIRDS),
+    [sectorKey],
+  )
 
   useEffect(() => {
     setZoom(null)
@@ -534,7 +541,7 @@ export default function DeltaView() {
     }
 
     fetchAll()
-  }, [lapKeyStr, sessions.length, sectorBounds])
+  }, [lapKeyStr, sessions.length, sectorKey])
 
   // Derive refIdx (non-hook, safe before early returns)
   const refIdx = entries.length >= 2
