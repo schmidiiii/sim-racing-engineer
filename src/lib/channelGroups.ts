@@ -36,6 +36,9 @@ const EXPLICIT: Record<string, string> = {
   BrakeABSactive: 'ABS',
   SteeringWheelTorque: 'Steering Torque',
   dcBrakeBias: 'Brake Bias',
+  dcABS: 'ABS Setting',
+  dcTractionControl: 'Traction Control',
+  dcThrottleShape: 'Throttle Shape',
   Pitch: 'Pitch',
   Roll: 'Roll',
 }
@@ -188,6 +191,18 @@ export const CHANNEL_GROUPS: ChannelGroupDef[] = [
     yDomains: {},
   },
   // ── Car ───────────────────────────────────────────────────────────────────
+  {
+    // What the driver changed from the cockpit during the run. Most cars leave
+    // most of these alone, so the variance threshold is what keeps the tab from
+    // filling with flat lines — it is small because the changes are: a brake
+    // bias moved by half a percent over a Nurburgring stint, which matters.
+    label: 'Adjustments',
+    channels: ['dcBrakeBias', 'dcABS', 'dcTractionControl', 'dcThrottleShape'],
+    units: { dcBrakeBias: '%', dcABS: '', dcTractionControl: '', dcThrottleShape: '' },
+    transforms: {},
+    yDomains: {},
+    minVarianceToShow: 0.01,
+  },
   {
     label: 'Setup',
     viewType: 'setup',

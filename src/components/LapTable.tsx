@@ -396,7 +396,10 @@ export default function LapTable() {
                   className={`border-b border-border/40 last:border-0 transition-colors ${
                     selectable ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'
                   } ${
-                    selected ? 'bg-primary/10'
+                    // Selection is a plain highlight, not a colour: purple is
+                    // reserved for the best time, the way a timing screen uses
+                    // it, and two meanings in one colour read as one meaning
+                    selected ? 'bg-secondary'
                       : `odd:bg-secondary/15 ${selectable ? 'hover:bg-secondary/40' : ''}`
                   } ${paceLap ? '' : 'text-muted-foreground'}`}
                 >
@@ -411,7 +414,7 @@ export default function LapTable() {
                       {m.in_lap && <span className="text-[9px] font-normal opacity-70">{t('lapTableIn')}</span>}
                     </span>
                   </td>
-                  <td className={`${td} ${isBest ? 'font-bold text-primary' : ''}`}>{fmtLap(m.lap_time)}</td>
+                  <td className={`${td} ${isBest ? 'font-bold text-violet-500' : ''}`}>{fmtLap(m.lap_time)}</td>
                   <td className={`${td} text-muted-foreground`}>
                     {paceLap && stint.best > 0 ? fmtGap(m.lap_time - stint.best) : ''}
                   </td>
@@ -419,7 +422,7 @@ export default function LapTable() {
                     const v = m.sectors[i]
                     const best = paceLap && v > 0 && Math.abs(v - bestSectors[i]) < 1e-6
                     return (
-                      <td key={i} className={`${td} ${i === 0 ? edge : ''} ${best ? 'font-bold text-primary' : ''}`}>
+                      <td key={i} className={`${td} ${i === 0 ? edge : ''} ${best ? 'font-bold text-violet-500' : ''}`}>
                         {v > 0 ? fmtSector(v) : '–'}
                       </td>
                     )

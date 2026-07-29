@@ -106,6 +106,7 @@ const EN = {
   resetZoom: 'Reset zoom',
   // Lap table
   tabEvents: 'Events',
+  tabAdjustments: 'Adjustments',
   setupLapTime: 'What the setup was worth',
   setupTimeAndGap: 'Lap time',
   setupOnlyDiff: 'Only differences',
@@ -259,6 +260,7 @@ const DICT: Record<string, Dict> = {
     failedToLoad: 'Fehler beim Laden', ollamaNotReachable: 'Ollama nicht erreichbar', available: 'verfügbar',
     tabGeneral: 'Allgemein', tabSetup: 'Setup', tabBraking: 'Bremsen', tabCornerSpeed: 'Kurvenspeed', tabLaps: 'Runden', tabRideHeight: 'Bodenfreiheit', tabRake: 'Neigung',
     tabEvents: 'Ereignisse',
+    tabAdjustments: 'Verstellungen',
     setupLapTime: 'Was das Setup gebracht hat',
     setupTimeAndGap: 'Rundenzeit',
     setupOnlyDiff: 'Nur Unterschiede',
@@ -1206,7 +1208,7 @@ export function useT() {
 
 const CHANNEL_TAB_KEYS: Record<string, TKey> = {
   'General': 'tabGeneral', 'Setup': 'tabSetup', 'Delta': 'tabDelta', 'Braking': 'tabBraking', 'Corner Speed': 'tabCornerSpeed',
-  'Laps': 'tabLaps', 'Events': 'tabEvents',
+  'Laps': 'tabLaps', 'Events': 'tabEvents', 'Adjustments': 'tabAdjustments',
   'Ride Height': 'tabRideHeight', 'Rake': 'tabRake',
   'Wheel Speed': 'tabWheelSpeed', 'Wheel Spin': 'tabWheelSpin',
   'Shocks': 'tabShocks', 'Shocks Hist': 'tabShocksHist',
