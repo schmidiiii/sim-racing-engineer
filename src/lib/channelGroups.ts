@@ -1,3 +1,5 @@
+import type { YBound } from '@/components/TraceChart'
+
 const CORNER: Record<string, string> = {
   LF: 'Left Front', RF: 'Right Front', LR: 'Left Rear', RR: 'Right Rear',
 }
@@ -54,7 +56,7 @@ export interface ChannelGroupDef {
   channels: string[]
   units: Record<string, string>
   transforms: Record<string, (v: number) => number>
-  yDomains: Record<string, [number | 'auto', number | 'auto']>
+  yDomains: Record<string, [YBound, YBound]>
   minVarianceToShow?: number  // skip channels with max-min below this threshold
 }
 
@@ -80,7 +82,9 @@ export const CHANNEL_GROUPS: ChannelGroupDef[] = [
     transforms: { Speed: mps2kph, Throttle: ratio2pct, Brake: ratio2pct, SteeringWheelAngle: rad2deg },
     yDomains: {
       Throttle: [0, 100], Brake: [0, 100], Speed: [0, 'auto'], Gear: [0, 'auto'],
-      SteeringWheelAngle: ['auto', 'auto'], BrakeABSactive: [0, 1],
+      // Steering is signed: scaled around zero so the centre line is straight
+      // ahead and a left lock reads against a right one
+      SteeringWheelAngle: ['sym', 'sym'], BrakeABSactive: [0, 1],
     },
   },
   {

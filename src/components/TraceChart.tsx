@@ -73,14 +73,24 @@ function sliceVisible(data: DataPt[], domain: [number, number] | null): DataPt[]
 
 const PAD = { l: 44, r: 8, t: 12, b: 10 }
 
+/** A y-axis bound: a fixed number, 'auto' to fit the data, or 'sym' to scale
+ *  symmetrically around zero. */
+export type YBound = number | 'auto' | 'sym'
+
 function computeYRange(
   data: DataPt[],
   traces: LapTrace[],
-  yDomain?: [number | 'auto', number | 'auto']
+  yDomain?: [YBound, YBound]
 ): [number, number] {
+  // 'sym' scales around zero instead of around the data. For a channel with a
+  // sign — steering above all — plain auto-scaling puts zero wherever the lap
+  // happened to be lopsided: a lap using 244 degrees one way and 158 the other
+  // leaves the centre line well above zero, and left and right can no longer
+  // be read against each other.
+  const sym = yDomain?.[0] === 'sym' || yDomain?.[1] === 'sym'
   let lo = typeof yDomain?.[0] === 'number' ? yDomain[0] : Infinity
   let hi = typeof yDomain?.[1] === 'number' ? yDomain[1] : -Infinity
-  if (!isFinite(lo) || !isFinite(hi)) {
+  if (sym || !isFinite(lo) || !isFinite(hi)) {
     for (const pt of data) {
       for (const tr of traces) {
         const v = pt[`t_${tr.colorIndex}`]
@@ -90,6 +100,10 @@ function computeYRange(
   }
   if (!isFinite(lo)) lo = 0
   if (!isFinite(hi)) hi = 1
+  if (sym) {
+    const m = Math.max(Math.abs(lo), Math.abs(hi)) || 1
+    return [-m, m]
+  }
   if (lo === hi) { lo -= 0.5; hi += 0.5 }
   return [lo, hi]
 }
@@ -128,7 +142,7 @@ function paintChart(
   ctx: CanvasRenderingContext2D,
   data: DataPt[],
   traces: LapTrace[],
-  yDomain: [number | 'auto', number | 'auto'] | undefined,
+  yDomain: [YBound, YBound] | undefined,
   dark: boolean,
   w: number,
   h: number
@@ -193,7 +207,7 @@ function paintCrosshair(
   ctx: CanvasRenderingContext2D,
   data: DataPt[],
   traces: LapTrace[],
-  yDomain: [number | 'auto', number | 'auto'] | undefined,
+  yDomain: [YBound, YBound] | undefined,
   unit: string | undefined,
   t: number | null,
   dark: boolean,
@@ -290,7 +304,7 @@ function paintCrosshair(
 export interface Props {
   channel: string
   unit?: string
-  yDomain?: [number | 'auto', number | 'auto']
+  yDomain?: [YBound, YBound]
   traces: LapTrace[]
   crosshairTime: number | null
   onMouseMove: (t: number | null) => void
