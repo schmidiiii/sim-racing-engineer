@@ -2919,7 +2919,7 @@ export default function Replay3DViewer() {
               const te = tyreTempRefs.current[c][bi]
               if (te) {
                 te.textContent = src.length > idx
-                  ? `${Math.round(tempFromC(src[idx], units))}` : '—'
+                  ? `${Math.round(tempFromC(src[idx], units))}°` : '—'
               }
             }
             const wl = wear.l.length > idx ? wear.l[idx] : null
