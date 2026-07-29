@@ -46,6 +46,66 @@ pub struct LapChannelData {
     pub lap_dist_pct: Vec<f64>,
 }
 
+/// Everything worth knowing about a lap that is *not* a curve over distance.
+/// One of these per lap is what a race engineer reads between runs: the table
+/// that says which lap was quick, what it cost in fuel and rubber, and how the
+/// driver got there. Filled in a single pass over the buffer, so asking for the
+/// whole session costs one read rather than one per lap per channel.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LapSummary {
+    pub lap_number: i32,
+    pub lap_time: f32,
+    pub is_valid: bool,
+    /// Seconds spent on pit road during this lap.
+    ///
+    /// A single "was in the pits" flag is too blunt: measured on a Nürburgring
+    /// stint, the in-laps carry 3.7 s of pit road at the very end and are
+    /// otherwise driven at full pace, while the out-laps carry thirty to
+    /// seventy-five seconds at the start. Reporting the two separately lets an
+    /// in-lap still be read as a lap, which is what it mostly is.
+    pub pit_time: f64,
+    /// Left the pits during the first fifth of the lap
+    pub out_lap: bool,
+    /// Entered the pits during the last fifth
+    pub in_lap: bool,
+    /// Split at iRacing's own sector boundaries; empty if the session had none
+    pub sectors: Vec<f64>,
+    pub fuel_used: f64,
+    pub fuel_left: f64,
+    pub max_speed: f64,
+    pub avg_speed: f64,
+    /// Share of the lap at full throttle, on the brakes, on neither, and on both
+    pub throttle_full_pct: f64,
+    pub braking_pct: f64,
+    pub coasting_pct: f64,
+    pub overlap_pct: f64,
+    pub max_brake: f64,
+    /// Changes of steering direction per minute — a car that is unhappy, or a
+    /// driver correcting it, shows up here before it shows up in the lap time
+    pub steering_reversals: f64,
+    /// Times iRacing reported the car off the racing surface for at least four
+    /// tenths of a second, pit entry excluded. Measured excursions run about a
+    /// second, so the threshold separates them from clipping a kerb.
+    pub off_track: i32,
+    pub tyres: Vec<TyreState>,
+    pub track_temp: f64,
+    pub air_temp: f64,
+}
+
+/// Tyre condition at the end of the lap. Left/middle/right are in the car's
+/// frame, not inner/outer, because that is how iRacing reports them and
+/// flipping the two sides would quietly hide which way a tyre is working.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TyreState {
+    pub corner: String,
+    pub temp_l: f64,
+    pub temp_m: f64,
+    pub temp_r: f64,
+    /// Tread remaining, 0..1, averaged across the three measurement points
+    pub wear: f64,
+    pub pressure: f64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LapStats {
     pub lap_number: i32,

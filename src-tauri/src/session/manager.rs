@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::State;
-use crate::ibt::{IbtFile, Session, LapChannelData};
+use crate::ibt::{IbtFile, Session, LapChannelData, LapSummary};
 
 pub struct AppState {
     // Arc, not Vec: the raw file is up to 110 MB and every channel request used
@@ -94,6 +94,26 @@ pub async fn get_session_yaml(state: State<'_, AppState>, session_id: String) ->
     };
     let ibt = IbtFile::from_bytes(raw)?;
     Ok(ibt.session_info_yaml())
+}
+
+#[tauri::command]
+pub async fn get_lap_summaries(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<Vec<LapSummary>, String> {
+    let (session, raw) = {
+        let sessions = state.sessions.lock().unwrap();
+        let (s, r) = sessions.get(&session_id)
+            .ok_or_else(|| format!("Session {} not found", session_id))?;
+        (s.clone(), Arc::clone(r))
+    };
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let ibt = IbtFile::from_bytes(raw)?;
+        Ok(ibt.lap_summaries(&session.laps))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

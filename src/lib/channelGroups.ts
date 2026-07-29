@@ -49,7 +49,7 @@ export function channelLabel(name: string): string {
 
 export interface ChannelGroupDef {
   label: string
-  viewType?: 'setup' | 'delta' | 'braking' | 'cornerSpeed' | 'lapMap'
+  viewType?: 'setup' | 'delta' | 'braking' | 'cornerSpeed' | 'lapMap' | 'lapTable'
   channels: string[]
   units: Record<string, string>
   transforms: Record<string, (v: number) => number>
@@ -74,6 +74,14 @@ export const CHANNEL_GROUPS: ChannelGroupDef[] = [
   {
     label: 'Delta',
     viewType: 'delta',
+    channels: [],
+    units: {},
+    transforms: {},
+    yDomains: {},
+  },
+  {
+    label: 'Laps',
+    viewType: 'lapTable',
     channels: [],
     units: {},
     transforms: {},

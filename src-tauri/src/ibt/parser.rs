@@ -252,6 +252,243 @@ impl IbtFile {
         })
     }
 
+    /// One summary per lap, from a single walk through the buffer.
+    ///
+    /// The obvious implementation asks `get_lap_channel_data` for twenty-odd
+    /// channels per lap, which re-reads the file once per channel per lap. A
+    /// thirty-lap stint would touch the buffer six hundred times for data that
+    /// is all sitting in the same record. Here the record is read once and
+    /// every accumulator takes what it needs from it.
+    pub fn lap_summaries(&self, laps: &[Lap]) -> Vec<LapSummary> {
+        const CORNERS: [&str; 4] = ["LF", "RF", "LR", "RR"];
+        // Pedal travel below this is the pedal resting, not the driver using it
+        const PEDAL: f64 = 0.05;
+        // A wheel dropping over a kerb is not an excursion. Four tenths of a
+        // second off is.
+        const OFF_MIN_S: f64 = 0.4;
+        // Movement smaller than this is the wheel breathing in the driver's
+        // hands. Measured on a lap of Imola: a one-degree deadband counts 121
+        // reversals a minute, which is the noise floor rather than the driver.
+        // Five degrees is the usual figure in telemetry work and lands at 57.
+        const STEER_DEADBAND: f64 = 0.087; // radians, 5 degrees
+
+        let sectors = self.sector_starts();
+        let total = self.disk_header.session_record_count as usize;
+
+        let st = self.find_var("SessionTime");
+        let pct = self.find_var("LapDistPct");
+        let spd = self.find_var("Speed");
+        let thr = self.find_var("Throttle");
+        let brk = self.find_var("Brake");
+        let steer = self.find_var("SteeringWheelAngle");
+        let fuel = self.find_var("FuelLevel");
+        let surf = self.find_var("PlayerTrackSurface");
+        let pit = self.find_var("OnPitRoad");
+        let ttemp = self.find_var("TrackTemp");
+        let atemp = self.find_var("AirTemp");
+        let tyre: Vec<_> = CORNERS.iter().map(|c| (
+            self.find_var(&format!("{}tempCL", c)),
+            self.find_var(&format!("{}tempCM", c)),
+            self.find_var(&format!("{}tempCR", c)),
+            self.find_var(&format!("{}wearL", c)),
+            self.find_var(&format!("{}wearM", c)),
+            self.find_var(&format!("{}wearR", c)),
+            self.find_var(&format!("{}pressure", c)),
+        )).collect();
+
+        let get = |i: usize, v: Option<&VarHeader>| v.map(|v| self.read_f64(i, v)).unwrap_or(0.0);
+
+        laps.iter().map(|lap| {
+            let start = lap.start_sample.min(total);
+            let end = lap.end_sample.min(total);
+            let n = end.saturating_sub(start);
+
+            let mut s = LapSummary {
+                lap_number: lap.lap_number,
+                lap_time: lap.lap_time,
+                is_valid: lap.is_valid,
+                pit_time: 0.0,
+                out_lap: false,
+                in_lap: false,
+                sectors: Vec::new(),
+                fuel_used: 0.0,
+                fuel_left: 0.0,
+                max_speed: 0.0,
+                avg_speed: 0.0,
+                throttle_full_pct: 0.0,
+                braking_pct: 0.0,
+                coasting_pct: 0.0,
+                overlap_pct: 0.0,
+                max_brake: 0.0,
+                steering_reversals: 0.0,
+                off_track: 0,
+                tyres: Vec::new(),
+                track_temp: 0.0,
+                air_temp: 0.0,
+            };
+            if n == 0 { return s; }
+
+            let t0 = get(start, st);
+            let t_end = get(end - 1, st);
+            let duration = (t_end - t0).max(0.0);
+
+            // Where the timed lap actually begins. The segment runs from one
+            // change of the `Lap` counter to the next, which is the line to
+            // within a tick on every lap but the first timed one: measured on a
+            // Nürburgring stint, lap 2's segment opens 1.74 s before its lap
+            // time starts, because the session's opening segment ends late.
+            // Anchoring on the end — which `LapCurrentLapTime` confirms sits on
+            // the line — makes the sectors add up to the lap they belong to.
+            let lap_start_t = if lap.lap_time > 10.0 && duration > lap.lap_time as f64 {
+                t_end - lap.lap_time as f64
+            } else {
+                t0
+            };
+
+            // Sector boundaries are crossings, not buckets: taking the first and
+            // last sample inside a sector drops the fraction of a tick either
+            // side of the line, and five sectors would lose a tenth over a lap.
+            let mut crossings: Vec<f64> = vec![lap_start_t];
+            let mut next = 1usize; // sector 0 starts at the line
+            let mut prev_pct = get(start, pct);
+            let mut prev_t = t0;
+
+            let (mut full, mut braking, mut coasting, mut overlap) = (0usize, 0usize, 0usize, 0usize);
+            let mut speed_sum = 0.0;
+            let mut steer_dir = 0i8;
+            let mut steer_extreme = get(start, steer);
+            let mut reversals = 0usize;
+            let mut off_run = 0usize;
+            let (mut pit_samples, mut pit_first, mut pit_last) = (0usize, None::<usize>, None::<usize>);
+            let ticks_per_s = if duration > 0.0 { n as f64 / duration } else { 60.0 };
+
+            for i in start..end {
+                let t = get(i, st);
+                let p = get(i, pct);
+                let on_pit = get(i, pit) > 0.5;
+                if on_pit {
+                    pit_samples += 1;
+                    if pit_first.is_none() { pit_first = Some(i); }
+                    pit_last = Some(i);
+                }
+
+                // Crossing a sector line. `p - prev_pct` guards the wrap at the
+                // start/finish line, where pct jumps from ~1 back to ~0.
+                while next < sectors.len() && p >= sectors[next] && p - prev_pct < 0.5 && p > prev_pct {
+                    let span = (p - prev_pct).max(1e-9);
+                    let f = (sectors[next] - prev_pct) / span;
+                    crossings.push((prev_t + (t - prev_t) * f).max(lap_start_t));
+                    next += 1;
+                }
+                prev_pct = p;
+                prev_t = t;
+
+                let v = get(i, spd);
+                speed_sum += v;
+                if v > s.max_speed { s.max_speed = v; }
+
+                let th = get(i, thr);
+                let br = get(i, brk);
+                if br > s.max_brake { s.max_brake = br; }
+                if th >= 0.98 { full += 1; }
+                if br > PEDAL { braking += 1; }
+                if br > PEDAL && th > PEDAL { overlap += 1; }
+                if br <= PEDAL && th <= PEDAL { coasting += 1; }
+
+                // A reversal is a direction change that actually went somewhere.
+                // Everything is measured against the extreme the wheel last
+                // reached, not against the previous sample: a turn back only
+                // counts once it has travelled past the deadband, so a wheel
+                // trembling on the straight never registers.
+                let a = get(i, steer);
+                let d = a - steer_extreme;
+                if d.abs() > 1e-9 {
+                    let dir: i8 = if d > 0.0 { 1 } else { -1 };
+                    if dir != steer_dir {
+                        if steer_dir == 0 {
+                            steer_dir = dir;
+                            steer_extreme = a;
+                        } else if d.abs() > STEER_DEADBAND {
+                            reversals += 1;
+                            steer_dir = dir;
+                            steer_extreme = a;
+                        }
+                    } else {
+                        steer_extreme = a;
+                    }
+                }
+
+                // TrkLoc: 0 is off track, 3 is on it. Pit entry reports off
+                // track on the way in, which is not a mistake.
+                if get(i, surf) < 0.5 && !on_pit {
+                    off_run += 1;
+                } else {
+                    if off_run as f64 / ticks_per_s >= OFF_MIN_S { s.off_track += 1; }
+                    off_run = 0;
+                }
+            }
+            if off_run as f64 / ticks_per_s >= OFF_MIN_S { s.off_track += 1; }
+
+            s.pit_time = pit_samples as f64 / ticks_per_s;
+            let fifth = n / 5;
+            s.out_lap = pit_first.map(|i| i - start <= fifth).unwrap_or(false);
+            s.in_lap = pit_last.map(|i| end - 1 - i <= fifth).unwrap_or(false);
+
+            crossings.push(t_end);
+            if crossings.len() > 2 {
+                s.sectors = crossings.windows(2).map(|w| w[1] - w[0]).collect();
+            }
+
+            let nf = n as f64;
+            s.avg_speed = speed_sum / nf;
+            s.throttle_full_pct = full as f64 / nf * 100.0;
+            s.braking_pct = braking as f64 / nf * 100.0;
+            s.coasting_pct = coasting as f64 / nf * 100.0;
+            s.overlap_pct = overlap as f64 / nf * 100.0;
+            s.steering_reversals = if duration > 0.0 { reversals as f64 / duration * 60.0 } else { 0.0 };
+
+            s.fuel_left = get(end - 1, fuel);
+            // Refuelling makes the difference negative; report nothing rather
+            // than a negative burn.
+            s.fuel_used = (get(start, fuel) - s.fuel_left).max(0.0);
+            s.track_temp = get(end - 1, ttemp);
+            s.air_temp = get(end - 1, atemp);
+
+            s.tyres = CORNERS.iter().zip(tyre.iter()).map(|(c, v)| TyreState {
+                corner: c.to_string(),
+                temp_l: get(end - 1, v.0),
+                temp_m: get(end - 1, v.1),
+                temp_r: get(end - 1, v.2),
+                wear: (get(end - 1, v.3) + get(end - 1, v.4) + get(end - 1, v.5)) / 3.0,
+                pressure: get(end - 1, v.6),
+            }).collect();
+
+            s
+        }).collect()
+    }
+
+    /// Where iRacing puts the sector lines, as fractions of a lap. Sessions
+    /// without a `SplitTimeInfo` block get no sectors rather than invented ones.
+    fn sector_starts(&self) -> Vec<f64> {
+        let yaml = self.session_info_yaml();
+        let Some(block) = yaml.split("SplitTimeInfo:").nth(1) else { return vec![] };
+        let mut out = Vec::new();
+        for line in block.lines() {
+            let t = line.trim();
+            if let Some(v) = t.strip_prefix("SectorStartPct:") {
+                if let Ok(f) = v.trim().parse::<f64>() { out.push(f); }
+            } else if !t.is_empty()
+                && !t.starts_with("Sectors:")
+                && !t.starts_with("- SectorNum:")
+                && !t.starts_with("SectorNum:")
+            {
+                break; // out of the block and into whatever follows it
+            }
+        }
+        out.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        out
+    }
+
     pub fn compute_lap_stats(
         &self,
         lap: &Lap,
@@ -545,6 +782,86 @@ mod tests {
             }).map(|c| format!("{} ({})", c.name, c.unit)).collect();
             println!("FILE: {}\n{:?}\n", path, relevant);
         }
+    }
+
+    #[test]
+    fn sector_starts_are_ordered_fractions() {
+        let Some(f) = open_test_file() else { return };
+        let s = f.sector_starts();
+        println!("sectors: {:?}", s);
+        assert!(s.windows(2).all(|w| w[0] < w[1]), "must be increasing");
+        assert!(s.iter().all(|&v| (0.0..1.0).contains(&v)), "must be lap fractions");
+    }
+
+    /// A long stint: eighteen laps, 474k records, and both an out-lap and an
+    /// in-lap to tell apart.
+    const STINT_FILE: &str =
+        r"C:\Users\schmi\Documents\iRacing\telemetry\mercedesamgevogt3_nurburgring combinedshortb 2026-06-13 11-56-37.ibt";
+
+    #[test]
+    fn lap_summaries_match_the_lap_time() {
+        for path in &[TEST_FILE, PORSCHE_FILE, F4_FILE, STINT_FILE] {
+            if !Path::new(path).exists() { continue }
+            let f = IbtFile::open(path).expect("open");
+            let s = f.parse_session(path.to_string()).unwrap();
+            let t = std::time::Instant::now();
+            let sums = f.lap_summaries(&s.laps);
+            let took = t.elapsed();
+            assert_eq!(sums.len(), s.laps.len());
+            println!("\nFILE: {}  ({} records, summarised in {:?})",
+                path.rsplit('\\').next().unwrap(), s.record_count, took);
+            for m in sums.iter().filter(|m| m.is_valid && !m.out_lap && !m.in_lap) {
+                let sum: f64 = m.sectors.iter().sum();
+                println!(
+                    "  lap {:>2} {:>7.3}s  sectors {:?}  fuel {:.2}L rest {:.1}  vmax {:.0} km/h\n\
+                              full {:.0}%  brake {:.0}%  coast {:.0}%  overlap {:.1}%  \
+                     reversals {:.0}/min  off {}  LF {:.0}/{:.0}/{:.0}C wear {:.0}%",
+                    m.lap_number, m.lap_time,
+                    m.sectors.iter().map(|v| (v * 1000.0).round() / 1000.0).collect::<Vec<_>>(),
+                    m.fuel_used, m.fuel_left, m.max_speed * 3.6,
+                    m.throttle_full_pct, m.braking_pct, m.coasting_pct, m.overlap_pct,
+                    m.steering_reversals, m.off_track,
+                    m.tyres[0].temp_l, m.tyres[0].temp_m, m.tyres[0].temp_r,
+                    m.tyres[0].wear * 100.0,
+                );
+                // The sectors partition the lap, so they must add up to it. The
+                // official time is measured at the line and our samples are not,
+                // hence the tolerance of a couple of ticks.
+                if !m.sectors.is_empty() && m.lap_time > 10.0 {
+                    assert!(
+                        (sum - m.lap_time as f64).abs() < 0.2,
+                        "lap {}: sectors sum to {:.3} but the lap took {:.3}",
+                        m.lap_number, sum, m.lap_time
+                    );
+                }
+                assert!(m.throttle_full_pct + m.coasting_pct <= 100.5);
+                assert!(m.braking_pct >= m.overlap_pct);
+            }
+        }
+    }
+
+    /// The distinction that decides which laps count towards pace: an in-lap is
+    /// driven flat out and only ends in the pits, an out-lap is not.
+    #[test]
+    fn in_laps_and_out_laps_are_told_apart() {
+        if !Path::new(STINT_FILE).exists() { return }
+        let f = IbtFile::open(STINT_FILE).expect("open");
+        let s = f.parse_session(STINT_FILE.to_string()).unwrap();
+        let sums = f.lap_summaries(&s.laps);
+        for m in &sums {
+            if m.pit_time > 0.0 {
+                println!("  lap {:>2} {:>7.1}s  pit {:>5.1}s  out={} in={}",
+                    m.lap_number, m.lap_time, m.pit_time, m.out_lap, m.in_lap);
+            }
+        }
+        let clean: Vec<_> = sums.iter()
+            .filter(|m| m.is_valid && !m.out_lap && !m.in_lap && m.lap_time > 10.0)
+            .collect();
+        println!("  {} laps, {} of them clean", sums.len(), clean.len());
+        assert!(sums.iter().any(|m| m.in_lap), "the stint contains in-laps");
+        assert!(sums.iter().any(|m| m.out_lap), "the stint contains out-laps");
+        // No lap is both unless it was almost entirely pit lane
+        assert!(sums.iter().all(|m| !(m.in_lap && m.out_lap) || m.pit_time > 20.0));
     }
 
     #[test]
