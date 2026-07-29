@@ -101,8 +101,13 @@ pub struct TyreState {
     pub temp_l: f64,
     pub temp_m: f64,
     pub temp_r: f64,
-    /// Tread remaining, 0..1, averaged across the three measurement points
+    /// Tread remaining, 0..1, averaged across the three measurement points.
+    ///
+    /// Unlike temperature and pressure this is NOT a per-lap value: iRacing
+    /// only refreshes it when the tyre is inspected in the pits, so it holds
+    /// one figure per stint and steps down at each stop. Presented as such.
     pub wear: f64,
+    /// Hot pressure in kPa, live
     pub pressure: f64,
 }
 

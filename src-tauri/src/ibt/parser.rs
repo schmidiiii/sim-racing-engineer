@@ -286,10 +286,15 @@ impl IbtFile {
         let pit = self.find_var("OnPitRoad");
         let ttemp = self.find_var("TrackTemp");
         let atemp = self.find_var("AirTemp");
+        // `tempL/M/R` is the live surface temperature; `tempCL/CM/CR` only
+        // refreshes when the tyre is inspected in the pits. Measured over a
+        // Nürburgring stint the live channels take 2250 distinct values and the
+        // C variants take three — one per stint. Prefer the live ones and fall
+        // back only if a car does not report them.
         let tyre: Vec<_> = CORNERS.iter().map(|c| (
-            self.find_var(&format!("{}tempCL", c)),
-            self.find_var(&format!("{}tempCM", c)),
-            self.find_var(&format!("{}tempCR", c)),
+            self.find_var(&format!("{}tempL", c)).or_else(|| self.find_var(&format!("{}tempCL", c))),
+            self.find_var(&format!("{}tempM", c)).or_else(|| self.find_var(&format!("{}tempCM", c))),
+            self.find_var(&format!("{}tempR", c)).or_else(|| self.find_var(&format!("{}tempCR", c))),
             self.find_var(&format!("{}wearL", c)),
             self.find_var(&format!("{}wearM", c)),
             self.find_var(&format!("{}wearR", c)),
@@ -360,6 +365,10 @@ impl IbtFile {
             let mut reversals = 0usize;
             let mut off_run = 0usize;
             let (mut pit_samples, mut pit_first, mut pit_last) = (0usize, None::<usize>, None::<usize>);
+            // Tyres are averaged over the lap, not sampled at the end: the lap
+            // ends on the start/finish straight where the rubber has cooled, so
+            // the closing value says nothing about how the tyre worked.
+            let mut tyre_sum = [[0.0f64; 4]; 4]; // corner x (temp l, m, r, pressure)
             let ticks_per_s = if duration > 0.0 { n as f64 / duration } else { 60.0 };
 
             for i in start..end {
@@ -418,6 +427,13 @@ impl IbtFile {
                     }
                 }
 
+                for (c, v) in tyre.iter().enumerate() {
+                    tyre_sum[c][0] += get(i, v.0);
+                    tyre_sum[c][1] += get(i, v.1);
+                    tyre_sum[c][2] += get(i, v.2);
+                    tyre_sum[c][3] += get(i, v.6);
+                }
+
                 // TrkLoc: 0 is off track, 3 is on it. Pit entry reports off
                 // track on the way in, which is not a mistake.
                 if get(i, surf) < 0.5 && !on_pit {
@@ -454,13 +470,15 @@ impl IbtFile {
             s.track_temp = get(end - 1, ttemp);
             s.air_temp = get(end - 1, atemp);
 
-            s.tyres = CORNERS.iter().zip(tyre.iter()).map(|(c, v)| TyreState {
+            s.tyres = CORNERS.iter().zip(tyre.iter()).enumerate().map(|(k, (c, v))| TyreState {
                 corner: c.to_string(),
-                temp_l: get(end - 1, v.0),
-                temp_m: get(end - 1, v.1),
-                temp_r: get(end - 1, v.2),
+                temp_l: tyre_sum[k][0] / nf,
+                temp_m: tyre_sum[k][1] / nf,
+                temp_r: tyre_sum[k][2] / nf,
+                // Wear is a pit measurement, so the closing value is the right
+                // one — averaging a step function would only blur the step.
                 wear: (get(end - 1, v.3) + get(end - 1, v.4) + get(end - 1, v.5)) / 3.0,
-                pressure: get(end - 1, v.6),
+                pressure: tyre_sum[k][3] / nf,
             }).collect();
 
             s
