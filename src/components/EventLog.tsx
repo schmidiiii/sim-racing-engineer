@@ -16,8 +16,17 @@ interface LapEvent {
   speed: number
 }
 
-type Kind = 'lockup' | 'wheelspin' | 'offTrack' | 'missedShift'
-const KINDS: Kind[] = ['lockup', 'wheelspin', 'offTrack', 'missedShift']
+type Kind = 'lockup' | 'wheelspin' | 'offTrack' | 'abs' | 'missedShift'
+const KINDS: Kind[] = ['lockup', 'wheelspin', 'offTrack', 'abs', 'missedShift']
+const HIDDEN_KEY = 'srEventHidden'
+
+function loadHidden(): Set<string> {
+  try {
+    const raw = localStorage.getItem(HIDDEN_KEY)
+    if (raw) return new Set(JSON.parse(raw) as string[])
+  } catch { /* fall through */ }
+  return new Set()
+}
 
 /** Colour per kind, dark and light. Kept away from the lap colours so an event
  *  is never mistaken for a lap. */
@@ -25,6 +34,7 @@ const TINT: Record<string, string> = {
   lockup: 'text-rose-500',
   wheelspin: 'text-amber-500',
   offTrack: 'text-violet-500',
+  abs: 'text-teal-500',
   missedShift: 'text-sky-500',
 }
 
@@ -40,7 +50,7 @@ export default function EventLog() {
   const [events, setEvents] = useState<LapEvent[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [hidden, setHidden] = useState<Set<string>>(new Set())
+  const [hidden, setHidden] = useState<Set<string>>(loadHidden)
 
   const session = sessions.find(s => s.id === activeSessionId) ?? sessions[0]
 
@@ -85,6 +95,7 @@ export default function EventLog() {
   const toggleKind = (k: string) => setHidden(prev => {
     const next = new Set(prev)
     next.has(k) ? next.delete(k) : next.add(k)
+    localStorage.setItem(HIDDEN_KEY, JSON.stringify([...next]))
     return next
   })
 
@@ -120,7 +131,7 @@ export default function EventLog() {
     <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-background">
 
       {/* One card per kind, doubling as the filter */}
-      <div className="grid gap-2 grid-cols-2 sm:grid-cols-4">
+      <div className="grid gap-2 grid-cols-2 sm:grid-cols-3 lg:grid-cols-5">
         {KINDS.map(k => (
           <button
             key={k}
@@ -207,7 +218,7 @@ export default function EventLog() {
                     <td className="px-2 py-1.5 text-right border-l border-border">
                       {/* Slip for a wheel, seconds for an excursion — the unit
                           differs by kind, so it is spelled out on every row */}
-                      {e.kind === 'offTrack'
+                      {e.kind === 'offTrack' || e.kind === 'abs'
                         ? <>{e.magnitude.toFixed(1)}<span className="opacity-45 text-[10px] ml-0.5">s</span></>
                         : <>{e.magnitude.toFixed(0)}<span className="opacity-45 text-[10px] ml-0.5">%</span></>}
                     </td>

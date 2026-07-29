@@ -1346,13 +1346,28 @@ export default function Replay3DViewer() {
 
   useEffect(() => { trackMapDataRef.current = trackMapData }, [trackMapData])
 
-  // Reset to start on new file load
+  // Always holds the store's crosshair, even while `crosshairRef` is cleared
+  const crosshairWantedRef = useRef<number | null>(null)
+  useEffect(() => { crosshairWantedRef.current = crosshairTime }, [crosshairTime])
+
+  // Reset to start on new file load.
+  //
+  // Except when something has already asked for a position. Jumping to an
+  // event selects the lap it belongs to, which reloads `laps` a moment later —
+  // and this used to wipe the crosshair the click had just set, dropping the
+  // replay back at the start line. The store's value does not change in that
+  // sequence, so nothing would have restored it.
   useEffect(() => {
     if (laps.length === 0) return
     const t0 = laps[0].timestamps[0]
-    currentTimeRef.current = t0
-    crosshairRef.current = null
-    setCurrentT(t0)
+    const tEnd = laps[0].timestamps[laps[0].timestamps.length - 1]
+    const wanted = crosshairWantedRef.current
+    // Range-checked, so a crosshair left over from another session cannot
+    // strand the replay outside the lap
+    const keep = wanted != null && wanted >= t0 && wanted <= tEnd
+    currentTimeRef.current = keep ? wanted! : t0
+    crosshairRef.current = keep ? wanted! : null
+    setCurrentT(keep ? wanted! : t0)
     setPlaying(false)
   }, [laps])
 

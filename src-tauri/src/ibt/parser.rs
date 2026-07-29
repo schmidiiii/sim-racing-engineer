@@ -500,6 +500,7 @@ impl IbtFile {
         const SPIN_SLIP: f64 = 15.0;
         const MIN_RUN_S: f64 = 0.15;    // shorter than this is a bump, not a moment
         const OFF_MIN_S: f64 = 0.4;     // same floor the lap summary uses
+        const ABS_MIN_S: f64 = 0.25;    // a flicker of ABS is not worth a line
 
         let total = self.disk_header.session_record_count as usize;
         let st = self.find_var("SessionTime");
@@ -510,6 +511,7 @@ impl IbtFile {
         let surf = self.find_var("PlayerTrackSurface");
         let pit = self.find_var("OnPitRoad");
         let grind = self.find_var("ShiftGrindRPM");
+        let abs = self.find_var("BrakeABSactive");
         let wheel: Vec<_> = CORNERS.iter()
             .map(|c| self.find_var(&format!("{}speed", c)))
             .collect();
@@ -528,12 +530,14 @@ impl IbtFile {
             };
             let min_run = (MIN_RUN_S * hz).max(1.0) as usize;
             let off_run_min = (OFF_MIN_S * hz).max(1.0) as usize;
+            let abs_run_min = (ABS_MIN_S * hz).max(1.0) as usize;
 
             // An open run: where it began, and the worst value seen so far
             struct Run { from: usize, peak: f64, at: usize }
             let mut lock: [Option<Run>; 4] = [None, None, None, None];
             let mut spin: [Option<Run>; 4] = [None, None, None, None];
             let mut off: Option<Run> = None;
+            let mut absing: Option<Run> = None;
             let mut grinding = false;
 
             // `close` needs the sample data, so it is a closure over `self`
@@ -547,7 +551,10 @@ impl IbtFile {
                     lap_dist_pct: get(r.at, pct),
                     kind: kind.to_string(),
                     corner: corner.map(str::to_string),
-                    magnitude: if kind == "offTrack" { (to - r.from) as f64 / hz } else { r.peak },
+                    magnitude: match kind {
+                        "offTrack" | "abs" => (to - r.from) as f64 / hz,
+                        _ => r.peak,
+                    },
                     duration: (to - r.from) as f64 / hz,
                     speed: get(r.at, spd),
                 });
@@ -596,6 +603,17 @@ impl IbtFile {
                     (None, false) => {}
                 }
 
+                let on_abs = abs.is_some() && get(i, abs) > 0.5;
+                match (&mut absing, on_abs) {
+                    (None, true) => absing = Some(Run { from: i, peak: 0.0, at: i }),
+                    (Some(_), true) => {}
+                    (Some(r), false) => {
+                        push(&mut out, "abs", None, r, i, abs_run_min);
+                        absing = None;
+                    }
+                    (None, false) => {}
+                }
+
                 // A grinding gearbox is a single moment, not a run
                 let g = get(i, grind) > 0.0;
                 if g && !grinding {
@@ -611,21 +629,27 @@ impl IbtFile {
                 if let Some(r) = &spin[c] { push(&mut out, "wheelspin", Some(CORNERS[c]), r, end, min_run) }
             }
             if let Some(r) = &off { push(&mut out, "offTrack", None, r, end, off_run_min) }
+            if let Some(r) = &absing { push(&mut out, "abs", None, r, end, abs_run_min) }
         }
 
         out.sort_by(|a, b| a.session_time.partial_cmp(&b.session_time).unwrap());
 
-        // One incident, one entry. A car that steps out locks every wheel it
-        // has: an off at Imola produced four lockups of two seconds each, all
-        // beginning within a second of one another, which is one spin and not
-        // four moments. Runs of the same kind that overlap in time are folded
-        // together and keep the corners they came from.
+        // One incident, one entry. The tolerance matters as much as the overlap:
+        // ABS pulses through a braking zone rather than holding, and a driver
+        // fighting a corner locks a wheel twice in the same braking event.
+        //
+        // A car that steps out locks every wheel it has: an off at Imola
+        // produced four lockups of two seconds each, all beginning within a
+        // second of one another, which is one spin and not four moments. Runs
+        // of the same kind close enough in time are folded together and keep
+        // the corners they came from.
+        const MERGE_GAP_S: f64 = 0.5;
         let mut merged: Vec<LapEvent> = Vec::with_capacity(out.len());
         for e in out {
             let fold = merged.last_mut().filter(|p| {
                 p.kind == e.kind
                     && p.lap_number == e.lap_number
-                    && e.session_time <= p.session_time + p.duration
+                    && e.session_time <= p.session_time + p.duration + MERGE_GAP_S
             });
             match fold {
                 Some(p) => {
