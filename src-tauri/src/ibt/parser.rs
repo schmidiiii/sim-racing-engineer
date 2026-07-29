@@ -189,6 +189,7 @@ impl IbtFile {
             tick_rate: self.header.tick_rate,
             record_count: self.disk_header.session_record_count,
             laps,
+            sector_starts: self.sector_starts(),
             available_channels: self.channels(),
         })
     }
@@ -487,7 +488,7 @@ impl IbtFile {
 
     /// Where iRacing puts the sector lines, as fractions of a lap. Sessions
     /// without a `SplitTimeInfo` block get no sectors rather than invented ones.
-    fn sector_starts(&self) -> Vec<f64> {
+    pub fn sector_starts(&self) -> Vec<f64> {
         let yaml = self.session_info_yaml();
         let Some(block) = yaml.split("SplitTimeInfo:").nth(1) else { return vec![] };
         let mut out = Vec::new();

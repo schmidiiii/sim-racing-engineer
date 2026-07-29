@@ -17,6 +17,11 @@ pub struct Session {
     pub tick_rate: i32,
     pub record_count: i32,
     pub laps: Vec<Lap>,
+    /// Where iRacing puts its sector lines, as fractions of a lap, starting at
+    /// 0. The count varies with track length — five at Imola, twelve on the
+    /// Nordschleife — so nothing may assume three. Empty if the session
+    /// declared none.
+    pub sector_starts: Vec<f64>,
     pub available_channels: Vec<Channel>,
 }
 

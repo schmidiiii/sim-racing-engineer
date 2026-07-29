@@ -26,7 +26,10 @@ type DeltaEntry = {
   sectorTimes: (number | null)[]
 }
 
-const SECTOR_BOUNDS = [1 / 3, 2 / 3] as const
+/** Fallback for a session that declared no sectors of its own. Even thirds are
+ *  a guess, and it is better to say so by only using them when there is nothing
+ *  else — iRacing's real lines are in the file for every normal session. */
+const EVEN_THIRDS = [1 / 3, 2 / 3]
 const N_DELTA = 500
 
 function interpTime(samples: number[], ts: number[], dist: number): number | null {
@@ -53,12 +56,14 @@ function computeDeltaPoints(ref: LapDist, other: LapDist): DeltaEntry['deltaPoin
   return pts
 }
 
-function computeSectorTimes(lap: LapDist): (number | null)[] {
+/** `bounds` are the interior sector lines — the crossings between the start and
+ *  the finish, so a track with twelve sectors passes eleven of them. */
+function computeSectorTimes(lap: LapDist, bounds: number[]): (number | null)[] {
   const t0 = lap.timestamps[0]
   const tEnd = lap.timestamps[lap.timestamps.length - 1]
   const times: (number | null)[] = []
   let prevT = t0
-  for (const b of SECTOR_BOUNDS) {
+  for (const b of bounds) {
     const absT = interpTime(lap.samples, lap.timestamps, b)
     if (absT !== null) { times.push(absT - prevT); prevT = absT }
     else times.push(null)
@@ -79,12 +84,14 @@ const VW = 1000, VH = 140, PL = 48, PR = 8, PT = 8, PB = 22
 const IW = VW - PL - PR, IH = VH - PT - PB
 
 function DeltaChart({
-  entries, refIdx, cursorPct, zoom, onHover, onZoomChange,
+  entries, refIdx, cursorPct, zoom, bounds, onHover, onZoomChange,
 }: {
   entries: DeltaEntry[]
   refIdx: number
   cursorPct: number | null
   zoom: [number, number] | null
+  /** Interior sector lines as lap fractions */
+  bounds: number[]
   onHover: (pct: number | null) => void
   onZoomChange: (z: [number, number] | null) => void
 }) {
@@ -187,7 +194,7 @@ function DeltaChart({
         stroke="hsl(var(--foreground))" strokeWidth={1} opacity={0.3} />
 
       {/* Sector split lines */}
-      {SECTOR_BOUNDS.map((b, i) => {
+      {bounds.map((b, i) => {
         const x = xS(b * 100)
         if (x < PL || x > VW - PR) return null
         return (
@@ -197,10 +204,14 @@ function DeltaChart({
         )
       })}
 
-      {/* Sector labels */}
-      {[16.5, 50, 83].map((center, i) => {
-        const x = xS(center)
+      {/* Sector labels, centred in their own sector. On a track with twelve of
+          them the narrow ones have no room for a label and go without rather
+          than overprinting their neighbours. */}
+      {[0, ...bounds, 1].slice(0, -1).map((from, i) => {
+        const to = [0, ...bounds, 1][i + 1]
+        const x = xS((from + to) / 2 * 100)
         if (x < PL || x > VW - PR) return null
+        if (Math.abs(xS(to * 100) - xS(from * 100)) < 26) return null
         return (
           <text key={i} x={x} y={PT + 11} textAnchor="middle" fontSize={11}
             fill="hsl(var(--muted-foreground))" opacity={0.6}>S{i + 1}</text>
@@ -446,6 +457,15 @@ export default function DeltaView() {
 
   const lapKeyStr = selectedLapKeys.join(',')
 
+  // iRacing's own sector lines, taken from the session the first selected lap
+  // came from. The leading 0 is a start point, not a crossing, so it goes.
+  const sectorBounds = useMemo(() => {
+    const first = selectedLapKeys[0]
+    const session = first ? sessions.find(s => s.id === parseLapKey(first).sessionId) : undefined
+    const interior = (session?.sector_starts ?? []).filter(v => v > 1e-4 && v < 1)
+    return interior.length ? interior : EVEN_THIRDS
+  }, [sessions, lapKeyStr])
+
   useEffect(() => {
     setZoom(null)
   }, [lapKeyStr])
@@ -488,7 +508,7 @@ export default function DeltaView() {
       if (laps.length < 2) {
         setStatus(laps.length ? 'ok' : 'nodata')
         setEntries(laps.length === 1
-          ? [{ lap: laps[0], deltaPoints: [], sectorTimes: computeSectorTimes(laps[0]) }]
+          ? [{ lap: laps[0], deltaPoints: [], sectorTimes: computeSectorTimes(laps[0], sectorBounds) }]
           : [])
         return
       }
@@ -499,7 +519,7 @@ export default function DeltaView() {
       setEntries(laps.map((lap, i) => ({
         lap,
         deltaPoints: i !== refIdx ? computeDeltaPoints(ref, lap) : [],
-        sectorTimes: computeSectorTimes(lap),
+        sectorTimes: computeSectorTimes(lap, sectorBounds),
       })))
       setStatus('ok')
 
@@ -514,7 +534,7 @@ export default function DeltaView() {
     }
 
     fetchAll()
-  }, [lapKeyStr, sessions.length])
+  }, [lapKeyStr, sessions.length, sectorBounds])
 
   // Derive refIdx (non-hook, safe before early returns)
   const refIdx = entries.length >= 2
@@ -555,7 +575,8 @@ export default function DeltaView() {
   if (entries.length < 2)
     return <div className="flex-1 flex items-center justify-center"><p className="text-sm text-muted-foreground">{t('selectLapsCompare')}</p></div>
 
-  const bestSector = [0, 1, 2].map(si =>
+  const nSectors = sectorBounds.length + 1
+  const bestSector = Array.from({ length: nSectors }, (_, si) =>
     Math.min(...entries.map(e => e.sectorTimes[si] ?? Infinity))
   )
   const fastestTotal = Math.min(...entries.map(e => e.lap.lapTime))
@@ -580,6 +601,7 @@ export default function DeltaView() {
             refIdx={refIdx}
             cursorPct={cursorPct}
             zoom={zoom}
+            bounds={sectorBounds}
             onHover={handleHover}
             onZoomChange={setZoom}
           />
@@ -625,7 +647,7 @@ export default function DeltaView() {
           ))}
         </div>
 
-        {[0, 1, 2].map(si => {
+        {Array.from({ length: nSectors }, (_, si) => {
           const best = bestSector[si]
           return (
             <div key={si} className="flex items-center px-4 py-1.5 border-b border-border/20 last:border-0">

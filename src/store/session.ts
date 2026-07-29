@@ -30,6 +30,9 @@ export interface Session {
   tick_rate: number
   record_count: number
   laps: Lap[]
+  /** iRacing's own sector lines as fractions of a lap, starting at 0. The count
+   *  varies with track length — five at Imola, twelve on the Nordschleife. */
+  sector_starts: number[]
   available_channels: Channel[]
 }
 
