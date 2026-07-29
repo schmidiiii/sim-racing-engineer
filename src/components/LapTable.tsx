@@ -95,24 +95,27 @@ function Stat({ label, value, hint }: { label: string; value: string; hint?: str
   )
 }
 
-/** Header cell. The unit lives on a second line so the column stays narrow and
- *  every number in the table is labelled without repeating the unit in each
- *  cell. `edge` draws the divider that separates one column group from the next. */
-function Th({ label, unit, title, edge }: {
-  label: string; unit?: string; title?: string; edge?: boolean
-}) {
+/** Header cell. `edge` draws the divider that separates one column group from
+ *  the next. */
+function Th({ label, title, edge }: { label: string; title?: string; edge?: boolean }) {
   return (
     <th
       title={title}
-      className={`px-2 py-1.5 text-right font-semibold whitespace-nowrap align-bottom ${
+      className={`px-2 py-2 text-right text-[11px] font-semibold whitespace-nowrap text-foreground/80 ${
         edge ? 'border-l border-border' : ''
       }`}
     >
-      <span className="block text-[11px] leading-tight text-foreground/80">{label}</span>
-      {unit && <span className="block text-[9px] font-normal leading-tight text-muted-foreground">{unit}</span>}
+      {label}
     </th>
   )
 }
+
+/** The unit that follows a number, dimmed so the column still reads as a column
+ *  of figures. Times, gaps and sector splits carry none: seconds are obvious
+ *  from the shape of the number and the label would only crowd them. */
+const U = ({ children }: { children: string }) => (
+  <span className="opacity-45 text-[10px] ml-0.5">{children}</span>
+)
 
 export default function LapTable() {
   const t = useT()
@@ -331,30 +334,29 @@ export default function LapTable() {
               <th className="px-2 py-1.5 text-left font-semibold align-bottom">
                 <span className="block text-[11px] leading-tight text-foreground/80">{t('lapTableLap')}</span>
               </th>
-              <Th label={t('lapTableTime')} unit="m:ss" />
-              <Th label={t('lapTableGap')} unit="s" />
+              <Th label={t('lapTableTime')} />
+              <Th label={t('lapTableGap')} />
               {show('sectors') && Array.from({ length: nSec }, (_, i) => (
-                <Th key={i} label={`S${i + 1}`} unit={i === 0 ? 's' : undefined} edge={i === 0} />
+                <Th key={i} label={`S${i + 1}`} edge={i === 0} />
               ))}
               {show('fuel') && <>
-                <Th label={t('lapTableUsed')} unit={fu} title={t('lapTableUsedHint')} edge />
-                <Th label={t('lapTableTank')} unit={fu} title={t('lapTableTankHint')} />
+                <Th label={t('lapTableUsed')} title={t('lapTableUsedHint')} edge />
+                <Th label={t('lapTableTank')} title={t('lapTableTankHint')} />
               </>}
-              <Th label={t('lapTableVmax')} unit={su} edge />
+              <Th label={t('lapTableVmax')} edge />
               {show('inputs') && <>
-                <Th label={t('lapTableFull')} unit="%" title={t('lapTableFullHint')} edge />
-                <Th label={t('lapTableBrake')} unit="%" />
-                <Th label={t('lapTableCoast')} unit="%" title={t('lapTableCoastHint')} />
-                <Th label={t('lapTableOverlap')} unit="%" title={t('lapTableOverlapHint')} />
-                <Th label={t('lapTableReversals')} unit="1/min" title={t('lapTableReversalsHint')} />
+                <Th label={t('lapTableFull')} title={t('lapTableFullHint')} edge />
+                <Th label={t('lapTableBrake')} />
+                <Th label={t('lapTableCoast')} title={t('lapTableCoastHint')} />
+                <Th label={t('lapTableOverlap')} title={t('lapTableOverlapHint')} />
+                <Th label={t('lapTableReversals')} title={t('lapTableReversalsHint')} />
               </>}
               {show('tyres') && CORNERS.map((c, i) => (
-                <Th key={c} label={cornerLabel[c]} unit={`${tu} · % · ${pu}`}
-                    title={t('lapTableTyreHint')} edge={i === 0} />
+                <Th key={c} label={cornerLabel[c]} title={t('lapTableTyreHint')} edge={i === 0} />
               ))}
               {show('weather') && <>
-                <Th label={t('lapTableTrackTemp')} unit={tu} edge />
-                <Th label={t('lapTableAirTemp')} unit={tu} />
+                <Th label={t('lapTableTrackTemp')} edge />
+                <Th label={t('lapTableAirTemp')} />
               </>}
               <Th label={t('lapTableOff')} edge />
             </tr>
@@ -400,17 +402,19 @@ export default function LapTable() {
                   })}
                   {show('fuel') && <>
                     <td className={`${td} ${edge}`}>
-                      {m.fuel_used > 0 ? fuelFromL(m.fuel_used, units).toFixed(2) : '–'}
+                      {m.fuel_used > 0 ? <>{fuelFromL(m.fuel_used, units).toFixed(2)}<U>{fu}</U></> : '–'}
                     </td>
-                    <td className={td}>{fuelFromL(m.fuel_left, units).toFixed(1)}</td>
+                    <td className={td}>{fuelFromL(m.fuel_left, units).toFixed(1)}<U>{fu}</U></td>
                   </>}
-                  <td className={`${td} ${edge}`}>{speedFromMps(m.max_speed, units).toFixed(0)}</td>
+                  <td className={`${td} ${edge}`}>
+                    {speedFromMps(m.max_speed, units).toFixed(0)}<U>{su}</U>
+                  </td>
                   {show('inputs') && <>
-                    <td className={`${td} ${edge}`}>{m.throttle_full_pct.toFixed(0)}</td>
-                    <td className={td}>{m.braking_pct.toFixed(0)}</td>
-                    <td className={td}>{m.coasting_pct.toFixed(0)}</td>
-                    <td className={td}>{m.overlap_pct.toFixed(1)}</td>
-                    <td className={td}>{m.steering_reversals.toFixed(0)}</td>
+                    <td className={`${td} ${edge}`}>{m.throttle_full_pct.toFixed(0)}<U>%</U></td>
+                    <td className={td}>{m.braking_pct.toFixed(0)}<U>%</U></td>
+                    <td className={td}>{m.coasting_pct.toFixed(0)}<U>%</U></td>
+                    <td className={td}>{m.overlap_pct.toFixed(1)}<U>%</U></td>
+                    <td className={td}>{m.steering_reversals.toFixed(0)}<U>/min</U></td>
                   </>}
                   {show('tyres') && CORNERS.map((c, i) => {
                     const y = m.tyres.find(x => x.corner === c)
@@ -418,19 +422,19 @@ export default function LapTable() {
                     if (!y) return <td key={c} className={cls}>–</td>
                     return (
                       <td key={c} className={`${cls} whitespace-nowrap`}>
-                        {tempFromC(y.temp_m, units).toFixed(0)}
-                        <span className="opacity-40"> · </span>
-                        {(y.wear * 100).toFixed(0)}
-                        <span className="opacity-40"> · </span>
+                        {tempFromC(y.temp_m, units).toFixed(0)}<U>{tu}</U>
+                        <span className="opacity-30"> · </span>
+                        {(y.wear * 100).toFixed(0)}<U>%</U>
+                        <span className="opacity-30"> · </span>
                         {/* kPa runs to three digits and needs none; psi is a
                             two-digit number where a tenth still matters */}
-                        {(v => v.toFixed(v >= 100 ? 0 : 1))(pressureFromKpa(y.pressure, units))}
+                        {(v => v.toFixed(v >= 100 ? 0 : 1))(pressureFromKpa(y.pressure, units))}<U>{pu}</U>
                       </td>
                     )
                   })}
                   {show('weather') && <>
-                    <td className={`${td} ${edge}`}>{tempFromC(m.track_temp, units).toFixed(1)}</td>
-                    <td className={td}>{tempFromC(m.air_temp, units).toFixed(1)}</td>
+                    <td className={`${td} ${edge}`}>{tempFromC(m.track_temp, units).toFixed(1)}<U>{tu}</U></td>
+                    <td className={td}>{tempFromC(m.air_temp, units).toFixed(1)}<U>{tu}</U></td>
                   </>}
                   <td className={`${td} ${edge} ${m.off_track > 0 ? 'text-rose-500 font-semibold' : ''}`}>
                     {m.off_track || ''}
