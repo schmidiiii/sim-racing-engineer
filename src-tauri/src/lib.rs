@@ -80,6 +80,7 @@ pub fn run() {
             session::manager::get_session_yaml,
             session::manager::compute_ideal_lap,
             session::manager::get_lap_summaries,
+            session::manager::get_lap_events,
             ai::commands::query_ai,
             ai::commands::auto_analyze,
             open_url,

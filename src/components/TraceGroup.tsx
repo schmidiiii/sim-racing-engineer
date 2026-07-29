@@ -9,6 +9,7 @@ import DeltaView from '@/components/DeltaView'
 import BrakeAnalysis from '@/components/BrakeAnalysis'
 import CornerSpeed from '@/components/CornerSpeed'
 import LapTable from '@/components/LapTable'
+import EventLog from '@/components/EventLog'
 import LapMap from '@/components/LapMap'
 import { useT, translateChannelLabel } from '@/lib/i18n'
 
@@ -247,6 +248,7 @@ export default function TraceGroup() {
       {group.viewType === 'lapMap' && <LapMap />}
       {group.viewType === 'cornerSpeed' && <CornerSpeed />}
       {group.viewType === 'lapTable' && <LapTable />}
+      {group.viewType === 'events' && <EventLog />}
 
       {!group.viewType && <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-background">
 

@@ -486,6 +486,170 @@ impl IbtFile {
         }).collect()
     }
 
+    /// Every moment in the given laps worth a second look.
+    ///
+    /// Thresholds were measured rather than guessed, on two cars that could not
+    /// be more different. Wheel slip below −8 % turns up a hundred times in a
+    /// GT3 stint and only twice below −12 %: the ABS holds the wheel right
+    /// around −8 to −10 %, so −12 % is the line where it lost the wheel
+    /// anyway. The same −12 % in a Formula Vee, which has no ABS, finds twelve
+    /// lockups in a quarter of an hour — which is what driving one is like.
+    pub fn lap_events(&self, laps: &[Lap]) -> Vec<LapEvent> {
+        const CORNERS: [&str; 4] = ["LF", "RF", "LR", "RR"];
+        const LOCK_SLIP: f64 = -12.0;   // percent
+        const SPIN_SLIP: f64 = 15.0;
+        const MIN_RUN_S: f64 = 0.15;    // shorter than this is a bump, not a moment
+        const OFF_MIN_S: f64 = 0.4;     // same floor the lap summary uses
+
+        let total = self.disk_header.session_record_count as usize;
+        let st = self.find_var("SessionTime");
+        let pct = self.find_var("LapDistPct");
+        let spd = self.find_var("Speed");
+        let thr = self.find_var("Throttle");
+        let brk = self.find_var("Brake");
+        let surf = self.find_var("PlayerTrackSurface");
+        let pit = self.find_var("OnPitRoad");
+        let grind = self.find_var("ShiftGrindRPM");
+        let wheel: Vec<_> = CORNERS.iter()
+            .map(|c| self.find_var(&format!("{}speed", c)))
+            .collect();
+
+        let get = |i: usize, v: Option<&VarHeader>| v.map(|v| self.read_f64(i, v)).unwrap_or(0.0);
+        let mut out = Vec::new();
+
+        for lap in laps {
+            let start = lap.start_sample.min(total);
+            let end = lap.end_sample.min(total);
+            if end <= start { continue; }
+            let t0 = get(start, st);
+            let hz = {
+                let dur = get(end - 1, st) - t0;
+                if dur > 0.0 { (end - start) as f64 / dur } else { 60.0 }
+            };
+            let min_run = (MIN_RUN_S * hz).max(1.0) as usize;
+            let off_run_min = (OFF_MIN_S * hz).max(1.0) as usize;
+
+            // An open run: where it began, and the worst value seen so far
+            struct Run { from: usize, peak: f64, at: usize }
+            let mut lock: [Option<Run>; 4] = [None, None, None, None];
+            let mut spin: [Option<Run>; 4] = [None, None, None, None];
+            let mut off: Option<Run> = None;
+            let mut grinding = false;
+
+            // `close` needs the sample data, so it is a closure over `self`
+            let mut push = |out: &mut Vec<LapEvent>, kind: &str, corner: Option<&str>,
+                            r: &Run, to: usize, min: usize| {
+                if to - r.from < min { return; }
+                out.push(LapEvent {
+                    lap_number: lap.lap_number,
+                    at: get(r.at, st) - t0,
+                    session_time: get(r.at, st),
+                    lap_dist_pct: get(r.at, pct),
+                    kind: kind.to_string(),
+                    corner: corner.map(str::to_string),
+                    magnitude: if kind == "offTrack" { (to - r.from) as f64 / hz } else { r.peak },
+                    duration: (to - r.from) as f64 / hz,
+                    speed: get(r.at, spd),
+                });
+            };
+
+            for i in start..end {
+                let v = get(i, spd);
+                let th = get(i, thr);
+                let br = get(i, brk);
+
+                for (c, wv) in wheel.iter().enumerate() {
+                    if wv.is_none() { continue; }
+                    let slip = if v > 3.0 { (get(i, *wv) - v) / v * 100.0 } else { 0.0 };
+
+                    let locking = br > 0.15 && v > 15.0 && slip < LOCK_SLIP;
+                    match (&mut lock[c], locking) {
+                        (None, true) => lock[c] = Some(Run { from: i, peak: -slip, at: i }),
+                        (Some(r), true) => if -slip > r.peak { r.peak = -slip; r.at = i },
+                        (Some(r), false) => {
+                            push(&mut out, "lockup", Some(CORNERS[c]), r, i, min_run);
+                            lock[c] = None;
+                        }
+                        (None, false) => {}
+                    }
+
+                    let spinning = th > 0.4 && v > 8.0 && slip > SPIN_SLIP;
+                    match (&mut spin[c], spinning) {
+                        (None, true) => spin[c] = Some(Run { from: i, peak: slip, at: i }),
+                        (Some(r), true) => if slip > r.peak { r.peak = slip; r.at = i },
+                        (Some(r), false) => {
+                            push(&mut out, "wheelspin", Some(CORNERS[c]), r, i, min_run);
+                            spin[c] = None;
+                        }
+                        (None, false) => {}
+                    }
+                }
+
+                let is_off = get(i, surf) < 0.5 && get(i, pit) < 0.5;
+                match (&mut off, is_off) {
+                    (None, true) => off = Some(Run { from: i, peak: 0.0, at: i }),
+                    (Some(_), true) => {}
+                    (Some(r), false) => {
+                        push(&mut out, "offTrack", None, r, i, off_run_min);
+                        off = None;
+                    }
+                    (None, false) => {}
+                }
+
+                // A grinding gearbox is a single moment, not a run
+                let g = get(i, grind) > 0.0;
+                if g && !grinding {
+                    let r = Run { from: i, peak: get(i, grind), at: i };
+                    push(&mut out, "missedShift", None, &r, i + 1, 1);
+                }
+                grinding = g;
+            }
+
+            // Anything still open when the lap ended
+            for c in 0..4 {
+                if let Some(r) = &lock[c] { push(&mut out, "lockup", Some(CORNERS[c]), r, end, min_run) }
+                if let Some(r) = &spin[c] { push(&mut out, "wheelspin", Some(CORNERS[c]), r, end, min_run) }
+            }
+            if let Some(r) = &off { push(&mut out, "offTrack", None, r, end, off_run_min) }
+        }
+
+        out.sort_by(|a, b| a.session_time.partial_cmp(&b.session_time).unwrap());
+
+        // One incident, one entry. A car that steps out locks every wheel it
+        // has: an off at Imola produced four lockups of two seconds each, all
+        // beginning within a second of one another, which is one spin and not
+        // four moments. Runs of the same kind that overlap in time are folded
+        // together and keep the corners they came from.
+        let mut merged: Vec<LapEvent> = Vec::with_capacity(out.len());
+        for e in out {
+            let fold = merged.last_mut().filter(|p| {
+                p.kind == e.kind
+                    && p.lap_number == e.lap_number
+                    && e.session_time <= p.session_time + p.duration
+            });
+            match fold {
+                Some(p) => {
+                    let end = (p.session_time + p.duration).max(e.session_time + e.duration);
+                    p.duration = end - p.session_time;
+                    if e.magnitude > p.magnitude {
+                        p.magnitude = e.magnitude;
+                        p.speed = e.speed;
+                        p.lap_dist_pct = e.lap_dist_pct;
+                    }
+                    if let Some(c) = e.corner {
+                        match &mut p.corner {
+                            Some(pc) if !pc.split('+').any(|x| x == c) => { pc.push('+'); pc.push_str(&c) }
+                            Some(_) => {}
+                            None => p.corner = Some(c),
+                        }
+                    }
+                }
+                None => merged.push(e),
+            }
+        }
+        merged
+    }
+
     /// Where iRacing puts the sector lines, as fractions of a lap. Sessions
     /// without a `SplitTimeInfo` block get no sectors rather than invented ones.
     pub fn sector_starts(&self) -> Vec<f64> {
@@ -881,6 +1045,38 @@ mod tests {
         assert!(sums.iter().any(|m| m.out_lap), "the stint contains out-laps");
         // No lap is both unless it was almost entirely pit lane
         assert!(sums.iter().all(|m| !(m.in_lap && m.out_lap) || m.pit_time > 20.0));
+    }
+
+    #[test]
+    fn lap_events_are_few_and_real() {
+        for path in &[STINT_FILE, FV_FILE, PORSCHE_FILE] {
+            if !Path::new(path).exists() { continue }
+            let f = IbtFile::open(path).expect("open");
+            let s = f.parse_session(path.to_string()).unwrap();
+            let ev = f.lap_events(&s.laps);
+            println!("\nFILE: {}  ({} laps, {} events)",
+                path.rsplit('\\').next().unwrap(), s.laps.len(), ev.len());
+            let mut by_kind: std::collections::HashMap<&str, usize> = Default::default();
+            for e in &ev { *by_kind.entry(e.kind.as_str()).or_default() += 1; }
+            println!("  {:?}", by_kind);
+            for e in ev.iter().take(8) {
+                println!("  lap {:>2} at {:>6.1}s ({:>5.1}% round)  {:<12} {:<3} {:>6.1} for {:.2}s at {:.0} km/h",
+                    e.lap_number, e.at, e.lap_dist_pct * 100.0, e.kind,
+                    e.corner.as_deref().unwrap_or(""), e.magnitude, e.duration, e.speed * 3.6);
+            }
+
+            // Sorted by when they happened, and every one inside a lap
+            assert!(ev.windows(2).all(|w| w[0].session_time <= w[1].session_time));
+            for e in &ev {
+                assert!(e.duration > 0.0, "an event must last some time");
+                assert!((0.0..=1.0).contains(&e.lap_dist_pct), "pct {} out of range", e.lap_dist_pct);
+                assert!(s.laps.iter().any(|l| l.lap_number == e.lap_number));
+            }
+            // A driver who needed more than one moment per kilometre would not
+            // be lapping at all — a flood here means a threshold is wrong
+            let laps = s.laps.iter().filter(|l| l.is_valid).count().max(1);
+            assert!(ev.len() < laps * 40, "{} events over {} laps is a flood", ev.len(), laps);
+        }
     }
 
     #[test]

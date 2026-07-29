@@ -116,6 +116,35 @@ pub struct TyreState {
     pub pressure: f64,
 }
 
+/// A moment worth looking at. An eight-minute lap of the Nordschleife is a lot
+/// of trace to read; this reduces it to the handful of places where something
+/// actually happened, each carrying the session time so the charts and the 3D
+/// view can be sent straight there.
+///
+/// ABS engagement is deliberately not among the kinds. In a GT3 it fires on
+/// every heavy braking — 83 separate engagements of half a second or more over
+/// one stint — so listing it would bury the events that matter. It is already
+/// visible as the amber section of the brake trace.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LapEvent {
+    pub lap_number: i32,
+    /// Seconds from the start of the lap
+    pub at: f64,
+    /// Absolute session time, which is what drives the crosshair
+    pub session_time: f64,
+    /// Where on the lap it happened, 0..1
+    pub lap_dist_pct: f64,
+    /// "lockup" | "wheelspin" | "offTrack" | "missedShift"
+    pub kind: String,
+    /// The wheel it belongs to, where it belongs to one
+    pub corner: Option<String>,
+    /// How bad: percent of slip for a wheel, seconds for an excursion
+    pub magnitude: f64,
+    pub duration: f64,
+    /// Speed at the worst moment, m/s
+    pub speed: f64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LapStats {
     pub lap_number: i32,

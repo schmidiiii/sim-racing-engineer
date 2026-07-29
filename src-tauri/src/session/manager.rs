@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::State;
-use crate::ibt::{IbtFile, Session, LapChannelData, LapSummary};
+use crate::ibt::{IbtFile, Session, LapChannelData, LapSummary, LapEvent};
 
 pub struct AppState {
     // Arc, not Vec: the raw file is up to 110 MB and every channel request used
@@ -111,6 +111,31 @@ pub async fn get_lap_summaries(
     tauri::async_runtime::spawn_blocking(move || {
         let ibt = IbtFile::from_bytes(raw)?;
         Ok(ibt.lap_summaries(&session.laps))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn get_lap_events(
+    state: State<'_, AppState>,
+    session_id: String,
+    lap_numbers: Option<Vec<i32>>,
+) -> Result<Vec<LapEvent>, String> {
+    let (session, raw) = {
+        let sessions = state.sessions.lock().unwrap();
+        let (s, r) = sessions.get(&session_id)
+            .ok_or_else(|| format!("Session {} not found", session_id))?;
+        (s.clone(), Arc::clone(r))
+    };
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let ibt = IbtFile::from_bytes(raw)?;
+        let laps: Vec<_> = session.laps.iter()
+            .filter(|l| lap_numbers.as_ref().map_or(true, |ns| ns.contains(&l.lap_number)))
+            .cloned()
+            .collect();
+        Ok(ibt.lap_events(&laps))
     })
     .await
     .map_err(|e| e.to_string())?
