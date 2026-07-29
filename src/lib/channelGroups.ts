@@ -31,6 +31,7 @@ const EXPLICIT: Record<string, string> = {
   FuelLevel: 'Fuel Level',
   FuelUsePerHour: 'Fuel Use/h',
   SteeringWheelAngle: 'Steering Angle',
+  BrakeABSactive: 'ABS',
   SteeringWheelTorque: 'Steering Torque',
   dcBrakeBias: 'Brake Bias',
   Pitch: 'Pitch',
@@ -66,10 +67,21 @@ export const CHANNEL_GROUPS: ChannelGroupDef[] = [
   // ── Driving analysis ──────────────────────────────────────────────────────
   {
     label: 'General',
-    channels: ['Speed', 'Throttle', 'Brake', 'Gear'],
-    units: { Speed: 'km/h', Throttle: '%', Brake: '%', Gear: '' },
-    transforms: { Speed: mps2kph, Throttle: ratio2pct, Brake: ratio2pct },
-    yDomains: { Throttle: [0, 100], Brake: [0, 100], Speed: [0, 'auto'], Gear: [0, 'auto'] },
+    // `BrakeABSactive` rather than `BrakeABScutPct`: the cut percentage sits at
+    // 1.0 when nothing is happening but was measured as high as 1.42, so it is
+    // not a share of anything and turning it into "intervention strength" would
+    // be inventing a meaning. The flag is what the 3D viewer's ABS lamp and the
+    // amber section of the brake trace already use.
+    channels: ['Speed', 'Throttle', 'Brake', 'Gear', 'SteeringWheelAngle', 'BrakeABSactive'],
+    units: {
+      Speed: 'km/h', Throttle: '%', Brake: '%', Gear: '',
+      SteeringWheelAngle: 'deg', BrakeABSactive: '',
+    },
+    transforms: { Speed: mps2kph, Throttle: ratio2pct, Brake: ratio2pct, SteeringWheelAngle: rad2deg },
+    yDomains: {
+      Throttle: [0, 100], Brake: [0, 100], Speed: [0, 'auto'], Gear: [0, 'auto'],
+      SteeringWheelAngle: ['auto', 'auto'], BrakeABSactive: [0, 1],
+    },
   },
   {
     label: 'Delta',
