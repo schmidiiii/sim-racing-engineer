@@ -18,10 +18,10 @@ const MAX_TRACK_PTS = 1500
 // clearly from the chase camera.
 const ROAD_WIDTH_M = 24    // visible road surface
 const LINE_WIDTH_M = 0.17  // per-lap driving line
-const CURB_W_M = 1.7       // apex kerb width — the striped part of a real one
+const CURB_W_M = 1.4       // apex kerb width — the striped part of a real one
 // Exit kerbs are the wider ones on a real circuit: they carry the car that runs
 // out of road, so they reach further into the runoff than an apex kerb does
-const CURB_W_OUT_M = 2.6
+const CURB_W_OUT_M = 1.9
 const EDGE_LINE_M = 0.15   // painted track edge line
 const CURB_STRIPE_M = 5    // length of one red/white block
 const RUNOFF_W_M = 30      // gravel trap width
@@ -458,6 +458,68 @@ function lateralLimits(pts: THREE.Vector3[]): { perp: THREE.Vector3[]; posR: Flo
   return { perp, posR: spread(posR), negR: spread(negR) }
 }
 
+// Surface textures, drawn rather than shipped.
+//
+// Photographs would mean licence terms and megabytes in the installer for
+// something seen at speed from behind a car. Generated noise costs nothing, and
+// what actually reads at this distance is the grain: asphalt wants a fine dark
+// speckle, grass a coarser mottling, sand something in between. Each tile is
+// made to wrap, so it repeats along the track without a seam.
+const surfaceTexture = (() => {
+  const cache = new Map<string, THREE.Texture>()
+  return (kind: 'asphalt' | 'grass' | 'sand'): THREE.Texture => {
+    const key = kind
+    const hit = cache.get(key)
+    if (hit) return hit
+    const N = 256
+    const cv = document.createElement('canvas')
+    cv.width = cv.height = N
+    const ctx = cv.getContext('2d')!
+    const img = ctx.createImageData(N, N)
+    // Near white, because the texture *multiplies* the material colour rather
+    // than replacing it. Sitting at a quarter brightness, as it first did, simply
+    // turned the road black. What is wanted is grain, not a shade.
+    const spec = {
+      asphalt: { base: 232, grain: 12, scale: 1, warm: 0 },
+      grass:   { base: 226, grain: 20, scale: 4, warm: -1 },
+      sand:    { base: 230, grain: 16, scale: 2, warm: 1 },
+    }[kind]
+    // Value noise at two scales: the coarse one gives patches, the fine one grain
+    const lattice = (n: number) => {
+      const g = new Float32Array(n * n)
+      for (let i = 0; i < g.length; i++) g[i] = Math.random()
+      return (x: number, y: number) => {
+        const xi = Math.floor(x), yi = Math.floor(y)
+        const tx = x - xi, ty = y - yi
+        const at = (a: number, b: number) => g[((b % n) + n) % n * n + ((a % n) + n) % n]
+        const sx = tx * tx * (3 - 2 * tx), sy = ty * ty * (3 - 2 * ty)
+        const a = at(xi, yi) + (at(xi + 1, yi) - at(xi, yi)) * sx
+        const b = at(xi, yi + 1) + (at(xi + 1, yi + 1) - at(xi, yi + 1)) * sx
+        return a + (b - a) * sy
+      }
+    }
+    const coarse = lattice(8), fine = lattice(32)
+    for (let y = 0; y < N; y++) {
+      for (let x = 0; x < N; x++) {
+        const u = x / N, v = y / N
+        const n = coarse(u * 8 * spec.scale, v * 8 * spec.scale) * 0.6
+                + fine(u * 32, v * 32) * 0.4
+        const lum = spec.base + (n - 0.5) * 2 * spec.grain
+        const o = (y * N + x) * 4
+        img.data[o]     = Math.max(0, Math.min(255, lum + spec.warm * 6))
+        img.data[o + 1] = Math.max(0, Math.min(255, lum))
+        img.data[o + 2] = Math.max(0, Math.min(255, lum - spec.warm * 6))
+        img.data[o + 3] = 255
+      }
+    }
+    ctx.putImageData(img, 0, 0)
+    const tex = new THREE.CanvasTexture(cv)
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping
+    cache.set(key, tex)
+    return tex
+  }
+})()
+
 // Soft limit: equals `d` on straights, approaches the corner radius asymptotically
 // in tight corners. Never reaches it, so the offset can't fold through the centre,
 // and unlike a hard clamp it tapers instead of kinking.
@@ -521,10 +583,13 @@ function buildRibbon(
 ): THREE.BufferGeometry {
   const n = pts.length
   const positions = new Float32Array(n * 2 * 3)
+  const uvs = new Float32Array(n * 2 * 2)
   const indices: number[] = []
   const { perp, posR, negR } = lateralLimits(pts)
+  let along = 0                       // distance travelled, for the texture to run along
 
   for (let i = 0; i < n; i++) {
+    if (i > 0) along += pts[i].distanceTo(pts[i - 1])
     const hPos = typeof width === 'number' ? width / 2 : width.pos[i]
     const hNeg = typeof width === 'number' ? width / 2 : width.neg[i]
     const L = pts[i].clone().addScaledVector(perp[i],  softOffset(hPos, posR[i]))
@@ -547,6 +612,7 @@ function buildRibbon(
 
   const geom = new THREE.BufferGeometry()
   geom.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+  geom.setAttribute('uv', new THREE.BufferAttribute(uvs, 2))
   geom.setIndex(indices)
   return geom
 }
@@ -1143,6 +1209,27 @@ export default function Replay3DViewer() {
   const sunRef     = useRef<THREE.DirectionalLight | null>(null)
   const ambientRef = useRef<THREE.AmbientLight | null>(null)
   const roadMatRef = useRef<THREE.MeshBasicMaterial | null>(null)
+  // Swap the prepared colours onto the lines. In lap mode the vertex colours are
+  // plain white so the material's own colour comes through unchanged.
+  const applyLineMode = (mode: 'lap' | 'telemetry' | 'delta') => {
+    for (const { mesh, lapColour, isRef, sets } of lineColoursRef.current) {
+      const arr = sets[mode] ?? sets.lap
+      mesh.geometry.setAttribute('color', new THREE.BufferAttribute(arr, 3))
+      const mat = mesh.material as THREE.MeshBasicMaterial
+      // Vertex colours *multiply* the material's own. Left on the lap colour,
+      // grey came out blue over a teal lap and green came out teal — the shown
+      // colour was the product of two, never the one meant. White in the
+      // reading modes lets the vertex colour through untouched; in lap mode the
+      // vertex colours are white instead and the material carries the colour.
+      // The reference lap keeps its own colour in delta mode: there is nothing to
+      // compare it against, and a white line reads as a fourth state rather than
+      // as the lap everything else is measured from.
+      const plain = mode === 'lap' || (mode === 'delta' && isRef)
+      mat.color.set(plain ? lapColour : 0xffffff)
+      mat.vertexColors = true
+      mat.needsUpdate = true
+    }
+  }
   const rainRef    = useRef<{
     mesh: THREE.LineSegments
     local: Float32Array      // drop offsets relative to the camera
@@ -1187,6 +1274,15 @@ export default function Replay3DViewer() {
   const [currentT, setCurrentT] = useState(0)
   const [isDark, setIsDark] = useState(() => document.documentElement.classList.contains('dark'))
   const [cameraMode, setCameraMode] = useState<'chase' | 'cockpit' | 'front' | 'tv'>('chase')
+  // How the driving lines are coloured. All three sets are worked out once when
+  // the scene is built and swapped on the geometry afterwards — rebuilding the
+  // scene on every click would stall for a second on a long circuit.
+  const [lineMode, setLineMode] = useState<'lap' | 'telemetry' | 'delta'>('lap')
+  const lineModeRef = useRef(lineMode)
+  lineModeRef.current = lineMode
+  const lineColoursRef = useRef<{
+    mesh: THREE.Mesh; lapColour: number; isRef: boolean; sets: Record<string, Float32Array>
+  }[]>([])
   const [hudScale, setHudScale] = useState(1)
   const [conditions, setConditions] = useState<TrackConditions | null>(null)
   const [weatherOpen, setWeatherOpen] = useState(true)
@@ -1633,10 +1729,25 @@ export default function Replay3DViewer() {
     scene.add(new THREE.Mesh(terrainGeo, new THREE.MeshLambertMaterial({ vertexColors: true })))
 
     // Road surface — material kept in a ref so wet conditions can darken it
-    const roadMat = new THREE.MeshBasicMaterial({ color: roadCol, side: THREE.DoubleSide })
+    // Asphalt rather than a flat fill. The texture repeats every few metres of
+    // track; MeshLambert so it takes the scene light like everything else.
+    const roadTex = surfaceTexture('asphalt')
+    roadTex.repeat.set(1, 1 / (6 * M))       // one tile per six metres travelled
+    // Unlit, as before: the road read well and the change to a lit material only
+    // darkened it further
+    const roadMat = new THREE.MeshBasicMaterial({
+      color: roadCol, side: THREE.DoubleSide, map: roadTex,
+    })
     roadMatRef.current = roadMat
     scene.add(new THREE.Mesh(buildRibbon(basePts,
       perPoint ? { pos: edgePos!, neg: edgeNeg! } : ROAD_WIDTH, true), roadMat))
+
+    // The quickest lap is what the others are measured against, the same choice
+    // the delta view makes
+    const refLapIdx = laps.reduce((best, l, i) =>
+      (l.timestamps[l.timestamps.length - 1] - l.timestamps[0])
+        < (laps[best].timestamps[laps[best].timestamps.length - 1] - laps[best].timestamps[0]) ? i : best, 0)
+    lineColoursRef.current = []
 
     // Per-lap coloured driving line.
     //
@@ -1671,12 +1782,87 @@ export default function Replay3DViewer() {
         p.y = roadYAt(p)
         lapPts.push(p)
       }
-      const lapMesh = new THREE.Mesh(
-        buildRibbon(lapPts, LINE_WIDTH, true),
-        new THREE.MeshBasicMaterial({ color: new THREE.Color(getLapColor(lap.colorIndex)), side: THREE.DoubleSide }),
-      )
+      const geo = buildRibbon(lapPts, LINE_WIDTH, true)
+      const lapMesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+        color: new THREE.Color(getLapColor(lap.colorIndex)), side: THREE.DoubleSide,
+      }))
       lapMesh.position.y = 0.18 * M
       scene.add(lapMesh)
+
+      // Two vertices per sampled point, so each colour set is that doubled
+      const idxAt = (k: number) => Math.min(lap.lat.length - 1, k * lapStep)
+      const n = lapPts.length
+      const fill = (pick: (i: number) => THREE.Color) => {
+        const arr = new Float32Array(n * 2 * 3)
+        for (let k = 0; k < n; k++) {
+          const c = pick(idxAt(k))
+          for (const v of [k * 2, k * 2 + 1]) {
+            arr[v * 3] = c.r; arr[v * 3 + 1] = c.g; arr[v * 3 + 2] = c.b
+          }
+        }
+        return arr
+      }
+      const white = new THREE.Color(1, 1, 1)
+      const sets: Record<string, Float32Array> = { lap: fill(() => white) }
+
+      // Throttle and brake, which is what a driving line is usually read for
+      const brakeC = new THREE.Color(0xef4444), throttleC = new THREE.Color(0x22c55e)
+      const coastC = new THREE.Color(0xfacc15)
+      sets.telemetry = fill(i => {
+        const br = lap.brake[i] ?? 0, th = lap.throttle[i] ?? 0
+        if (br > 0.05) return coastC.clone().lerp(brakeC, Math.min(1, br * 1.4))
+        return coastC.clone().lerp(throttleC, Math.min(1, th * 1.4))
+      })
+
+      // Delta against the reference lap, by distance travelled rather than by
+      // time — the two laps only line up along the track, never on the clock
+      const refLap = laps[refLapIdx]
+      if (refLap && refLap !== lap) {
+        const timeAt = (l: LapReplayData) => {
+          const cum = [0]
+          for (let i = 1; i < l.lat.length; i++) {
+            const a = toWorld(l.lat[i - 1], l.lon[i - 1], 0, tf)
+            const b = toWorld(l.lat[i], l.lon[i], 0, tf)
+            cum.push(cum[i - 1] + a.distanceTo(b))
+          }
+          return { cum, t: l.timestamps }
+        }
+        const R = timeAt(refLap), L = timeAt(lap)
+        const refTimeAtDist = (d: number) => {
+          let lo = 0, hi = R.cum.length - 1
+          if (d <= 0) return R.t[0]
+          if (d >= R.cum[hi]) return R.t[hi]
+          while (hi - lo > 1) { const m = (lo + hi) >> 1; if (R.cum[m] <= d) lo = m; else hi = m }
+          const span = R.cum[hi] - R.cum[lo]
+          const f = span > 0 ? (d - R.cum[lo]) / span : 0
+          return R.t[lo] + (R.t[hi] - R.t[lo]) * f
+        }
+        const d0 = L.t[0] - R.t[0]
+        const rate: number[] = []
+        for (let i = 0; i < L.cum.length; i++)
+          rate.push((L.t[i] - L.t[0]) - (refTimeAtDist(L.cum[i]) - R.t[0]) - 0)
+        // Gaining or losing *here* is the slope, not the accumulated gap
+        const WIN = Math.max(2, Math.round(L.cum.length / 120))
+        const slope = rate.map((_, i) =>
+          rate[Math.min(rate.length - 1, i + WIN)] - rate[Math.max(0, i - WIN)])
+        const mag = slope.map(Math.abs).sort((a, b) => a - b)
+        const strong = mag[Math.floor(mag.length * 0.9)] || 1e-6
+        const grey = new THREE.Color(0x9aa0a6)
+        sets.delta = fill(i => {
+          const t = Math.max(-1, Math.min(1, slope[i] / strong))
+          if (Math.abs(t) < 0.2) return grey
+          return grey.clone().lerp(t > 0 ? brakeC : throttleC, Math.abs(t))
+        })
+        void d0
+      } else {
+        sets.delta = sets.lap
+      }
+      lineColoursRef.current.push({
+        mesh: lapMesh,
+        lapColour: new THREE.Color(getLapColor(lap.colorIndex)).getHex(),
+        isRef: lap === laps[refLapIdx],
+        sets,
+      })
     }
 
     // White edge strips
@@ -1690,6 +1876,105 @@ export default function Replay3DViewer() {
       return typeof d === 'number' ? d : d.slice(from, to)
     }
     const edgeMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide })
+    // The pit lane is deliberately not drawn. Traced from telemetry it is only
+    // as complete as the laps that happened to go through the pits, and a stop
+    // breaks the trace — one track came out with 40 m of it. A fragment of pit
+    // lane looks worse than none. scripts/build-pitlane.mjs is kept for when a
+    // source turns up that gives the whole thing.
+
+    // ── Start/finish line and the grid ────────────────────────────────────────
+    //
+    // Lap position zero is the line, so that much is known. The grid boxes are
+    // not in the telemetry at all — iRacing gives the number of pit stalls but
+    // never where the slots are painted — so these follow the standard layout:
+    // staggered either side of the centre, eight metres apart, marked at the
+    // corners rather than outlined, as they are on a real circuit.
+    {
+      // Paint lies flat on the road, and 3 cm of clearance is next to nothing in
+      // world units on a long circuit — the depth test then cannot separate the
+      // two reliably. It hits a bar drawn across the track hardest, because its
+      // depth barely changes over its length, which is why the side bars of a
+      // grid box survived and the one closing the back did not. polygonOffset is
+      // the proper answer: it biases these faces in the depth buffer rather than
+      // lifting them into the air.
+      const paint = new THREE.MeshBasicMaterial({
+        color: 0xffffff, side: THREE.DoubleSide,
+        polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -8,
+      })
+      const Y = 0.05 * M
+      const quads: number[] = []
+      // Walk back from the line along the centreline, so the markings follow the
+      // track rather than sitting on a straight line tangent to it
+      const cum: number[] = [0]
+      for (let i = 1; i < basePts.length; i++)
+        cum.push(cum[i - 1] + basePts[i].distanceTo(basePts[i - 1]))
+      const total = cum[basePts.length - 1]
+      const back = (metres: number) => {
+        const want = ((total - metres) % total + total) % total
+        let lo = 0, hi = basePts.length - 1
+        while (hi - lo > 1) { const m = (lo + hi) >> 1; if (cum[m] <= want) lo = m; else hi = m }
+        const span = cum[hi] - cum[lo]
+        const t = span > 0 ? (want - cum[lo]) / span : 0
+        const p = basePts[lo].clone().lerp(basePts[hi], t)
+        // Worked out here rather than taken from the shared limits, which are
+        // not built until further down — reaching for them crashed the scene
+        const a = basePts[Math.max(0, lo - 1)], b = basePts[Math.min(basePts.length - 1, lo + 1)]
+        const tx = b.x - a.x, tz = b.z - a.z
+        const l = Math.hypot(tx, tz) || 1
+        return { p, perp: new THREE.Vector3(-tz / l, 0, tx / l) }
+      }
+      // One rectangle, given its centre, the axes to lay it on and its size
+      const quad = (c: THREE.Vector3, perp: THREE.Vector3, fwd: THREE.Vector3, halfW: number, halfL: number) => {
+        const corners = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([a, b]) =>
+          c.clone().addScaledVector(perp, a * halfW).addScaledVector(fwd, b * halfL))
+        // Relative to the road at that point, not an absolute height: the track
+        // sits at whatever elevation the circuit has — 400 m at Spa — so a flat
+        // 3 cm buried every marking far beneath it
+        for (const [i0, i1, i2] of [[0, 1, 2], [0, 2, 3]])
+          for (const v of [corners[i0], corners[i1], corners[i2]]) quads.push(v.x, v.y + Y, v.z)
+      }
+      const fwdAt = (o: THREE.Vector3) => new THREE.Vector3(o.z, 0, -o.x)   // perp rotated
+
+      // The line itself, across the full width
+      // Each side separately: the road is not symmetric, and taking the average
+      // made the line overhang wherever the two differ
+      const sf = back(0)
+      const sfFwd = fwdAt(sf.perp)
+      const hPos = perPoint ? edgePos![0] : halfW
+      const hNeg = perPoint ? edgeNeg![0] : halfW
+      const mid = sf.p.clone().addScaledVector(sf.perp, (hPos - hNeg) / 2)
+      quad(mid, sf.perp, sfFwd, (hPos + hNeg) / 2, 0.25 * M)
+
+      const DRAW_GRID = true
+      // Twenty slots, alternating sides, each marked with two short bars
+      // Half extents, so a slot is twice these across and along. A real grid box
+      // is about 2.5 by 5 m with a hand's width of paint — the first attempt drew
+      // it 3 by 6 with a 30 cm line, which is why it read as a fence.
+      const SLOTS = 20, PITCH = 8 * M, OFFSET = 2.8 * M
+      const BOX_W = 1.25 * M, BOX_L = 2.5 * M, BAR = 0.09 * M
+      for (let n = 0; DRAW_GRID && n < SLOTS; n++) {
+        const { p, perp } = back(8 * M + n * PITCH)
+        const fwd = fwdAt(perp)
+        const side = n % 2 === 0 ? 1 : -1
+        const c = p.clone().addScaledVector(perp, side * OFFSET)
+        // Open towards the start line, as a real grid slot is painted: a bar
+        // across the back and one up each side, with nothing across the front.
+        // A closed rectangle reads as a box drawn on the road rather than a
+        // place a car pulls into.
+        // The bar goes at the end away from the line, so the slot opens towards
+        // it — the driver pulls in facing the start
+        // Runs the full width including the side bars, so the corners close, and
+        // a touch heavier than they are: at 2.5 m long it is the shortest mark of
+        // the three and the first to disappear on a large circuit
+        quad(c.clone().addScaledVector(fwd, BOX_L), perp, fwd, BOX_W + BAR, BAR * 1.4)   // back
+        quad(c.clone().addScaledVector(perp,  BOX_W), perp, fwd, BAR, BOX_L)  // one side
+        quad(c.clone().addScaledVector(perp, -BOX_W), perp, fwd, BAR, BOX_L)  // the other
+      }
+      const g = new THREE.BufferGeometry()
+      g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(quads), 3))
+      scene.add(new THREE.Mesh(g, paint))
+    }
+
     // Painted on the tarmac, not hovering over it: 0.25 was a quarter of a metre,
     // which stood proud of the 6 cm kerbs beside it. And the line sits *inside*
     // the edge — on a real circuit its outer edge marks the limit, so centring
@@ -1759,7 +2044,7 @@ export default function Replay3DViewer() {
     const CURB_W = CURB_W_M * DETAIL * M
     const CURB_W_OUT = CURB_W_OUT_M * DETAIL * M
     const CURB_STRIPE = CURB_STRIPE_M * DETAIL * M
-    const addCurb = (from: number, to: number, side: number, width = CURB_W) => {
+    const addCurb = (from: number, to: number, side: number, width: number | number[] = CURB_W) => {
       const pts = basePts.slice(from, to)
       if (pts.length < 2) return
       // The kerb hangs off the road edge rather than being centred beside it.
@@ -1772,7 +2057,9 @@ export default function Replay3DViewer() {
       // Laid on the edge itself, both are limited by the same amount and stay
       // flush whatever the corner does.
       const strip = offsetPath(pts, edgeSlice(side, 0, from, to), 0.06 * DETAIL * M)
-      const outward = new Array(strip.length).fill(width)
+      const outward = typeof width === 'number'
+        ? new Array(strip.length).fill(width)
+        : width.slice(from, from + strip.length)
       const flush = new Array(strip.length).fill(0)
       const w = side > 0 ? { pos: outward, neg: flush } : { pos: flush, neg: outward }
       let dist = 0, ss = 0, ci = 0
@@ -1800,6 +2087,38 @@ export default function Replay3DViewer() {
       }
       return out
     }
+    // Observed kerbs come *in addition to* the detected ones. They only cover
+    // where someone actually drove — a handful of places on a single session —
+    // so on their own the circuit would look stripped bare. The detector's
+    // guesses stay as the base and these correct the places that matter.
+    //
+    // Sides are swapped on the way in: the analysis measures across the track in
+    // map coordinates, the viewer in world ones, and the two run opposite ways.
+    //
+    // Held back for now: drawn this way the strip comes out as a wedge running
+    // well past the track instead of a band along its edge, so the runs are
+    // measured but not yet rendered. The data in the track files is sound —
+    // depths cap at 1.9 m — so it is the ribbon construction below that is at
+    // fault, not the observations.
+    const KERBS_FROM_TELEMETRY = false
+    const kerbL = stored?.kerbLeft, kerbR = stored?.kerbRight
+    if (KERBS_FROM_TELEMETRY && kerbL && kerbR && kerbL.length === basePts.length) {
+      for (const [side, series] of [[1, kerbR], [-1, kerbL]] as [number, number[]][]) {
+        // Capped here too, so an older track file cannot paint a corner exit red
+        const w = series.map(v => Math.min(v, 1.9) * M)
+        let run = -1
+        for (let i = 0; i <= series.length; i++) {
+          const on = i < series.length && series[i] > 0.15
+          if (on && run < 0) run = i
+          else if (!on && run >= 0) {
+            // Two points is a wheel clipping something, not a kerb
+            if (i - run > 2) addCurb(run, i, side, w)
+            run = -1
+          }
+        }
+      }
+    }
+
     // Inner apex curbs stay per-corner (short, centred on apex, no merging needed)
     for (const c of corners2) {
       const span = c.end - c.start
@@ -1824,7 +2143,14 @@ export default function Replay3DViewer() {
 
     // ── Gravel/sand runoff areas (outside of corners only) ────────────────
     const RUNOFF_W    = RUNOFF_W_M * M
-    const RUNOFF_INNER = halfW + CURB_W + 0.3 * DETAIL * M    // starts just past outer curb edge
+    // Per point, like the kerb it sits behind. As a single figure derived from
+    // the median width it drifted away from the road wherever the track was
+    // wider than average, leaving a band of grass between kerb and gravel.
+    const runoffInner = (side: number): number | number[] => {
+      const d = edgeAt(side, CURB_W + 0.3 * DETAIL * M)
+      return typeof d === 'number' ? Math.abs(d) : d.map(Math.abs)
+    }
+    const RUNOFF_INNER = halfW + CURB_W + 0.3 * DETAIL * M    // fallback, and for the verge
     // Stamp noise-based vertex colours onto a ribbon so sand doesn't look uniformly flat
     const noiseRibbon = (geo: THREE.BufferGeometry, c1: THREE.Color, c2: THREE.Color, c3: THREE.Color) => {
       const p = geo.attributes.position as THREE.BufferAttribute
@@ -1858,9 +2184,16 @@ export default function Replay3DViewer() {
     // edges obey the limits above, so where a neighbouring section crowds in the
     // strip narrows and finally disappears rather than cutting through it.
     const sideStrip = (
-      s: number, e: number, side: number, innerD: number, outerD: number,
+      s: number, e: number, side: number,
+      innerD: number | number[], outerD: number | number[],
       yIn:  (p: THREE.Vector3, x: number, z: number) => number,
       yOut: (p: THREE.Vector3, x: number, z: number) => number,
+      // Points over which the strip opens up at each end. Unused by the gravel
+      // now: collapsing it to nothing drew a long thin spike out into the grass,
+      // and the hard edge it was meant to soften turned out to be a different
+      // fault — the trap was anchored to a fixed distance from the centreline
+      // instead of to the road's own edge.
+      taper = 0,
     ) => {
       const cnt = e - s + 1
       const pos = new Float32Array(cnt * 6)
@@ -1870,8 +2203,15 @@ export default function Replay3DViewer() {
         const p = basePts[i], pe = baseLim.perp[i]
         const R   = side > 0 ? baseLim.posR[i] : baseLim.negR[i]
         const cap = side > 0 ? baseClear.pos[i] : baseClear.neg[i]
-        const di = Math.min(softOffset(innerD, R), cap)
-        const dO = Math.min(softOffset(outerD, R), cap)
+        const inD = typeof innerD === 'number' ? innerD : innerD[i]
+        const outD = typeof outerD === 'number' ? outerD : outerD[i]
+        const t = taper > 0
+          ? Math.min(1, Math.min(k, cnt - 1 - k) / taper)
+          : 1
+          // Smoothstep, so the taper has no corner where it reaches full width
+        const ease = t * t * (3 - 2 * t)
+        const di = Math.min(softOffset(inD, R), cap)
+        const dO = Math.min(softOffset(inD + (outD - inD) * ease, R), cap)
         const ix = p.x + pe.x * side * di, iz = p.z + pe.z * side * di
         const ox = p.x + pe.x * side * dO, oz = p.z + pe.z * side * dO
         const o = k * 6
@@ -1891,13 +2231,35 @@ export default function Replay3DViewer() {
       // Gravel sits a little below the tarmac, like a real trap
       const gravelY = (p: THREE.Vector3) => p.y - 0.06 * DETAIL * M
       const fringeY = (p: THREE.Vector3) => p.y - 0.08 * DETAIL * M
+      const inner = runoffInner(side)
+      const plus = (d: number | number[], by: number): number | number[] =>
+        typeof d === 'number' ? d + by : d.map(v => v + by)
       scene.add(new THREE.Mesh(noiseRibbon(
-        sideStrip(s, e, side, RUNOFF_INNER, RUNOFF_INNER + RUNOFF_W, gravelY, gravelY),
+        sideStrip(s, e, side, inner, plus(inner, RUNOFF_W), gravelY, gravelY),
         gravelC1, gravelC2, gravelC3), gravelMat))
-      // Blend fringe (darker sand-to-grass) at outer edge — softens the hard cutoff
-      scene.add(new THREE.Mesh(noiseRibbon(
-        sideStrip(s, e, side, RUNOFF_INNER + RUNOFF_W, RUNOFF_INNER + RUNOFF_W + 3 * M, fringeY, fringeY),
-        fringeC1, fringeC2, fringeC3), fringeMat))
+      // The fade out to grass. It used to be one flat band of darker sand, which
+      // only moved the hard edge three metres further out — the eye still saw a
+      // line. Colouring the two rows of vertices differently makes the strip
+      // itself the gradient: sand where it meets the trap, ground colour where
+      // it meets the terrain, and the shading between them does the blending.
+      const fringe = sideStrip(s, e, side, plus(inner, RUNOFF_W),
+        plus(inner, RUNOFF_W + 4 * M), fringeY, fringeY)
+      {
+        const fp = fringe.attributes.position as THREE.BufferAttribute
+        const col = new Float32Array(fp.count * 3)
+        const grass = new THREE.Color(gndCol)
+        for (let v = 0; v < fp.count; v++) {
+          // Vertices alternate inner, outer along the strip
+          const outer = v % 2 === 1
+          const x = fp.getX(v), z = fp.getZ(v)
+          const n = (Math.sin(x * 0.11 + z * 0.09) + Math.sin(x * 0.07 - z * 0.13)) * 0.25 + 0.5
+          const c = (outer ? grass.clone() : fringeC1.clone().lerp(fringeC3, n))
+            .lerp(outer ? fringeC2 : grass, outer ? 0.25 : 0.15)
+          col[v * 3] = c.r; col[v * 3 + 1] = c.g; col[v * 3 + 2] = c.b
+        }
+        fringe.setAttribute('color', new THREE.BufferAttribute(col, 3))
+      }
+      scene.add(new THREE.Mesh(fringe, fringeMat))
     }
     const RUNOFF_CURV_THR = 1 / 120  // gravel only where the corner is genuinely tight
     // Collect runoff ranges per side, then merge so adjacent corners share one continuous zone
@@ -1911,6 +2273,90 @@ export default function Replay3DViewer() {
       runoffSegs[side].push({ s: Math.max(0, c.start - pad), e: Math.min(n, c.start + eR) })
       runoffSegs[side].push({ s: Math.max(0, c.end - eR),    e: Math.min(n, c.end + pad) })
     }
+    // ── Braking boards ────────────────────────────────────────────────────────
+    // Only before corners tight enough to brake hard for. The first pass took
+    // anything under a 200 m radius and put up four signs each, which on a
+    // circuit full of gentle bends meant a board every few metres.
+    {
+      const board = (n: number) => {
+        // 256 px and a heavy face: at 128 with a normal weight the digits shrank
+        // into a smeared bar as soon as the sign was any distance away
+        const S = 256
+        const cv = document.createElement('canvas')
+        cv.width = S; cv.height = S
+        const ctx = cv.getContext('2d')!
+        ctx.fillStyle = '#f4f4f4'; ctx.fillRect(0, 0, S, S)
+        ctx.fillStyle = '#141414'
+        ctx.font = '900 132px system-ui, sans-serif'
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+        ctx.fillText(String(n), S / 2, S / 2 + 6)
+        const tex = new THREE.CanvasTexture(cv)
+        tex.colorSpace = THREE.SRGBColorSpace
+        // Mipmaps are what blurred it away; anisotropy keeps it legible at an angle
+        tex.generateMipmaps = false
+        tex.minFilter = THREE.LinearFilter
+        tex.magFilter = THREE.LinearFilter
+        tex.anisotropy = renderer.capabilities.getMaxAnisotropy()
+        return new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide })
+      }
+      const mats = new Map<number, THREE.Material>()
+      // POST is the clearance under the board. It was 1.2 m — the height of a
+      // real sign's legs — but nothing was ever drawn there, so the board simply
+      // hung in mid air. Standing it on the ground is the honest fix; drawing
+      // legs would be the other one.
+      const W = 0.75 * M, H = 0.75 * M, POST = 0.05 * M
+      const placed: THREE.Vector3[] = []
+      // Corners that run into one another are one braking point, not several.
+      // Signposting each of them put boards inside the complex, which reads as
+      // a warning for something you are already halfway through.
+      let lastEnd = -Infinity
+      const distBetween = (a: number, b: number) => {
+        let d = 0
+        for (let i = Math.min(a, b) + 1; i <= Math.max(a, b); i++)
+          d += basePts[i].distanceTo(basePts[i - 1])
+        return d
+      }
+      for (const c of [...corners2].sort((a, b) => a.start - b.start)) {
+        // A genuine braking corner: tighter than 90 m radius
+        if (c.curv < 1 / 90) continue
+        if (lastEnd > -Infinity && distBetween(lastEnd, c.start) < 180 * M) { lastEnd = c.end; continue }
+        lastEnd = c.end
+        // How far out the boards start depends on how much braking the corner
+        // asks for. A hairpin is worth warning about from 300 m; a quick fourth
+        // gear turn signposted that early just clutters the approach.
+        const marks = c.curv > 1 / 55 ? [300, 150, 100, 50] : [150, 100, 50]
+        for (const dist of marks) {
+          let i2 = c.start, left = dist * M
+          while (left > 0 && i2 > 1) { left -= basePts[i2].distanceTo(basePts[i2 - 1]); i2-- }
+          if (left > 0) continue
+          const p = basePts[i2], pe = baseLim.perp[i2]
+          const side = -c.side
+          const off = Math.abs(typeof edgeAt(side) === 'number'
+            ? edgeAt(side) as number : (edgeAt(side) as number[])[i2]) + 4 * M
+          const at = p.clone().addScaledVector(pe, side * off)
+          // Two boards within 40 m of each other would be the same sign twice,
+          // from two corners the detector split in the middle
+          if (placed.some(q => q.distanceTo(at) < 40 * M)) continue
+          placed.push(at.clone())
+          // On the ground beside the track, not at the road's height — the two
+          // part company as soon as the terrain falls away, and the sign floated
+          // groundHeightAt deliberately sits 1.8 m below the road so the terrain
+          // cannot push through it — a sign taking that verbatim ends up buried.
+          // Four metres from the edge the road's own height is the better guide.
+          const base = Math.max(groundHeightAt(at.x, at.z), p.y - 0.4 * M)
+          if (!mats.has(dist)) mats.set(dist, board(dist))
+          const g = new THREE.PlaneGeometry(W * 2, H * 2)
+          const m = new THREE.Mesh(g, mats.get(dist)!)
+          m.position.set(at.x, base + POST + H, at.z)
+          // Face back down the track, so it is read on the way in
+          // Turned to face back down the track. Without the half turn the plane
+          // presented its back and the digits read mirrored.
+          m.rotation.y = Math.atan2(pe.x, pe.z) - Math.PI / 2
+          scene.add(m)
+        }
+      }
+    }
+
     for (const [side, segs] of Object.entries(runoffSegs)) {
       for (const seg of mergeSegs(segs)) {
         addRunoff(seg.s, Math.min(seg.e, n - 1), Number(side))
@@ -2627,6 +3073,12 @@ export default function Replay3DViewer() {
           camYInit = true
           const behind = new THREE.Vector3(
             car0.position.x - sy * CAM_BACK * zoom, camY + CAM_UP * zoom, car0.position.z - cy2 * CAM_BACK * zoom)
+          // Never below the road beneath the camera itself. The height is eased,
+          // and dragging the timeline moves the car up and down the circuit far
+          // faster than the easing follows — on anything steep the camera ended
+          // up under the surface. The jump detector only catches a teleport;
+          // this catches every rate in between.
+          behind.y = Math.max(behind.y, roadYAt(behind) + 2.5 * M)
           cameraPosRef.current.copy(behind)
           // How high the car sits in the frame is set by the angle between
           // "camera to car" and "camera to what it is aiming at" — not by metres.
@@ -2808,6 +3260,29 @@ export default function Replay3DViewer() {
     fog.near = 300 - 265 * fogAmt
     fog.far  = 1200 - 960 * fogAmt
 
+    // Put the light where the session says the sun was. A fixed corner looked
+    // the same at nine in the morning as at six in the evening; with the real
+    // hour the shadows fall the way they did, and after dark it is the moon
+    // standing in — dimmer, cooler and lower.
+    if (sunRef.current && c?.timeOfDay) {
+      const m = c.timeOfDay.match(/(\d{1,2}):(\d{2})\s*(am|pm)?/i)
+      if (m) {
+        let hour = Number(m[1]) % 12 + Number(m[2]) / 60
+        if (/pm/i.test(m[3] ?? '')) hour += 12
+        // Noon overhead, sunrise and sunset on the horizon either side
+        const ang = (hour - 6) / 12 * Math.PI
+        const elev = Math.sin(ang), azim = Math.cos(ang)
+        // The direction is what carries the time of day. The height is held up:
+        // at ten to six the real sun sits on the horizon, and following that
+        // literally left the cars in near darkness with everything orange.
+        const night = elev <= 0.02
+        const h = 0.55 + Math.max(0, elev) * 0.45
+        sunRef.current.position.set(azim * 200, h * 240, 110)
+        sunRef.current.color.set(night ? 0xd6e2ff             // moonlight, cool
+          : elev < 0.25 ? 0xfff0dc                            // low sun, faintly warm
+          : 0xffffff)
+      }
+    }
     if (sunRef.current)     sunRef.current.intensity     = (isDark ? 2.2 : 3.0) * (1 - 0.55 * overcast - 0.25 * rain)
     if (ambientRef.current) ambientRef.current.intensity = (isDark ? 0.55 : 1.1) * (1 - 0.15 * overcast + 0.10 * rain)
     // Wet asphalt reads darker than dry
@@ -2936,6 +3411,10 @@ export default function Replay3DViewer() {
     return () => ro.disconnect()
   }, [laps.length, loading])
 
+  // Re-applied on a mode change and after every scene rebuild, since the meshes
+  // are new each time
+  useEffect(() => { applyLineMode(lineMode) }, [lineMode, sceneEpoch])
+
   // ── Mouse wheel zoom ───────────────────────────────────────────────────────
   // Re-attaches after the loading branch remounts the canvas, same as the HUD scaler
   useEffect(() => {
@@ -3016,8 +3495,21 @@ export default function Replay3DViewer() {
       {/* Three.js canvas area — bg prevents flash before canvas mounts */}
       <div ref={mountRef} className="flex-1 min-h-0 relative overflow-hidden" style={{ backgroundColor: isDark ? '#1a1e2a' : '#9ec8e8' }}>
 
-        {/* Camera mode buttons — top-right */}
+        {/* Line colouring and camera, one row. Not stacked: the weather card
+            sits directly underneath and swallowed the second row. */}
         <div className="absolute top-2 right-2 flex gap-1 select-none">
+          {(['lap', 'telemetry', 'delta'] as const).map(m => (
+            <button key={m} onClick={() => setLineMode(m)}
+              className={`text-[8px] font-bold rounded px-1.5 py-0.5 transition-colors ${
+                lineMode === m
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-black/45 text-white/55 hover:text-white hover:bg-black/65'
+              }`}
+              title={t(m === 'lap' ? 'lineByLap' : m === 'telemetry' ? 'lineByPedals' : 'lineByDelta')}>
+              {m === 'lap' ? 'LAP' : m === 'telemetry' ? 'PEDALS' : 'DELTA'}
+            </button>
+          ))}
+          <span className="w-2" />
           {(['chase', 'cockpit', 'front', 'tv'] as const).map(mode => (
             <button key={mode} onClick={() => setCameraMode(mode)}
               className={`text-[8px] font-bold rounded px-1.5 py-0.5 transition-colors ${
@@ -3029,6 +3521,34 @@ export default function Replay3DViewer() {
             </button>
           ))}
         </div>
+
+        {/* Line colouring and camera, one row. Not stacked: the weather card
+            sits directly underneath and swallowed the second row. */}
+        <div className="absolute top-2 right-2 flex gap-1 select-none">
+          {(['lap', 'telemetry', 'delta'] as const).map(m => (
+            <button key={m} onClick={() => setLineMode(m)}
+              className={`text-[8px] font-bold rounded px-1.5 py-0.5 transition-colors ${
+                lineMode === m
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-black/45 text-white/55 hover:text-white hover:bg-black/65'
+              }`}
+              title={t(m === 'lap' ? 'lineByLap' : m === 'telemetry' ? 'lineByPedals' : 'lineByDelta')}>
+              {m === 'lap' ? 'LAP' : m === 'telemetry' ? 'PEDALS' : 'DELTA'}
+            </button>
+          ))}
+          <span className="w-2" />
+          {(['chase', 'cockpit', 'front', 'tv'] as const).map(mode => (
+            <button key={mode} onClick={() => setCameraMode(mode)}
+              className={`text-[8px] font-bold rounded px-1.5 py-0.5 transition-colors ${
+                cameraMode === mode
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-black/45 text-white/55 hover:text-white hover:bg-black/65'
+              }`}>
+              {mode === 'chase' ? 'REAR' : mode === 'cockpit' ? 'HOOD' : mode === 'front' ? 'FRONT' : 'TV'}
+            </button>
+          ))}
+        </div>
+
 
         {/* Right-hand HUD column: the cards stack, so the tyre card follows the
             weather card's height instead of guessing an offset from the top */}
@@ -3255,7 +3775,7 @@ export default function Replay3DViewer() {
                       boxShadow: followIdx === li ? `inset 0 0 0 1.5px ${lapColor}` : 'none',
                     }}>
                     <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: lapColor }} />
-                    <span className="text-[9px] font-bold tracking-wider uppercase" style={{ color: stripTxt }}>L{lap.lapNumber}</span>
+                    <span className="text-[10px] font-bold tracking-wider uppercase" style={{ color: stripTxt }}>L{lap.lapNumber}</span>
                     {followIdx === li && (
                       <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke={lapColor} strokeWidth="2.4"
                         strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
@@ -3264,20 +3784,20 @@ export default function Replay3DViewer() {
                       </svg>
                     )}
                     {fmtLapTime && (
-                      <span className="text-[9px] font-mono tabular-nums" style={{ color: stripSub }}>{fmtLapTime}</span>
+                      <span className="text-[10px] font-mono tabular-nums" style={{ color: stripSub }}>{fmtLapTime}</span>
                     )}
                     {/* Fuel — live tank level plus this lap's consumption, centred in the strip */}
                     {lap.fuel.length > 0 && (() => {
                       const used = lap.fuel[0] - lap.fuel[lap.fuel.length - 1]
                       return (
                         <span className="absolute left-1/2 -translate-x-1/2 flex items-baseline gap-1 whitespace-nowrap">
-                          <span className="text-[8px] font-semibold tracking-wider uppercase" style={{ color: stripSub }}>{t('fuel')}</span>
+                          <span className="text-[10px] font-semibold tracking-wider uppercase" style={{ color: stripSub }}>{t('fuel')}</span>
                           <span ref={el => { hudFuelRefs.current[li] = el }}
-                            className="text-[9px] font-bold tabular-nums" style={{ color: stripTxt }}>
+                            className="text-[10px] font-bold tabular-nums" style={{ color: stripTxt }}>
                             {fuelFromL(lap.fuel[0], units).toFixed(1)} {fuelUnit(units)}
                           </span>
                           {used > 0.01 && (
-                            <span className="text-[9px] tabular-nums" style={{ color: stripSub }}>−{fuelFromL(used, units).toFixed(2)}/lap</span>
+                            <span className="text-[10px] tabular-nums" style={{ color: stripSub }}>−{fuelFromL(used, units).toFixed(2)}/lap</span>
                           )}
                         </span>
                       )

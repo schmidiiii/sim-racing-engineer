@@ -26,10 +26,23 @@ export interface StoredTrack {
    */
   edgeLeft?: number[]
   edgeRight?: number[]
+  /**
+   * How far a kerb reaches past the painted edge, per centreline point, zero
+   * where there is none. Observed from telemetry: iRacing reports the surface
+   * under the car, so every lap anyone ran over a kerb located it.
+   */
+  kerbLeft?: number[]
+  kerbRight?: number[]
   /** Metres between the driven reference lap and this centreline, from the fit */
   fitResidual?: number
   /** [lat, lon] pairs, evenly spaced, ordered around the lap */
   centreline: [number, number][]
+  /**
+   * The pit lane, traced from telemetry: iRacing flags every sample where the
+   * car is on pit road, so any lap that went through the pits drives it out.
+   */
+  pitLane?: [number, number][]
+  pitWidth?: number
 }
 
 // Bundled at build time: a handful of small JSON files, no network at runtime
