@@ -208,9 +208,25 @@ export default function LapSidebar() {
   const t = useT()
   const { sessions, activeSessionId, setActiveSessionId, removeSession, loading, error, loadFiles, autoLoad, setAutoLoad, sidebarMapExpanded } = useSessionStore()
 
-  const fastestTime = sessions.flatMap(s => s.laps)
-    .filter(l => l.is_valid && l.lap_time > 10)
-    .reduce((min, l) => l.lap_time < min ? l.lap_time : min, Infinity)
+  // The lap each gap is measured against, per track and car.
+  //
+  // Taking the fastest lap of everything loaded compares across circuits: with
+  // a Nurburgring session and an Imola one open, every Nurburgring lap showed a
+  // gap of about +373 s to a lap of Imola, and no lap was marked as the best
+  // because the best one belonged to the other session. Sessions of the same
+  // track and car still share a reference, which is the case where comparing
+  // across sessions means something.
+  const fastestByGroup = new Map<string, number>()
+  for (const s of sessions) {
+    const key = `${s.track}|${s.car}`
+    for (const l of s.laps) {
+      if (!l.is_valid || l.lap_time <= 10) continue
+      const cur = fastestByGroup.get(key)
+      if (cur == null || l.lap_time < cur) fastestByGroup.set(key, l.lap_time)
+    }
+  }
+  const fastestFor = (s: typeof sessions[0]) =>
+    fastestByGroup.get(`${s.track}|${s.car}`) ?? Infinity
 
   const handleOpen = async () => {
     const selected = await open({
@@ -314,7 +330,7 @@ export default function LapSidebar() {
                     lapTime={lap.lap_time}
                     isValid={lap.is_valid}
                     colorIndex={ci >= 0 ? ci : selectedLapKeys.length}
-                    fastestTime={fastestTime}
+                    fastestTime={fastestFor(session)}
                     disabled={!isSelected && !isSessionCompatible(session)}
                   />
                 )

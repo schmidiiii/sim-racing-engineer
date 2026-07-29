@@ -1300,6 +1300,7 @@ export default function Replay3DViewer() {
   // Tyre card: one entry per corner, three bands each, plus the wear readout
   const tyreBandRefs  = useRef<Record<string, (HTMLDivElement | null)[]>>({ LF: [], RF: [], LR: [], RR: [] })
   const tyreWearRefs  = useRef<Record<string, HTMLSpanElement | null>>({ LF: null, RF: null, LR: null, RR: null })
+  const tyreTempRefs  = useRef<Record<string, (HTMLSpanElement | null)[]>>({ LF: [], RF: [], LR: [], RR: [] })
   const absLampRef    = useRef<HTMLSpanElement | null>(null)
   const spinLampRef   = useRef<HTMLSpanElement | null>(null)
   const [tyresOpen, setTyresOpen] = useState(true)
@@ -2905,8 +2906,9 @@ export default function Replay3DViewer() {
             const bands = tyreBandRefs.current[c]
             const temp = lap.tyreTemp[c]
             const wear = lap.tyreWear[c]
-            // Bands are inner / middle / outer, each with its own surface
-            // temperature — that spread is what reveals camber and pressure
+            // Bands run left / middle / right across the tyre, each with its
+            // own surface temperature — that spread is what reveals camber and
+            // pressure
             const tb = lap.tyreTempBands[c]
             const bandTemp = [tb.l, tb.m, tb.r]
             for (let bi = 0; bi < 3; bi++) {
@@ -2914,6 +2916,11 @@ export default function Replay3DViewer() {
               if (!el) continue
               const src = bandTemp[bi].length > idx ? bandTemp[bi] : temp
               if (src.length > idx) el.style.background = '#' + tyreColor(src[idx]).getHexString()
+              const te = tyreTempRefs.current[c][bi]
+              if (te) {
+                te.textContent = src.length > idx
+                  ? `${Math.round(tempFromC(src[idx], units))}` : '—'
+              }
             }
             const wl = wear.l.length > idx ? wear.l[idx] : null
             const wm = wear.m.length > idx ? wear.m[idx] : null
@@ -3565,12 +3572,27 @@ export default function Replay3DViewer() {
           const tyre = (corner: Corner) => (
             <div className="flex flex-col items-center gap-0.5">
               <div className="text-[7px] font-bold tracking-widest" style={{ color: dim }}>{corner}</div>
-              {/* three bands: inner, middle, outer */}
-              <div className="flex gap-[2px]">
+              {/* Three bands across the tyre, in the car's own frame: left,
+                  middle, right. Which of the outer two is the inside edge
+                  depends on the side of the car, so they are not labelled
+                  inner and outer.
+                  Each band is a fixed box that the colour fills from the
+                  bottom by however much tread is left, with the band's own
+                  temperature centred on top. Filling rather than shrinking the
+                  box keeps the figure readable on a worn tyre. */}
+              <div className="flex gap-[1px]">
                 {[0, 1, 2].map(b => (
-                  <div key={b}
-                    ref={el => { tyreBandRefs.current[corner][b] = el }}
-                    style={{ width: 6, height: 15, borderRadius: 2, background: '#141414' }} />
+                  <div key={b} className="relative overflow-hidden"
+                    style={{ width: 17, height: 16, borderRadius: 2, background: '#141414' }}>
+                    <div
+                      ref={el => { tyreBandRefs.current[corner][b] = el }}
+                      className="absolute inset-x-0 bottom-0"
+                      style={{ height: 16, background: '#141414' }} />
+                    <span
+                      ref={el => { tyreTempRefs.current[corner][b] = el }}
+                      className="absolute inset-0 flex items-center justify-center text-[7px] font-bold tabular-nums leading-none"
+                      style={{ color: '#fff', textShadow: '0 0 2px rgba(0,0,0,0.95)' }}>—</span>
+                  </div>
                 ))}
               </div>
               <span ref={el => { tyreWearRefs.current[corner] = el }}
