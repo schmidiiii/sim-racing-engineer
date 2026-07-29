@@ -75,12 +75,21 @@ function buildSections(setup: SetupTree): Section[] {
   return sections
 }
 
-type Col = { key: string; sessionId: string; lapNumber: number; colorIndex: number; setup: SetupTree }
+type Col = {
+  key: string; sessionId: string; lapNumber: number; colorIndex: number
+  setup: SetupTree
+  /** What the car did with this setup — the whole point of comparing them */
+  lapTime: number
+}
+
+const fmtLap = (t: number) =>
+  t > 0 ? `${Math.floor(t / 60)}:${(t % 60).toFixed(3).padStart(6, '0')}` : '–'
 
 export default function SetupView() {
   const t = useT()
   const { sessions, selectedLapKeys } = useSessionStore()
   const [yamlCache, setYamlCache] = useState<Record<string, string>>({})
+  const [onlyDiff, setOnlyDiff] = useState(false)
 
   const sessionIds = [...new Set(selectedLapKeys.map(k => parseLapKey(k).sessionId))]
 
@@ -102,8 +111,15 @@ export default function SetupView() {
 
   const columns: Col[] = selectedLapKeys.map((key, i) => {
     const { sessionId, lapNumber } = parseLapKey(key)
-    return { key, sessionId, lapNumber, colorIndex: i, setup: parseCarSetup(yamlCache[sessionId] ?? '') }
+    const lap = sessions.find(s => s.id === sessionId)?.laps.find(l => l.lap_number === lapNumber)
+    return {
+      key, sessionId, lapNumber, colorIndex: i,
+      setup: parseCarSetup(yamlCache[sessionId] ?? ''),
+      lapTime: lap?.lap_time ?? 0,
+    }
   })
+
+  const bestTime = Math.min(...columns.map(c => c.lapTime).filter(v => v > 10), Infinity)
 
   const sections = buildSections(columns[0]?.setup ?? {})
   if (!sections.length) {
@@ -111,6 +127,22 @@ export default function SetupView() {
   }
 
   const session0 = sessions.find(s => s.id === columns[0]?.sessionId)
+
+  // A parameter is interesting when the columns disagree about it
+  const differs = (param: Param) => {
+    const vals = columns.map(col => getVal(col.setup, param.path))
+    return vals.some(v => v !== vals[0])
+  }
+  const visibleSections = (!onlyDiff || columns.length < 2)
+    ? sections
+    : sections
+        .map(sec => ({
+          ...sec,
+          subsections: sec.subsections
+            .map(sub => ({ ...sub, params: sub.params.filter(differs) }))
+            .filter(sub => sub.params.length > 0),
+        }))
+        .filter(sec => sec.subsections.length > 0)
 
   return (
     <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-background">
@@ -137,8 +169,66 @@ export default function SetupView() {
         </div>
       </div>
 
-      {/* One card per setup section */}
-      {sections.map(sec => (
+      {/* What each setup was worth. A setup comparison without the lap times
+          beside it only says the cars were different, not which was better. */}
+      <div className="bg-card rounded-xl border border-border shadow-sm overflow-hidden">
+        <div className="flex items-center px-4 py-2.5 border-b border-border">
+          <p className="flex-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+            {t('setupLapTime')}
+          </p>
+          {columns.map(col => (
+            <span key={col.key} className="w-28 text-right text-[10px] font-bold"
+              style={{ color: getLapColor(col.colorIndex) }}>
+              L{col.lapNumber}
+            </span>
+          ))}
+        </div>
+        <div className="flex items-center px-4 py-2">
+          <span className="flex-1 text-xs text-muted-foreground">{t('setupTimeAndGap')}</span>
+          {columns.map(col => {
+            const best = isFinite(bestTime) && Math.abs(col.lapTime - bestTime) < 1e-6
+            return (
+              <div key={col.key} className="w-28 text-right">
+                <span className={`block text-xs font-mono tabular-nums ${best ? 'font-bold text-emerald-500' : 'text-foreground'}`}>
+                  {fmtLap(col.lapTime)}
+                </span>
+                {!best && isFinite(bestTime) && col.lapTime > 10 && (
+                  <span className="block text-[10px] font-mono text-destructive/70">
+                    +{(col.lapTime - bestTime).toFixed(3)}
+                  </span>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      {columns.length > 1 && (
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setOnlyDiff(v => !v)}
+            className={`text-xs font-semibold px-3 py-1.5 rounded-lg border transition-colors ${
+              onlyDiff
+                ? 'border-primary text-primary bg-primary/10'
+                : 'border-border text-muted-foreground hover:text-foreground hover:bg-secondary/60'
+            }`}
+          >
+            {t('setupOnlyDiff')}
+          </button>
+          <span className="text-[11px] text-muted-foreground">{t('setupOnlyDiffHint')}</span>
+        </div>
+      )}
+
+      {/* One card per setup section. With the filter on, a section whose every
+          parameter matches disappears entirely rather than leaving an empty
+          card behind — a setup has some two hundred values and typically three
+          of them changed. */}
+      {visibleSections.length === 0 && (
+        <div className="bg-card rounded-xl border border-border shadow-sm px-4 py-8 flex items-center justify-center">
+          <p className="text-sm text-muted-foreground">{t('setupNoDiff')}</p>
+        </div>
+      )}
+      {visibleSections.map(sec => (
         <div key={sec.name} className="bg-card rounded-xl border border-border shadow-sm overflow-hidden">
           {/* Card header — section name + lap labels */}
           <div className="flex items-center px-4 py-2.5 border-b border-border">
