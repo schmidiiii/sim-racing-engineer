@@ -83,13 +83,34 @@ function loadGroups(): Set<ColGroup> {
 
 // ── Summary cards ─────────────────────────────────────────────────────────────
 
+/** Same card as the telemetry tabs use, so the Laps tab does not look like a
+ *  different application. */
 function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
-    <div className="rounded-lg border border-border bg-card px-3 py-2">
-      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
-      <div className="text-sm font-semibold text-foreground tabular-nums">{value}</div>
-      {hint && <div className="text-[10px] text-muted-foreground">{hint}</div>}
+    <div className="bg-card rounded-xl border border-border shadow-sm p-3 min-w-0">
+      <p className="text-muted-foreground text-[10px] font-medium uppercase tracking-wide truncate">{label}</p>
+      <p className="font-bold text-base mt-0.5 leading-tight text-foreground tabular-nums truncate" title={value}>{value}</p>
+      {hint && <p className="text-muted-foreground text-[10px] mt-0.5 truncate">{hint}</p>}
     </div>
+  )
+}
+
+/** Header cell. The unit lives on a second line so the column stays narrow and
+ *  every number in the table is labelled without repeating the unit in each
+ *  cell. `edge` draws the divider that separates one column group from the next. */
+function Th({ label, unit, title, edge }: {
+  label: string; unit?: string; title?: string; edge?: boolean
+}) {
+  return (
+    <th
+      title={title}
+      className={`px-2 py-1.5 text-right font-semibold whitespace-nowrap align-bottom ${
+        edge ? 'border-l border-border' : ''
+      }`}
+    >
+      <span className="block text-[11px] leading-tight text-foreground/80">{label}</span>
+      {unit && <span className="block text-[9px] font-normal leading-tight text-muted-foreground">{unit}</span>}
+    </th>
   )
 }
 
@@ -247,8 +268,10 @@ export default function LapTable() {
     weather: t('lapTableColWeather'),
   }
 
-  const th = 'px-2 py-2 text-right font-semibold whitespace-nowrap'
+  // `edge` marks the first column of a group, which carries the heavier
+  // divider. With two dozen numbers a row, the eye needs somewhere to rest.
   const td = 'px-2 py-1.5 text-right'
+  const edge = 'border-l border-border'
 
   return (
     <div className="flex-1 overflow-auto bg-background p-4 space-y-4">
@@ -276,10 +299,10 @@ export default function LapTable() {
           <button
             key={g}
             onClick={() => toggleGroup(g)}
-            className={`text-[11px] font-semibold px-2.5 py-1 rounded-full border transition-colors ${
+            className={`text-xs font-semibold px-3 py-1.5 rounded-lg border transition-colors ${
               show(g)
                 ? 'border-primary text-primary bg-primary/10'
-                : 'border-border text-muted-foreground hover:text-foreground'
+                : 'border-border text-muted-foreground hover:text-foreground hover:bg-secondary/60'
             }`}
           >
             {groupLabel[g]}
@@ -287,43 +310,53 @@ export default function LapTable() {
         ))}
         <button
           onClick={exportCsv}
-          className="ml-auto text-xs font-semibold px-3 py-1.5 rounded-lg border border-border text-muted-foreground hover:text-foreground transition-colors"
+          className="ml-auto inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border border-border bg-secondary/60 text-foreground hover:bg-secondary transition-colors shadow-sm"
         >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 3v12M7 11l5 5 5-5M4 20h16" />
+          </svg>
           {t('lapTableExport')}
         </button>
       </div>
 
       <p className="text-[11px] text-muted-foreground">{t('lapTableHint')}</p>
 
-      {/* The table scrolls on its own so the page never scrolls sideways */}
-      <div className="overflow-x-auto rounded-lg border border-border">
-        <table className="w-full text-xs tabular-nums">
+      {/* A card like every other panel, with the table scrolling inside it so
+          the page never scrolls sideways */}
+      <div className="bg-card rounded-xl border border-border shadow-sm overflow-hidden">
+        <div className="overflow-x-auto">
+        <table className="w-full text-xs tabular-nums border-collapse">
           <thead>
-            <tr className="bg-card text-muted-foreground">
-              <th className="px-2 py-2 text-left font-semibold">{t('lapTableLap')}</th>
-              <th className={th}>{t('lapTableTime')}</th>
-              <th className={th}>{t('lapTableGap')}</th>
+            <tr className="bg-secondary/40 border-b border-border">
+              <th className="px-2 py-1.5 text-left font-semibold align-bottom">
+                <span className="block text-[11px] leading-tight text-foreground/80">{t('lapTableLap')}</span>
+              </th>
+              <Th label={t('lapTableTime')} unit="m:ss" />
+              <Th label={t('lapTableGap')} unit="s" />
               {show('sectors') && Array.from({ length: nSec }, (_, i) => (
-                <th key={i} className={th}>S{i + 1}</th>
+                <Th key={i} label={`S${i + 1}`} unit={i === 0 ? 's' : undefined} edge={i === 0} />
               ))}
-              {show('fuel') && <th className={th} title={t('lapTableUsedHint')}>{t('lapTableUsed')}</th>}
-              {show('fuel') && <th className={th} title={t('lapTableTankHint')}>{t('lapTableTank')}</th>}
-              <th className={th}>{t('lapTableVmax')}</th>
-              {show('inputs') && <>
-                <th className={th} title={t('lapTableFullHint')}>{t('lapTableFull')}</th>
-                <th className={th}>{t('lapTableBrake')}</th>
-                <th className={th} title={t('lapTableCoastHint')}>{t('lapTableCoast')}</th>
-                <th className={th} title={t('lapTableOverlapHint')}>{t('lapTableOverlap')}</th>
-                <th className={th} title={t('lapTableReversalsHint')}>{t('lapTableReversals')}</th>
+              {show('fuel') && <>
+                <Th label={t('lapTableUsed')} unit={fu} title={t('lapTableUsedHint')} edge />
+                <Th label={t('lapTableTank')} unit={fu} title={t('lapTableTankHint')} />
               </>}
-              {show('tyres') && CORNERS.map(c => (
-                <th key={c} className={th} title={t('lapTableTyreHint')}>{cornerLabel[c]}</th>
+              <Th label={t('lapTableVmax')} unit={su} edge />
+              {show('inputs') && <>
+                <Th label={t('lapTableFull')} unit="%" title={t('lapTableFullHint')} edge />
+                <Th label={t('lapTableBrake')} unit="%" />
+                <Th label={t('lapTableCoast')} unit="%" title={t('lapTableCoastHint')} />
+                <Th label={t('lapTableOverlap')} unit="%" title={t('lapTableOverlapHint')} />
+                <Th label={t('lapTableReversals')} unit="1/min" title={t('lapTableReversalsHint')} />
+              </>}
+              {show('tyres') && CORNERS.map((c, i) => (
+                <Th key={c} label={cornerLabel[c]} unit={`${tu} · % · ${pu}`}
+                    title={t('lapTableTyreHint')} edge={i === 0} />
               ))}
               {show('weather') && <>
-                <th className={th}>{t('lapTableTrackTemp')}</th>
-                <th className={th}>{t('lapTableAirTemp')}</th>
+                <Th label={t('lapTableTrackTemp')} unit={tu} edge />
+                <Th label={t('lapTableAirTemp')} unit={tu} />
               </>}
-              <th className={th}>{t('lapTableOff')}</th>
+              <Th label={t('lapTableOff')} edge />
             </tr>
           </thead>
           <tbody>
@@ -337,8 +370,8 @@ export default function LapTable() {
                 <tr
                   key={m.lap_number}
                   onClick={() => toggleLap(session.id, m.lap_number)}
-                  className={`border-t border-border cursor-pointer transition-colors ${
-                    selected ? 'bg-secondary/60' : 'hover:bg-secondary/30'
+                  className={`border-b border-border/40 last:border-0 cursor-pointer transition-colors ${
+                    selected ? 'bg-primary/10' : 'odd:bg-secondary/15 hover:bg-secondary/40'
                   } ${paceLap ? '' : 'text-muted-foreground'}`}
                 >
                   <td className="px-2 py-1.5 text-left font-semibold">
@@ -360,46 +393,46 @@ export default function LapTable() {
                     const v = m.sectors[i]
                     const best = paceLap && v > 0 && Math.abs(v - bestSectors[i]) < 1e-6
                     return (
-                      <td key={i} className={`${td} ${best ? 'font-bold text-primary' : ''}`}>
+                      <td key={i} className={`${td} ${i === 0 ? edge : ''} ${best ? 'font-bold text-primary' : ''}`}>
                         {v > 0 ? fmtSector(v) : '–'}
                       </td>
                     )
                   })}
-                  {show('fuel') && <td className={td}>
-                    {m.fuel_used > 0 ? fuelFromL(m.fuel_used, units).toFixed(2) : '–'}
-                  </td>}
-                  {show('fuel') && <td className={td}>
-                    {fuelFromL(m.fuel_left, units).toFixed(1)}
-                  </td>}
-                  <td className={td}>
-                    {speedFromMps(m.max_speed, units).toFixed(0)} <span className="opacity-50">{su}</span>
-                  </td>
+                  {show('fuel') && <>
+                    <td className={`${td} ${edge}`}>
+                      {m.fuel_used > 0 ? fuelFromL(m.fuel_used, units).toFixed(2) : '–'}
+                    </td>
+                    <td className={td}>{fuelFromL(m.fuel_left, units).toFixed(1)}</td>
+                  </>}
+                  <td className={`${td} ${edge}`}>{speedFromMps(m.max_speed, units).toFixed(0)}</td>
                   {show('inputs') && <>
-                    <td className={td}>{m.throttle_full_pct.toFixed(0)}%</td>
-                    <td className={td}>{m.braking_pct.toFixed(0)}%</td>
-                    <td className={td}>{m.coasting_pct.toFixed(0)}%</td>
-                    <td className={td}>{m.overlap_pct.toFixed(1)}%</td>
+                    <td className={`${td} ${edge}`}>{m.throttle_full_pct.toFixed(0)}</td>
+                    <td className={td}>{m.braking_pct.toFixed(0)}</td>
+                    <td className={td}>{m.coasting_pct.toFixed(0)}</td>
+                    <td className={td}>{m.overlap_pct.toFixed(1)}</td>
                     <td className={td}>{m.steering_reversals.toFixed(0)}</td>
                   </>}
-                  {show('tyres') && CORNERS.map(c => {
+                  {show('tyres') && CORNERS.map((c, i) => {
                     const y = m.tyres.find(x => x.corner === c)
-                    if (!y) return <td key={c} className={td}>–</td>
+                    const cls = `${td} ${i === 0 ? edge : ''}`
+                    if (!y) return <td key={c} className={cls}>–</td>
                     return (
-                      <td key={c} className={`${td} leading-tight`}>
-                        <div>{tempFromC(y.temp_m, units).toFixed(0)}{tu} · {(y.wear * 100).toFixed(0)}%</div>
-                        <div className="text-[10px] opacity-60">
-                          {/* kPa runs to three digits and needs none; psi is
-                              a two-digit number where a tenth still matters */}
-                          {(v => v.toFixed(v >= 100 ? 0 : 1))(pressureFromKpa(y.pressure, units))} {pu}
-                        </div>
+                      <td key={c} className={`${cls} whitespace-nowrap`}>
+                        {tempFromC(y.temp_m, units).toFixed(0)}
+                        <span className="opacity-40"> · </span>
+                        {(y.wear * 100).toFixed(0)}
+                        <span className="opacity-40"> · </span>
+                        {/* kPa runs to three digits and needs none; psi is a
+                            two-digit number where a tenth still matters */}
+                        {(v => v.toFixed(v >= 100 ? 0 : 1))(pressureFromKpa(y.pressure, units))}
                       </td>
                     )
                   })}
                   {show('weather') && <>
-                    <td className={td}>{tempFromC(m.track_temp, units).toFixed(1)}{tu}</td>
-                    <td className={td}>{tempFromC(m.air_temp, units).toFixed(1)}{tu}</td>
+                    <td className={`${td} ${edge}`}>{tempFromC(m.track_temp, units).toFixed(1)}</td>
+                    <td className={td}>{tempFromC(m.air_temp, units).toFixed(1)}</td>
                   </>}
-                  <td className={`${td} ${m.off_track > 0 ? 'text-rose-500 font-semibold' : ''}`}>
+                  <td className={`${td} ${edge} ${m.off_track > 0 ? 'text-rose-500 font-semibold' : ''}`}>
                     {m.off_track || ''}
                   </td>
                 </tr>
@@ -407,6 +440,7 @@ export default function LapTable() {
             })}
           </tbody>
         </table>
+        </div>
       </div>
     </div>
   )
