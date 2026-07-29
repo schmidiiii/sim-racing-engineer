@@ -541,7 +541,7 @@ impl IbtFile {
             let mut grinding = false;
 
             // `close` needs the sample data, so it is a closure over `self`
-            let mut push = |out: &mut Vec<LapEvent>, kind: &str, corner: Option<&str>,
+            let push = |out: &mut Vec<LapEvent>, kind: &str, corner: Option<&str>,
                             r: &Run, to: usize, min: usize| {
                 if to - r.from < min { return; }
                 out.push(LapEvent {
