@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useSessionStore, lapKey } from '@/store/session'
 import { useT } from '@/lib/i18n'
@@ -48,7 +48,7 @@ const fmtAt = (t: number) =>
 export default function EventLog() {
   const t = useT()
   const {
-    sessions, activeSessionId, selectedLapKeys, toggleLap,
+    sessions, activeSessionId, selectedLapKeys, setSelectedLapKeys,
     setCrosshairTime, units,
   } = useSessionStore()
   const [events, setEvents] = useState<LapEvent[]>([])
@@ -57,6 +57,21 @@ export default function EventLog() {
   const [hidden, setHidden] = useState<Set<string>>(loadHidden)
 
   const session = sessions.find(s => s.id === activeSessionId) ?? sessions[0]
+
+  // Jumping to an event shows that car alone; the selection the rest of the app
+  // was working with — normally the two fastest laps — is put back on the way
+  // out. Without this, walking down the list leaves five or six cars on track.
+  // Captured on the first render that has a selection at all: opening the tab
+  // while the session is still loading would otherwise remember nothing and
+  // put nothing back.
+  const enteredWith = useRef<string[] | null>(null)
+  if (enteredWith.current === null && selectedLapKeys.length > 0) {
+    enteredWith.current = selectedLapKeys
+  }
+  useEffect(() => () => {
+    const before = enteredWith.current
+    if (before) useSessionStore.getState().setSelectedLapKeys(before)
+  }, [])
 
   useEffect(() => {
     if (!session) return
@@ -104,11 +119,11 @@ export default function EventLog() {
   })
 
   const jumpTo = (e: LapEvent) => {
-    // Show the lap the event belongs to, then put the crosshair on it. The
-    // crosshair is measured from the start of a lap, not from the session, so
-    // `at` is the one that lines up with the traces.
-    const key = lapKey(session!.id, e.lap_number)
-    if (!selectedLapKeys.includes(key)) toggleLap(session!.id, e.lap_number)
+    // Only the car that caused it: an event is about one lap, and leaving the
+    // others on track makes it impossible to see which one did the thing.
+    // The crosshair is measured from the start of a lap rather than from the
+    // session, so `at` is the value that lines up with the traces.
+    setSelectedLapKeys([lapKey(session!.id, e.lap_number)])
     setCrosshairTime(e.at)
   }
 

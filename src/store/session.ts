@@ -88,6 +88,10 @@ interface SessionStore {
   loadLatest: () => Promise<void>
   loadFiles: (paths: string[]) => Promise<void>
   toggleLap: (sessionId: string, lapNumber: number) => void
+  /** Replace the whole selection at once. The event log shows one car at a
+   *  time and puts the old selection back on the way out, which toggling one
+   *  lap after another cannot express. */
+  setSelectedLapKeys: (keys: string[]) => void
   lapColorIndex: (key: string) => number
 }
 
@@ -207,6 +211,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       set({ error: String(e), loading: false })
     }
   },
+
+  setSelectedLapKeys: (keys) => set({ selectedLapKeys: keys }),
 
   toggleLap: (sessionId: string, lapNumber: number) => {
     const key = lapKey(sessionId, lapNumber)
