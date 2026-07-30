@@ -22,6 +22,10 @@ pub struct Session {
     /// Nordschleife — so nothing may assume three. Empty if the session
     /// declared none.
     pub sector_starts: Vec<f64>,
+    /// Litres the tank holds, from FuelLevel divided by FuelLevelPct. None when
+    /// the session never reported a positive percentage — without it a stint
+    /// cannot be planned, only measured.
+    pub fuel_capacity: Option<f64>,
     pub available_channels: Vec<Channel>,
 }
 

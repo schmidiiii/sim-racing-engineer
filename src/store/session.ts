@@ -33,6 +33,8 @@ export interface Session {
   /** iRacing's own sector lines as fractions of a lap, starting at 0. The count
    *  varies with track length — five at Imola, twelve on the Nordschleife. */
   sector_starts: number[]
+  /** Litres the tank holds, or null when the session never said */
+  fuel_capacity: number | null
   available_channels: Channel[]
 }
 

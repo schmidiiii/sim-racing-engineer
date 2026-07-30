@@ -126,6 +126,11 @@ export default function LapTable() {
   const [groups, setGroups] = useState<Set<ColGroup>>(loadGroups)
   /** Name of the file just written, so the export confirms it did something */
   const [exported, setExported] = useState<string | null>(null)
+  /** Race length for the fuel plan, remembered between sessions */
+  const [raceLen, setRaceLen] = useState(() => localStorage.getItem('srRaceLen') ?? '')
+  const [raceUnit, setRaceUnit] = useState<'laps' | 'min'>(
+    () => (localStorage.getItem('srRaceUnit') === 'min' ? 'min' : 'laps'),
+  )
 
   const session = sessions.find(s => s.id === activeSessionId) ?? sessions[0]
 
@@ -185,6 +190,33 @@ export default function LapTable() {
   }, [pace])
 
   const idealLap = bestSectors.reduce((a, b) => a + b, 0)
+
+  // Fuel plan. Two figures, not one: the average is what the stint will most
+  // likely take and the heaviest lap is what it might, and a plan built on the
+  // average runs dry on the heavy laps. Racers add a lap on top of that, which
+  // is what the reserve is.
+  const plan = useMemo(() => {
+    const cap = session?.fuel_capacity ?? 0
+    const n = Number(raceLen)
+    if (!(n > 0) || stint.avgFuel <= 0) return null
+    // A race given in minutes has to be turned into laps, and at the median
+    // pace rather than the best lap — nobody laps a whole race on their best
+    const pace = stint.median > 10 ? stint.median : stint.best
+    const laps = raceUnit === 'laps' ? Math.ceil(n) : (pace > 10 ? Math.ceil(n * 60 / pace) : 0)
+    if (!laps) return null
+    const need = laps * stint.avgFuel
+    const needSafe = laps * (stint.maxFuel || stint.avgFuel)
+    const reserve = stint.maxFuel || stint.avgFuel   // one lap in hand
+    return {
+      laps,
+      pace,
+      need,
+      needSafe: needSafe + reserve,
+      cap,
+      lapsPerTank: cap > 0 ? Math.floor(cap / (stint.maxFuel || stint.avgFuel)) : 0,
+      stops: cap > 0 ? Math.max(0, Math.ceil((needSafe + reserve) / cap) - 1) : 0,
+    }
+  }, [session?.fuel_capacity, raceLen, raceUnit, stint])
 
   const exportCsv = async () => {
     // The export ignores the column switches — hiding a column on screen is
@@ -309,6 +341,86 @@ export default function LapTable() {
         <Stat label={t('lapTableFuelPerLap')}
               value={stint.avgFuel > 0 ? `Ø ${fuelFromL(stint.avgFuel, units).toFixed(2)} ${fu}` : '–'}
               hint={stint.maxFuel > 0 ? `${t('lapTableWorst')} ${fuelFromL(stint.maxFuel, units).toFixed(2)}` : undefined} />
+      </div>
+
+      {/* Fuel plan. Only where the tank size is known — the ratio of the two
+          fuel channels gives it, but a session that never reported a percentage
+          leaves nothing to plan with. */}
+      <div className="bg-card rounded-xl border border-border shadow-sm px-4 py-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground mr-1">
+            {t('planTitle')}
+          </p>
+          <input
+            type="number" min="1" inputMode="numeric"
+            value={raceLen}
+            onChange={e => { setRaceLen(e.target.value); localStorage.setItem('srRaceLen', e.target.value) }}
+            placeholder={raceUnit === 'laps' ? '20' : '45'}
+            className="w-20 text-xs tabular-nums bg-transparent border border-border rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-ring"
+          />
+          {(['laps', 'min'] as const).map(u => (
+            <button
+              key={u}
+              onClick={() => { setRaceUnit(u); localStorage.setItem('srRaceUnit', u) }}
+              className={`text-xs font-semibold px-2.5 py-1 rounded-lg border transition-colors ${
+                raceUnit === u
+                  ? 'border-primary text-primary bg-primary/10'
+                  : 'border-border text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              {u === 'laps' ? t('planLaps') : t('planMinutes')}
+            </button>
+          ))}
+        </div>
+
+        {!plan ? (
+          <p className="text-[11px] text-muted-foreground mt-2">
+            {stint.avgFuel > 0 ? t('planPrompt') : t('planNoFuel')}
+          </p>
+        ) : (
+          <div className="mt-2.5 grid gap-2 grid-cols-2 sm:grid-cols-4">
+            <div>
+              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{t('planRaceLaps')}</p>
+              <p className="text-sm font-semibold tabular-nums text-foreground">
+                {plan.laps}
+                {raceUnit === 'min' && (
+                  <span className="text-[10px] font-normal text-muted-foreground ml-1">
+                    {t('planAtPace').replace('%t%', fmtLap(plan.pace))}
+                  </span>
+                )}
+              </p>
+            </div>
+            <div>
+              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{t('planNeed')}</p>
+              <p className="text-sm font-semibold tabular-nums text-foreground">
+                {fuelFromL(plan.needSafe, units).toFixed(1)} {fu}
+              </p>
+              <p className="text-[10px] text-muted-foreground">
+                {t('planOnAverage').replace('%v%', fuelFromL(plan.need, units).toFixed(1))}
+              </p>
+            </div>
+            <div>
+              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{t('planPerTank')}</p>
+              <p className="text-sm font-semibold tabular-nums text-foreground">
+                {plan.cap > 0 ? `${plan.lapsPerTank}` : '–'}
+              </p>
+              {plan.cap > 0 && (
+                <p className="text-[10px] text-muted-foreground">
+                  {t('planTank').replace('%v%', fuelFromL(plan.cap, units).toFixed(0))} {fu}
+                </p>
+              )}
+            </div>
+            <div>
+              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{t('planStops')}</p>
+              <p className={`text-sm font-semibold tabular-nums ${plan.cap > 0 ? 'text-foreground' : 'text-muted-foreground'}`}>
+                {plan.cap > 0 ? plan.stops : '–'}
+              </p>
+              {plan.cap <= 0 && (
+                <p className="text-[10px] text-muted-foreground">{t('planNoTank')}</p>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="flex items-center gap-2 flex-wrap">

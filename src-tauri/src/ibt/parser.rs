@@ -190,6 +190,7 @@ impl IbtFile {
             record_count: self.disk_header.session_record_count,
             laps,
             sector_starts: self.sector_starts(),
+            fuel_capacity: self.fuel_capacity(),
             available_channels: self.channels(),
         })
     }
@@ -672,6 +673,30 @@ impl IbtFile {
             }
         }
         merged
+    }
+
+    /// How much the tank holds, in litres.
+    ///
+    /// iRacing reports the level twice, absolute and as a fraction, so the
+    /// capacity is the ratio of the two. Read from the first sample that has a
+    /// usable fraction rather than sample zero, which can still be settling.
+    fn fuel_capacity(&self) -> Option<f64> {
+        let lvl = self.find_var("FuelLevel")?;
+        let pct = self.find_var("FuelLevelPct")?;
+        let total = self.disk_header.session_record_count as usize;
+        for i in 0..total.min(600) {
+            let p = self.read_f64(i, pct);
+            let l = self.read_f64(i, lvl);
+            if p > 0.02 && l > 0.1 {
+                let cap = l / p;
+                // Sanity: no road or race car carries less than five or more
+                // than three hundred litres
+                if (5.0..=300.0).contains(&cap) {
+                    return Some((cap * 10.0).round() / 10.0);
+                }
+            }
+        }
+        None
     }
 
     /// Where iRacing puts the sector lines, as fractions of a lap. Sessions
