@@ -166,7 +166,6 @@ export default function SetupView() {
           >
             {t('setupOnlyDiff')}
           </button>
-          <span className="text-[11px] text-muted-foreground">{t('setupOnlyDiffHint')}</span>
         </div>
       )}
 
