@@ -561,7 +561,16 @@ const softOffset = (d: number, R: number) => Number.isFinite(R) ? d / (1 + d / R
 // apron then cuts clean through the tarmac of its neighbour. Each point gets
 // half the distance to the nearest section that is far away along the lap, so
 // two neighbours meet at the midpoint instead of overlapping.
-function selfClearance(pts: THREE.Vector3[], perp: THREE.Vector3[], minArcSep: number) {
+/** Two stretches of road that pass over one another do not crowd each other.
+ *
+ *  Suzuka crosses itself — the back straight runs under the bridge — and this
+ *  test only ever looked at x and z, so it read the two levels as neighbours a
+ *  few metres apart and squeezed the road and its aprons down to nothing right
+ *  where they should be at their normal width. A separation in height is a
+ *  separation. */
+const CROSSOVER_M = 4
+
+function selfClearance(pts: THREE.Vector3[], perp: THREE.Vector3[], minArcSep: number, unitsPerMetre = 1) {
   const n = pts.length
   const pos = new Float64Array(n).fill(Infinity)
   const neg = new Float64Array(n).fill(Infinity)
@@ -577,6 +586,8 @@ function selfClearance(pts: THREE.Vector3[], perp: THREE.Vector3[], minArcSep: n
       let along = Math.abs(cum[i] - cum[j])
       along = Math.min(along, total - along)
       if (along < minArcSep) continue                 // same stretch of road
+      // Far enough above or below to be a bridge rather than a neighbour
+      if (Math.abs(pts[j].y - pi.y) > CROSSOVER_M * unitsPerMetre) continue
       const dx = pts[j].x - pi.x, dz = pts[j].z - pi.z
       const d = Math.hypot(dx, dz)
       if (dx * pe.x + dz * pe.z > 0) { if (d < pos[i]) pos[i] = d }
@@ -2329,7 +2340,7 @@ export default function Replay3DViewer() {
     // centreline: the corner radius (so a strip can't fold through a hairpin)
     // and the clearance to other sections (so it can't cross them).
     const baseLim   = lateralLimits(basePts)
-    const baseClear = selfClearance(basePts, baseLim.perp, 150 * M)
+    const baseClear = selfClearance(basePts, baseLim.perp, 150 * M, M)
     // A strip between two lateral distances, following the centreline. Both
     // edges obey the limits above, so where a neighbouring section crowds in the
     // strip narrows and finally disappears rather than cutting through it.
