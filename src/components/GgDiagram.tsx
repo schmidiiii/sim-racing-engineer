@@ -39,59 +39,80 @@ function quantile(xs: number[], p: number): number {
 
 // ── Drawing ───────────────────────────────────────────────────────────────────
 
-const PAD = 34
+const PADL = 42, PADR = 14, PADT = 16, PADB = 30
+
+/** Percentile the envelope and the axes are built from. Not the peak: raw
+ *  maxima on the Nürburgring session read 21 g lateral and 27 g braking, which
+ *  are impacts, and one of those widens the axes until the lap is a dot. */
+const EDGE_Q = 0.995
+
+interface Limits { lat: number; up: number; down: number }
 
 function paint(
   canvas: HTMLCanvasElement,
   laps: LapGg[],
-  size: number,
-  limit: number,
+  w: number,
+  h: number,
+  lim: Limits,
+  labels: Record<string, string>,
   dark: boolean,
 ) {
   const ctx = canvas.getContext('2d')
   if (!ctx) return
-  ctx.clearRect(0, 0, size, size)
-  const R = (size - PAD * 2) / 2
-  const cx = PAD + R, cy = PAD + R
-  // Positive LatAccel is a LEFT turn — measured earlier against yaw rate and
-  // steering, which agree 99% of the time. Negated here so right-hand corners
-  // land on the right of the picture, which is the only arrangement a reader
-  // will not have to think about.
-  const px = (g: number) => cx - (g / limit) * R
-  // Acceleration upwards, braking down — the way every g-g plot is drawn
-  const py = (g: number) => cy - (g / limit) * R
+  ctx.clearRect(0, 0, w, h)
+  const IW = w - PADL - PADR, IH = h - PADT - PADB
+  if (IW <= 0 || IH <= 0) return
 
-  // Grip rings at whole and half g, labelled on the horizontal
+  // Axes scale independently, the way the textbook plot does: a car has far
+  // more grip sideways than the engine has forwards, and one shared scale
+  // leaves the top of the picture empty.
+  const xMax = lim.lat, yUp = lim.up, yDown = lim.down
+  const cx = PADL + IW / 2
+  const cy = PADT + (yUp / (yUp + yDown)) * IH
+  const px = (g: number) => cx + (g / xMax) * (IW / 2)
+  const py = (g: number) => g >= 0
+    ? cy - (g / yUp) * (cy - PADT)
+    : cy + (-g / yDown) * (PADT + IH - cy)
+
+  const grid = dark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)'
+  const axis = dark ? 'rgba(255,255,255,0.28)' : 'rgba(0,0,0,0.26)'
+  const text = dark ? 'rgba(210,215,230,0.8)' : 'rgba(50,55,70,0.75)'
+  const faint = dark ? 'rgba(210,215,230,0.5)' : 'rgba(50,55,70,0.5)'
+
   ctx.font = '10px system-ui,sans-serif'
-  ctx.textAlign = 'left'
+  ctx.lineWidth = 1
+
+  // Grid and numbers, one line per half g
+  ctx.strokeStyle = grid
+  ctx.fillStyle = text
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'top'
+  for (let g = -Math.floor(xMax * 2) / 2; g <= xMax; g += 0.5) {
+    const x = px(g)
+    if (x < PADL || x > w - PADR) continue
+    ctx.beginPath(); ctx.moveTo(x, PADT); ctx.lineTo(x, PADT + IH); ctx.stroke()
+    if (Math.abs(g - Math.round(g)) < 1e-9) ctx.fillText(g.toFixed(0), x, PADT + IH + 4)
+  }
+  ctx.textAlign = 'right'
   ctx.textBaseline = 'middle'
-  for (let g = 0.5; g <= limit + 1e-9; g += 0.5) {
-    const whole = Math.abs(g - Math.round(g)) < 1e-9
-    ctx.strokeStyle = dark
-      ? `rgba(255,255,255,${whole ? 0.16 : 0.08})`
-      : `rgba(0,0,0,${whole ? 0.16 : 0.07})`
-    ctx.lineWidth = 1
-    ctx.beginPath()
-    ctx.arc(cx, cy, (g / limit) * R, 0, Math.PI * 2)
-    ctx.stroke()
-    if (whole) {
-      ctx.fillStyle = dark ? 'rgba(210,215,230,0.7)' : 'rgba(50,55,70,0.65)'
-      ctx.fillText(`${g}g`, px(-g) + 3, cy - 7)
-    }
+  for (let g = -Math.floor(yDown * 2) / 2; g <= yUp; g += 0.5) {
+    const y = py(g)
+    if (y < PADT || y > PADT + IH) continue
+    ctx.beginPath(); ctx.moveTo(PADL, y); ctx.lineTo(PADL + IW, y); ctx.stroke()
+    if (Math.abs(g - Math.round(g)) < 1e-9) ctx.fillText(g.toFixed(0), PADL - 5, y)
   }
 
-  // Axes
-  ctx.strokeStyle = dark ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.22)'
+  // Zero lines
+  ctx.strokeStyle = axis
   ctx.beginPath()
-  ctx.moveTo(PAD, cy); ctx.lineTo(size - PAD, cy)
-  ctx.moveTo(cx, PAD); ctx.lineTo(cx, size - PAD)
+  ctx.moveTo(PADL, cy); ctx.lineTo(PADL + IW, cy)
+  ctx.moveTo(cx, PADT); ctx.lineTo(cx, PADT + IH)
   ctx.stroke()
 
-  // The cloud. Small and translucent so density reads as density — where the
-  // tyre spends its time is the whole point, and opaque dots hide it.
+  // The cloud, translucent so density reads as density
   for (const lap of laps) {
     ctx.fillStyle = getLapColor(lap.colorIndex)
-    ctx.globalAlpha = dark ? 0.30 : 0.24
+    ctx.globalAlpha = dark ? 0.32 : 0.26
     const n = Math.min(lap.lat.length, lap.lon.length)
     for (let i = 0; i < n; i++) {
       const lat = lap.lat[i], lon = lap.lon[i]
@@ -102,15 +123,37 @@ function paint(
     ctx.globalAlpha = 1
   }
 
-  // Direction labels
-  ctx.fillStyle = dark ? 'rgba(210,215,230,0.75)' : 'rgba(50,55,70,0.7)'
-  ctx.textAlign = 'center'
-  ctx.fillText('▲', cx, PAD - 14)
-  ctx.fillText('▼', cx, size - PAD + 14)
-  ctx.textAlign = 'right'
-  ctx.fillText('◀', PAD - 6, cy)
-  ctx.textAlign = 'left'
-  ctx.fillText('▶', size - PAD + 6, cy)
+  // The envelope: two half ellipses, since braking reaches further than the
+  // engine does. It is the shape the grip budget allows — points short of it
+  // are grip left unspent.
+  ctx.strokeStyle = dark ? 'rgba(255,255,255,0.34)' : 'rgba(0,0,0,0.30)'
+  ctx.lineWidth = 1.5
+  ctx.setLineDash([4, 3])
+  ctx.beginPath()
+  ctx.ellipse(cx, cy, px(xMax) - cx, cy - py(yUp), 0, Math.PI, 0)
+  ctx.stroke()
+  ctx.beginPath()
+  ctx.ellipse(cx, cy, px(xMax) - cx, py(-yDown) - cy, 0, 0, Math.PI)
+  ctx.stroke()
+  ctx.setLineDash([])
+
+  // Region names. Placed inside the frame at the eight points a reader looks,
+  // and skipped when the frame is too small to hold them without overlapping.
+  if (IW > 300 && IH > 220) {
+    ctx.fillStyle = faint
+    ctx.font = '9px system-ui,sans-serif'
+    const put = (s: string, x: number, y: number, align: CanvasTextAlign, base: CanvasTextBaseline) => {
+      ctx.textAlign = align; ctx.textBaseline = base; ctx.fillText(s, x, y)
+    }
+    put(labels.pureAccel, cx, PADT + 3, 'center', 'top')
+    put(labels.pureBrake, cx, PADT + IH - 3, 'center', 'bottom')
+    put(labels.pureRight, PADL + 4, cy - 5, 'left', 'bottom')
+    put(labels.pureLeft, PADL + IW - 4, cy - 5, 'right', 'bottom')
+    put(labels.outRight, PADL + 4, PADT + 3, 'left', 'top')
+    put(labels.outLeft, PADL + IW - 4, PADT + 3, 'right', 'top')
+    put(labels.inRight, PADL + 4, PADT + IH - 3, 'left', 'bottom')
+    put(labels.inLeft, PADL + IW - 4, PADT + IH - 3, 'right', 'bottom')
+  }
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -123,7 +166,7 @@ export default function GgDiagram() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
   const lapsRef = useRef<LapGg[]>([])
-  const sizeRef = useRef(420)
+  const sizeRef = useRef({ w: 560, h: 380 })
 
   const lapKeyStr = selectedLapKeys.join(',')
 
@@ -164,19 +207,27 @@ export default function GgDiagram() {
 
   useEffect(() => { lapsRef.current = laps }, [laps])
 
-  // Axis limit from a high percentile, not the peak. Rounded to a half g so the
-  // rings stay on whole numbers.
+  // One limit per direction. Sideways a car reaches much further than the engine
+  // does forwards, so a single shared scale would leave the top of the frame
+  // empty and squash everything else.
   const limit = useMemo(() => {
-    const mags: number[] = []
+    const latA: number[] = [], upA: number[] = [], downA: number[] = []
     for (const lap of laps) {
       const n = Math.min(lap.lat.length, lap.lon.length)
       for (let i = 0; i < n; i++) {
-        const m = Math.hypot(lap.lat[i], lap.lon[i])
-        if (m <= IMPACT_G) mags.push(m)
+        const lat = lap.lat[i], lon = lap.lon[i]
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue
+        if (Math.hypot(lat, lon) > IMPACT_G) continue
+        latA.push(Math.abs(lat))
+        if (lon >= 0) upA.push(lon); else downA.push(-lon)
       }
     }
-    const p = quantile(mags, 0.999)
-    return Math.max(1, Math.ceil((p * 1.1) * 2) / 2)
+    const up = (q: number) => Math.max(0.5, Math.ceil(q * 1.12 * 2) / 2)
+    return {
+      lat: up(quantile(latA, EDGE_Q)),
+      up: up(quantile(upA, EDGE_Q)),
+      down: up(quantile(downA, EDGE_Q)),
+    }
   }, [laps])
 
   const stats = useMemo(() => laps.map(lap => {
@@ -203,34 +254,46 @@ export default function GgDiagram() {
     }
   }), [laps])
 
-  // Square canvas: a circle drawn on a stretched one is an ellipse, and the
-  // shape of the envelope is the thing being read.
+  const regionLabels = useMemo(() => ({
+    pureAccel: t('ggRegionAccel'),
+    pureBrake: t('ggRegionBrake'),
+    pureRight: t('ggRegionRight'),
+    pureLeft: t('ggRegionLeft'),
+    outRight: t('ggRegionOutRight'),
+    outLeft: t('ggRegionOutLeft'),
+    inRight: t('ggRegionInRight'),
+    inLeft: t('ggRegionInLeft'),
+  }), [t])
+
   useEffect(() => {
     const wrap = wrapRef.current, canvas = canvasRef.current
     if (!wrap || !canvas) return
     const dpr = window.devicePixelRatio || 1
 
     const redraw = () => {
-      const s = sizeRef.current
-      canvas.width = Math.round(s * dpr)
-      canvas.height = Math.round(s * dpr)
-      canvas.style.width = `${s}px`
-      canvas.style.height = `${s}px`
+      const { w, h } = sizeRef.current
+      canvas.width = Math.round(w * dpr)
+      canvas.height = Math.round(h * dpr)
+      canvas.style.width = `${w}px`
+      canvas.style.height = `${h}px`
       const ctx = canvas.getContext('2d')
       if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-      paint(canvas, lapsRef.current, s,
-        limit, document.documentElement.classList.contains('dark'))
+      paint(canvas, lapsRef.current, w, h, limit, regionLabels,
+        document.documentElement.classList.contains('dark'))
     }
 
     const ro = new ResizeObserver(() => {
       const rect = wrap.getBoundingClientRect()
-      sizeRef.current = Math.max(240, Math.min(520, Math.round(rect.width)))
+      const w = Math.max(320, Math.min(760, Math.round(rect.width)))
+      // Taller than half its width: braking reaches down about twice as far as
+      // the engine reaches up, so the vertical needs the room
+      sizeRef.current = { w, h: Math.round(w * 0.68) }
       redraw()
     })
     ro.observe(wrap)
     redraw()
     return () => ro.disconnect()
-  }, [laps, limit])
+  }, [laps, limit, regionLabels])
 
   if (!selectedLapKeys.length)
     return <div className="flex-1 flex items-center justify-center">
@@ -262,15 +325,10 @@ export default function GgDiagram() {
               ))}
             </div>
           </div>
-          <div ref={wrapRef} className="w-[min(46vw,460px)] min-w-[240px]">
+          <div ref={wrapRef} className="w-[min(60vw,700px)] min-w-[320px]">
             <canvas ref={canvasRef} style={{ display: 'block' }} />
           </div>
-          <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 mt-2 text-[10px] text-muted-foreground">
-            <span>▲ {t('ggUp')}</span>
-            <span>▼ {t('ggDown')}</span>
-            <span>◀ {t('ggLeft')}</span>
-            <span>▶ {t('ggRight')}</span>
-          </div>
+          <p className="text-[10px] text-muted-foreground mt-1 text-center">{t('ggAxes')}</p>
         </div>
 
         <div className="space-y-4">
