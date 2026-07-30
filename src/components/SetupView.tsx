@@ -75,15 +75,7 @@ function buildSections(setup: SetupTree): Section[] {
   return sections
 }
 
-type Col = {
-  key: string; sessionId: string; lapNumber: number; colorIndex: number
-  setup: SetupTree
-  /** What the car did with this setup — the whole point of comparing them */
-  lapTime: number
-}
-
-const fmtLap = (t: number) =>
-  t > 0 ? `${Math.floor(t / 60)}:${(t % 60).toFixed(3).padStart(6, '0')}` : '–'
+type Col = { key: string; sessionId: string; lapNumber: number; colorIndex: number; setup: SetupTree }
 
 export default function SetupView() {
   const t = useT()
@@ -111,15 +103,8 @@ export default function SetupView() {
 
   const columns: Col[] = selectedLapKeys.map((key, i) => {
     const { sessionId, lapNumber } = parseLapKey(key)
-    const lap = sessions.find(s => s.id === sessionId)?.laps.find(l => l.lap_number === lapNumber)
-    return {
-      key, sessionId, lapNumber, colorIndex: i,
-      setup: parseCarSetup(yamlCache[sessionId] ?? ''),
-      lapTime: lap?.lap_time ?? 0,
-    }
+    return { key, sessionId, lapNumber, colorIndex: i, setup: parseCarSetup(yamlCache[sessionId] ?? '') }
   })
-
-  const bestTime = Math.min(...columns.map(c => c.lapTime).filter(v => v > 10), Infinity)
 
   const sections = buildSections(columns[0]?.setup ?? {})
   if (!sections.length) {
@@ -166,40 +151,6 @@ export default function SetupView() {
               <span key={col.key} className="text-[10px] font-semibold" style={{ color: getLapColor(col.colorIndex) }}>L{col.lapNumber}</span>
             ))}
           </div>
-        </div>
-      </div>
-
-      {/* What each setup was worth. A setup comparison without the lap times
-          beside it only says the cars were different, not which was better. */}
-      <div className="bg-card rounded-xl border border-border shadow-sm overflow-hidden">
-        <div className="flex items-center px-4 py-2.5 border-b border-border">
-          <p className="flex-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-            {t('setupLapTime')}
-          </p>
-          {columns.map(col => (
-            <span key={col.key} className="w-28 text-right text-[10px] font-bold"
-              style={{ color: getLapColor(col.colorIndex) }}>
-              L{col.lapNumber}
-            </span>
-          ))}
-        </div>
-        <div className="flex items-center px-4 py-2">
-          <span className="flex-1 text-xs text-muted-foreground">{t('setupTimeAndGap')}</span>
-          {columns.map(col => {
-            const best = isFinite(bestTime) && Math.abs(col.lapTime - bestTime) < 1e-6
-            return (
-              <div key={col.key} className="w-28 text-right">
-                <span className={`block text-xs font-mono tabular-nums ${best ? 'font-bold text-emerald-500' : 'text-foreground'}`}>
-                  {fmtLap(col.lapTime)}
-                </span>
-                {!best && isFinite(bestTime) && col.lapTime > 10 && (
-                  <span className="block text-[10px] font-mono text-destructive/70">
-                    +{(col.lapTime - bestTime).toFixed(3)}
-                  </span>
-                )}
-              </div>
-            )
-          })}
         </div>
       </div>
 

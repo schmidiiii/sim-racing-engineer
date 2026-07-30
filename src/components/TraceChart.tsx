@@ -73,6 +73,9 @@ function sliceVisible(data: DataPt[], domain: [number, number] | null): DataPt[]
 
 const PAD = { l: 44, r: 8, t: 12, b: 10 }
 
+/** Amber, the same one the 3D viewer's brake trace uses for ABS */
+const ABS_COLOR = '#f5a524'
+
 /** A y-axis bound: a fixed number, 'auto' to fit the data, or 'sym' to scale
  *  symmetrically around zero. */
 export type YBound = number | 'auto' | 'sym'
@@ -184,51 +187,68 @@ function paintChart(
     )
   }
 
-  // Bands first, so the trace is drawn over them. Each lap keeps its own
-  // colour: with two laps up it matters which of them had the ABS in.
-  if (bands?.length) {
-    const bData = buildData(bands)
-    ctx.save()
-    ctx.beginPath(); ctx.rect(PAD.l, PAD.t, W, H); ctx.clip()
-    for (const tr of bands) {
-      ctx.fillStyle = getLapColor(tr.colorIndex)
-      ctx.globalAlpha = dark ? 0.26 : 0.18
-      let from: number | null = null
-      for (let i = 0; i < bData.length; i++) {
-        const on = (bData[i][`t_${tr.colorIndex}`] ?? 0) > 0.5
-        if (on && from === null) from = bData[i].t
-        if (!on && from !== null) {
-          // At least a pixel wide, or a single-sample engagement would vanish
-          const x = tx(from), x2 = Math.max(tx(bData[i].t), x + 1)
-          ctx.fillRect(x, PAD.t, x2 - x, H)
-          from = null
-        }
-      }
-      if (from !== null) {
-        const x = tx(from)
-        ctx.fillRect(x, PAD.t, Math.max(tx(bData[bData.length - 1].t), x + 1) - x, H)
-      }
-    }
-    ctx.globalAlpha = 1
-    ctx.restore()
-  }
-
   // Clip + trace lines — expand by 1px so lines exactly at 0%/100% aren't half-clipped
   ctx.save()
   ctx.beginPath(); ctx.rect(PAD.l, PAD.t - 1, W, H + 2); ctx.clip()
-  for (const tr of traces) {
-    ctx.strokeStyle = getLapColor(tr.colorIndex)
-    ctx.lineWidth = 1.5
-    ctx.beginPath()
-    let pen = false
+  // A band series recolours the trace where it is on, the way the 3D viewer's
+  // brake trace turns amber under ABS — the question is where in the braking it
+  // cut in, and a separate chart cannot answer that.
+  const bData = bands?.length ? buildData(bands) : null
+  const flagsFor = (colorIndex: number): boolean[] | null => {
+    if (!bData || !bands!.some(b => b.colorIndex === colorIndex)) return null
+    // Both arrays are time-sorted, so one walk with a moving pointer is enough
+    const out: boolean[] = []
+    let p = 0
     for (const pt of data) {
-      const v = pt[`t_${tr.colorIndex}`]
-      if (typeof v !== 'number') { pen = false; continue }
-      const x = tx(pt.t), y = ty(v)
-      pen ? ctx.lineTo(x, y) : ctx.moveTo(x, y)
-      pen = true
+      while (p + 1 < bData.length && bData[p + 1].t <= pt.t) p++
+      out.push((bData[p][`t_${colorIndex}`] ?? 0) > 0.5)
     }
-    ctx.stroke()
+    return out
+  }
+
+  for (const tr of traces) {
+    const base = getLapColor(tr.colorIndex)
+    const flags = flagsFor(tr.colorIndex)
+
+    if (!flags) {
+      ctx.strokeStyle = base
+      ctx.lineWidth = 1.5
+      ctx.beginPath()
+      let pen = false
+      for (const pt of data) {
+        const v = pt[`t_${tr.colorIndex}`]
+        if (typeof v !== 'number') { pen = false; continue }
+        const x = tx(pt.t), y = ty(v)
+        pen ? ctx.lineTo(x, y) : ctx.moveTo(x, y)
+        pen = true
+      }
+      ctx.stroke()
+      continue
+    }
+
+    // Drawn as runs of like-flagged samples. `j` must always end up past `i`:
+    // ABS flips on almost every sample under braking, and a loop that only
+    // advanced to the end of a run would never move at all.
+    let i = 0
+    while (i < data.length - 1) {
+      const on = flags[i]
+      let j = i + 1
+      while (j < data.length - 1 && flags[j] === on) j++
+      ctx.strokeStyle = on ? ABS_COLOR : base
+      ctx.lineWidth = on ? 2 : 1.5
+      ctx.lineJoin = 'round'
+      ctx.beginPath()
+      let pen = false
+      for (let k = i; k <= j; k++) {
+        const v = data[k][`t_${tr.colorIndex}`]
+        if (typeof v !== 'number') { pen = false; continue }
+        const x = tx(data[k].t), y = ty(v)
+        pen ? ctx.lineTo(x, y) : ctx.moveTo(x, y)
+        pen = true
+      }
+      ctx.stroke()
+      i = j
+    }
   }
   ctx.restore()
 }

@@ -10,14 +10,10 @@ import { useT } from '@/lib/i18n'
 export default function App() {
   const t = useT()
   const { language, setLanguage } = useAiStore()
-  // Remembered across restarts, like the unit system. Defaults to the theme the
-  // operating system is set to rather than to light, so a machine in dark mode
-  // does not open a white window on first run.
-  const [dark, setDark] = useState(() => {
-    const saved = localStorage.getItem('srDark')
-    if (saved !== null) return saved === 'true'
-    return window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false
-  })
+  // Remembered across restarts, like the unit system, and the choice is the
+  // user's alone: Windows does not get a say, so a theme picked here is the
+  // theme that comes back whatever the system is set to.
+  const [dark, setDark] = useState(() => localStorage.getItem('srDark') === 'true')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [feedbackOpen, setFeedbackOpen] = useState(false)
   const [version, setVersion] = useState('')
