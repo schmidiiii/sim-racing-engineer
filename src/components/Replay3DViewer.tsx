@@ -1401,6 +1401,28 @@ export default function Replay3DViewer() {
   const crosshairWantedRef = useRef<number | null>(null)
   useEffect(() => { crosshairWantedRef.current = crosshairTime }, [crosshairTime])
 
+  // A request to run from a given moment, sent by the event log.
+  //
+  // It has to survive the reload that selecting the event's lap sets off,
+  // because the reload puts playback back to paused — so the request is held
+  // here and the reload picks it up. Stamped with the time it arrived and
+  // honoured only briefly, or a request that never met a reload would fire on
+  // some later, unrelated change of laps.
+  const playFromRef = useRef<{ t: number; at: number } | null>(null)
+  useEffect(() => {
+    const onPlayFrom = (e: Event) => {
+      const t = (e as CustomEvent<number>).detail
+      if (typeof t !== 'number') return
+      playFromRef.current = { t, at: performance.now() }
+      currentTimeRef.current = t
+      crosshairRef.current = t
+      setCurrentT(t)
+      setPlaying(true)
+    }
+    window.addEventListener('sre-play-from', onPlayFrom)
+    return () => window.removeEventListener('sre-play-from', onPlayFrom)
+  }, [])
+
   // Reset to start on new file load.
   //
   // Except when something has already asked for a position. Jumping to an
@@ -1412,6 +1434,20 @@ export default function Replay3DViewer() {
     if (laps.length === 0) return
     const t0 = laps[0].timestamps[0]
     const tEnd = laps[0].timestamps[laps[0].timestamps.length - 1]
+
+    // A request from the event log outranks the reset: it asked for this exact
+    // moment and asked to be running at it
+    const req = playFromRef.current
+    if (req && performance.now() - req.at < 2000 && req.t >= t0 && req.t <= tEnd) {
+      playFromRef.current = null
+      currentTimeRef.current = req.t
+      crosshairRef.current = req.t
+      setCurrentT(req.t)
+      setPlaying(true)
+      return
+    }
+    playFromRef.current = null
+
     const wanted = crosshairWantedRef.current
     // Range-checked, so a crosshair left over from another session cannot
     // strand the replay outside the lap

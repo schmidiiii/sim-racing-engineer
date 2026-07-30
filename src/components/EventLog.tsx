@@ -119,8 +119,12 @@ export default function EventLog() {
     // others on track makes it impossible to see which one did the thing.
     // The crosshair is measured from the start of a lap rather than from the
     // session, so `at` is the value that lines up with the traces.
+    const at = Math.max(0, e.at - LEAD_IN_S)
     setSelectedLapKeys([lapKey(session!.id, e.lap_number)])
-    setCrosshairTime(Math.max(0, e.at - LEAD_IN_S))
+    setCrosshairTime(at)
+    // And run from there, so the moment plays out rather than waiting to be
+    // scrubbed into. The 3D viewer owns playback, hence the event.
+    window.dispatchEvent(new CustomEvent('sre-play-from', { detail: at }))
   }
 
   if (!session) {
