@@ -314,7 +314,19 @@ function resample(src: number[], length: number): number[] {
 // lateral placement that was wrong. The result is already evenly spaced and
 // ordered, so it needs none of the smoothing the driven line does.
 function storedCentrelinePts(track: StoredTrack, driven: THREE.Vector3[], tf: WorldTF): THREE.Vector3[] {
-  const pts = track.centreline.map(([lat, lon]) => {
+  const m = driven.length
+  const cn = track.centreline.length
+  // Only a stretch of the driven line around where this point belongs is
+  // considered, not the whole lap.
+  //
+  // Suzuka crosses over itself, and the search is in plan only: a point on the
+  // bridge sits directly above the back straight, so scanning everything let it
+  // take the altitude of the road underneath. Both levels then came out at the
+  // same height and the crossover flattened into one surface — no bridge.
+  // Both paths run the same way round from the same line, so the position
+  // around the lap says which of the two is meant.
+  const WINDOW = Math.max(20, Math.round(m * 0.05))
+  const pts = track.centreline.map(([lat, lon], ci) => {
     const p = toWorld(lat, lon, 0, tf)
     // Interpolated along the driven line rather than snapped to its nearest
     // sample. Snapping let neighbouring centreline points pick altitudes from
@@ -323,8 +335,10 @@ function storedCentrelinePts(track: StoredTrack, driven: THREE.Vector3[], tf: Wo
     // surface with it.
     let best = Infinity
     let y = driven.length ? driven[0].y : 0
-    for (let i = 1; i < driven.length; i++) {
-      const a = driven[i - 1], b = driven[i]
+    const centre = Math.round((ci / cn) * m)
+    for (let k = -WINDOW; k <= WINDOW && m > 1; k++) {
+      const i = ((centre + k) % m + m) % m
+      const a = driven[(i - 1 + m) % m], b = driven[i]
       const dx = b.x - a.x, dz = b.z - a.z
       const l2 = dx * dx + dz * dz
       let t = l2 ? ((p.x - a.x) * dx + (p.z - a.z) * dz) / l2 : 0
