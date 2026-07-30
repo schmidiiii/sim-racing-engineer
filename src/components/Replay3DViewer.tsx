@@ -124,6 +124,7 @@ interface LapReplayData {
   tyreTempBands: Record<Corner, { l: number[]; m: number[]; r: number[] }>
   tyreWear: Record<Corner, { l: number[]; m: number[]; r: number[] }>
   absActive: number[]   // 1 while the ABS is reducing brake pressure
+  onPitRoad: number[]   // 1 while the car is on pit road
   timestamps: number[]
 }
 
@@ -348,9 +349,18 @@ function storedCentrelinePts(track: StoredTrack, driven: THREE.Vector3[], tf: Wo
   return pts
 }
 
-function sampleCentreline(lap: LapReplayData, tf: WorldTF): { pts: THREE.Vector3[]; back: number } {
+/** `pit` counts how much of the lap ran down pit road. The track is shaped from
+ *  the driven line, so an out-lap that starts in the garage drags the road into
+ *  the pits with it — the same fault that put Spa's stored centreline twenty
+ *  metres out until the build script learned to reject those laps. Here the pit
+ *  samples are simply left out of the shape, and the count lets a lap that is
+ *  mostly pit lane lose to one that is not. */
+function sampleCentreline(lap: LapReplayData, tf: WorldTF): { pts: THREE.Vector3[]; back: number; pit: number } {
   const n = lap.lat.length
   const pct = lap.distPct
+  const inPit = (i: number) => (lap.onPitRoad[i] ?? 0) > 0.5
+  let pitCount = 0
+  for (let i = 0; i < n; i++) if (inPit(i)) pitCount++
   // Ground covered, so partial laps still get the full point budget spread over
   // the piece of track they actually cover
   let travelled = 0
@@ -366,8 +376,11 @@ function sampleCentreline(lap: LapReplayData, tf: WorldTF): { pts: THREE.Vector3
   if (pct.length !== n || travelled < 1e-3) {
     const pts: THREE.Vector3[] = []
     const step = Math.max(1, Math.floor(n / MAX_TRACK_PTS))
-    for (let i = 0; i < n; i += step) pts.push(toWorld(lap.lat[i], lap.lon[i], lap.alt[i], tf))
-    return { pts, back: 0 }
+    for (let i = 0; i < n; i += step) {
+      if (inPit(i)) continue
+      pts.push(toWorld(lap.lat[i], lap.lon[i], lap.alt[i], tf))
+    }
+    return { pts, back: 0, pit: pitCount / Math.max(n, 1) }
   }
 
   // Point count follows the lap length instead of being fixed: 1500 points is
@@ -393,9 +406,12 @@ function sampleCentreline(lap: LapReplayData, tf: WorldTF): { pts: THREE.Vector3
     if (p < mark - 0.5) mark = -Infinity      // crossed start/finish — start a new run
     if (p < mark + stepPct) continue          // backwards, stationary, or not far enough along yet
     mark = p
+    // Pit road is not the track. Left out here rather than filtered afterwards,
+    // so the spacing of the remaining points is unaffected.
+    if (inPit(i)) continue
     pts.push(toWorld(lap.lat[i], lap.lon[i], lap.alt[i], tf))
   }
-  return { pts, back: back / n }
+  return { pts, back: back / n, pit: pitCount / Math.max(n, 1) }
 }
 
 // Light moving average over a centreline. Raw GPS jitter reads as phantom
@@ -1484,7 +1500,7 @@ export default function Replay3DViewer() {
     // Only what the scene needs to appear. The rest arrives afterwards — a
     // Nordschleife lap is 26k samples, so all 33 channels at once means ~6.6 MB
     // per lap over the IPC bridge, and parsing that blocks the UI outright.
-    const CHANNELS = ['Lat', 'Lon', 'Alt', 'Speed', 'Gear', 'Throttle', 'Brake', 'SteeringWheelAngle', 'FuelLevel'] as const
+    const CHANNELS = ['Lat', 'Lon', 'Alt', 'Speed', 'Gear', 'Throttle', 'Brake', 'SteeringWheelAngle', 'FuelLevel', 'OnPitRoad'] as const
     // Toggling laps quickly leaves several fetches in flight — without this an
     // older one can land last and overwrite the current selection's data
     let cancelled = false
@@ -1507,7 +1523,7 @@ export default function Replay3DViewer() {
                 : Promise.resolve(null)
             )
           )
-          const [latD, lonD, altD, speedD, gearD, throttleD, brakeD, steeringD, fuelD] = results
+          const [latD, lonD, altD, speedD, gearD, throttleD, brakeD, steeringD, fuelD, pitD] = results
           if (!latD || !lonD) continue
           const n = latD.samples.length
           const fill = (d: LapChannelData | null, def = 0) => d ? d.samples : new Array<number>(n).fill(def)
@@ -1535,6 +1551,7 @@ export default function Replay3DViewer() {
               LR: { l: [], m: [], r: [] }, RR: { l: [], m: [], r: [] },
             },
             absActive: [],
+            onPitRoad: pitD?.samples ?? [],
             timestamps: latD.timestamps,
           })
         } catch { /* no GPS */ }
@@ -1703,7 +1720,11 @@ export default function Replay3DViewer() {
     // Track shape comes from the cleanest selected lap, not necessarily the first
     // one: a lap with a spin or an off would drag the road along with it
     const sampled = laps.map(l => sampleCentreline(l, tf))
-    const cleanest = sampled.reduce((best, s) => s.back < best.back ? s : best, sampled[0])
+    // Pit road first, then backwards-running samples. A lap that spent time in
+    // the pits shapes a worse track than one that merely had a moment, however
+    // tidy the rest of it was.
+    const score = (s: { back: number; pit: number }) => s.pit * 4 + s.back
+    const cleanest = sampled.reduce((best, s) => score(s) < score(best) ? s : best, sampled[0])
     // Where the real centreline is known, the road goes around *that* instead.
     // Built from the driven line it centres the reference lap by construction,
     // so no amount of detail could ever show a car taking a kerb or running
