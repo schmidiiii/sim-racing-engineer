@@ -18,6 +18,16 @@ const MAX_TRACK_PTS = 1500
 // clearly from the chase camera.
 const ROAD_WIDTH_M = 24    // visible road surface
 const LINE_WIDTH_M = 0.17  // per-lap driving line
+// Rubber laid down along the racing line: three nested bands, each barely
+// tinted, so the line has no edge and fades outwards the way a real one does.
+// The values are deliberately small — stacked they darken the middle of the
+// line by about a tenth and its outside by a thirtieth, which is what rubber
+// looks like from a chase camera rather than a stripe of paint.
+const RUBBER_BANDS: readonly (readonly [number, number])[] = [
+  [6.4, 0.035],
+  [4.0, 0.035],
+  [2.4, 0.040],
+]
 const CURB_W_M = 1.4       // apex kerb width — the striped part of a real one
 // Exit kerbs are the wider ones on a real circuit: they carry the car that runs
 // out of road, so they reach further into the runoff than an apex kerb does
@@ -571,6 +581,47 @@ function offsetPath(pts: THREE.Vector3[], dist: number | number[], yOff = 0): TH
     const d = sign * softOffset(mag, sign >= 0 ? posR[i] : negR[i])
     return p.clone().addScaledVector(perp[i], d).setY(p.y + yOff)
   })
+}
+
+/** Where the racing line sits, station by station, as a signed lateral offset
+ *  from the path the road is built on.
+ *
+ *  Walks both paths together rather than searching: they run roughly parallel
+ *  and in the same direction, so a moving index finds the nearest driven point
+ *  in one pass. Smoothed afterwards, because a nearest-point offset jumps
+ *  wherever the two samplings disagree and a jumping band looks like a fault.
+ */
+function racingLineOffsets(
+  base: THREE.Vector3[],
+  perp: THREE.Vector3[],
+  driven: THREE.Vector3[],
+): Float64Array {
+  const n = base.length, m = driven.length
+  const raw = new Float64Array(n)
+  if (m < 2) return raw
+  let j = 0
+  for (let i = 0; i < n; i++) {
+    const p = base[i]
+    // Advance while the next driven point is closer, wrapping once at the end
+    let best = p.distanceToSquared(driven[j])
+    for (let step = 0; step < m; step++) {
+      const k = (j + 1) % m
+      const d = p.distanceToSquared(driven[k])
+      if (d >= best) break
+      best = d; j = k
+    }
+    const d = driven[j].clone().sub(p)
+    raw[i] = d.dot(perp[i])
+  }
+  // ±6 stations, wrapped: the band has to change slowly to read as rubber
+  const out = new Float64Array(n)
+  const W = 6
+  for (let i = 0; i < n; i++) {
+    let sum = 0
+    for (let k = -W; k <= W; k++) sum += raw[(i + k + n) % n]
+    out[i] = sum / (W * 2 + 1)
+  }
+  return out
 }
 
 // Build a flat road ribbon (no colour attribute — colour set via Material).
@@ -1760,6 +1811,29 @@ export default function Replay3DViewer() {
     roadMatRef.current = roadMat
     scene.add(new THREE.Mesh(buildRibbon(basePts,
       perPoint ? { pos: edgePos!, neg: edgeNeg! } : ROAD_WIDTH, true), roadMat))
+
+    // Rubber along the racing line. Built on the road's own centreline with
+    // offset edges rather than as a ribbon of its own, so it can be clamped to
+    // the road: a lap that runs wide would otherwise lay rubber on the grass.
+    {
+      const { perp } = lateralLimits(basePts)
+      const off = racingLineOffsets(basePts, perp, cleanest.pts)
+      const limPos = (i: number) => (edgePos ? edgePos[i] : ROAD_WIDTH / 2)
+      const limNeg = (i: number) => (edgeNeg ? edgeNeg[i] : ROAD_WIDTH / 2)
+      for (const [widthM, opacity] of RUBBER_BANDS) {
+        const half = widthM / 2 * M
+        const pos = Array.from(basePts, (_, i) => Math.max(0, Math.min(off[i] + half, limPos(i))))
+        const neg = Array.from(basePts, (_, i) => Math.max(0, Math.min(half - off[i], limNeg(i))))
+        scene.add(new THREE.Mesh(buildRibbon(basePts, { pos, neg }, true),
+          new THREE.MeshBasicMaterial({
+            color: 0x000000, transparent: true, opacity,
+            side: THREE.DoubleSide, depthWrite: false,
+            // Coplanar with the road, and weaker than the markings use so the
+            // painted lines still draw on top of the rubber
+            polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4,
+          })))
+      }
+    }
 
     // The quickest lap is what the others are measured against, the same choice
     // the delta view makes
