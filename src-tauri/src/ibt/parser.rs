@@ -1096,9 +1096,14 @@ mod tests {
         assert!(sums.iter().all(|m| !(m.in_lap && m.out_lap) || m.pit_time > 20.0));
     }
 
+    /// A session whose lap counter was reset back to 1 by a return to the
+    /// garage, so two segments share a number.
+    const RESET_FILE: &str =
+        r"C:\Users\schmi\Documents\iRacing\telemetry\superformulalights324_spa 2024 up 2026-07-25 19-58-11.ibt";
+
     #[test]
     fn lap_events_are_few_and_real() {
-        for path in &[STINT_FILE, FV_FILE, PORSCHE_FILE] {
+        for path in &[STINT_FILE, FV_FILE, PORSCHE_FILE, RESET_FILE] {
             if !Path::new(path).exists() { continue }
             let f = IbtFile::open(path).expect("open");
             let s = f.parse_session(path.to_string()).unwrap();

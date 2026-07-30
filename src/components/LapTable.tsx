@@ -531,7 +531,7 @@ export default function LapTable() {
             </tr>
           </thead>
           <tbody>
-            {summaries.map(m => {
+            {summaries.map((m, rowIdx) => {
               const key = lapKey(session.id, m.lap_number)
               const selIdx = selectedLapKeys.indexOf(key)
               const selected = selIdx >= 0
@@ -543,7 +543,11 @@ export default function LapTable() {
               const selectable = m.is_valid
               return (
                 <tr
-                  key={m.lap_number}
+                  // Not the lap number alone: a session where the driver went
+                  // back to the garage has its lap counter reset, so two
+                  // segments carry the same number and React would draw only
+                  // one of them
+                  key={`${m.lap_number}-${rowIdx}`}
                   onClick={() => selectable && toggleLap(session.id, m.lap_number)}
                   title={selectable ? undefined : t('lapTableNotTimed')}
                   className={`border-b border-border/40 last:border-0 transition-colors ${
