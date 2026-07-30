@@ -373,6 +373,8 @@ export interface Props {
    *  line of their own — ABS inside the brake trace. Matched to a trace by
    *  `colorIndex`, so the amber lands on the lap it belongs to. */
   bands?: LapTrace[]
+  /** What the recoloured sections mean, for the legend — "ABS" */
+  bandLabel?: string
   crosshairTime: number | null
   onMouseMove: (t: number | null) => void
   zoomRef: React.MutableRefObject<[number, number] | null>
@@ -383,7 +385,7 @@ export interface Props {
 
 
 export default function TraceChart({
-  channel, unit, yDomain, traces, bands, crosshairTime, onMouseMove,
+  channel, unit, yDomain, traces, bands, bandLabel, crosshairTime, onMouseMove,
   zoomRef, onZoom, registerRedraw, height = 130,
 }: Props) {
   const dataCanvasRef = useRef<HTMLCanvasElement>(null)
@@ -570,6 +572,19 @@ export default function TraceChart({
           {unit && <span className="text-xs font-normal text-muted-foreground ml-1">({unit})</span>}
         </h3>
         <div className="flex items-center gap-3">
+          {/* One swatch per lap that has the channel, so the shades on show are
+              the shades explained */}
+          {bandLabel && !!bands?.length && (
+            <span className="flex items-center gap-1 text-xs text-muted-foreground">
+              <span className="flex gap-px">
+                {bands.map(b => (
+                  <span key={b.colorIndex} className="inline-block w-3 h-0.5 rounded"
+                    style={{ background: absColor(b.colorIndex) }} />
+                ))}
+              </span>
+              {bandLabel}
+            </span>
+          )}
           {traces.map(tr => (
             <span key={tr.colorIndex} className="flex items-center gap-1 text-xs text-muted-foreground">
               <span className="inline-block w-3 h-0.5 rounded" style={{ background: getLapColor(tr.colorIndex) }} />
