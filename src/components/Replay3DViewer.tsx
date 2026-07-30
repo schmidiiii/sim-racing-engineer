@@ -1880,6 +1880,121 @@ export default function Replay3DViewer() {
     terrainGeo.setAttribute('color', new THREE.BufferAttribute(tCol, 3))
     scene.add(new THREE.Mesh(terrainGeo, new THREE.MeshLambertMaterial({ vertexColors: true })))
 
+    // ── Bridge where the circuit crosses itself ────────────────────────────
+    // Suzuka runs its back straight under the rest of the lap. Measured on a
+    // real lap the two branches pass 0.7 m apart in plan and 6.20 m apart in
+    // height, at 44% and 85% of the way round — so the pair is found by arc
+    // distance, plan distance and height together, and the higher of the two
+    // gets a deck, walls and piers. Nothing is built where a circuit does not
+    // cross itself, which is most of them.
+    {
+      const BRIDGE_MIN_ARC = 150 * M   // further apart than this along the lap
+      // Close enough in plan that the two really do overlap, not merely run
+      // parallel: a pair of straights forty metres apart with a step in height
+      // between them is a hillside, not a bridge. Suzuka's branches pass 4.7 m
+      // apart, so twenty is not tight.
+      const BRIDGE_NEAR = 20 * M
+      const BRIDGE_MIN_DY = 4 * M      // and this far above
+      const DECK = 0.9 * M             // how thick the deck reads from below
+      const WALL = 1.05 * M            // parapet height
+      const PIER_EVERY = 14 * M
+      const PIER_HALF = 0.7 * M
+
+      const { perp } = lateralLimits(basePts)
+      const nb = basePts.length
+      const cum = new Float64Array(nb)
+      for (let i = 1; i < nb; i++) {
+        cum[i] = cum[i - 1] + Math.hypot(basePts[i].x - basePts[i - 1].x, basePts[i].z - basePts[i - 1].z)
+      }
+      const totalArc = cum[nb - 1]
+      const onBridge = new Uint8Array(nb)
+      for (let i = 0; i < nb; i++) {
+        for (let j = 0; j < nb; j++) {
+          let along = Math.abs(cum[i] - cum[j])
+          along = Math.min(along, totalArc - along)
+          if (along < BRIDGE_MIN_ARC) continue
+          const dx = basePts[j].x - basePts[i].x, dz = basePts[j].z - basePts[i].z
+          if (dx * dx + dz * dz > BRIDGE_NEAR * BRIDGE_NEAR) continue
+          if (basePts[i].y - basePts[j].y > BRIDGE_MIN_DY) { onBridge[i] = 1; break }
+        }
+      }
+
+      // Contiguous runs, padded a little so the deck starts before the crossing
+      // and ends after it rather than stopping at the exact overlap
+      const PAD = Math.max(2, Math.round(12 * M / Math.max(totalArc / nb, 1e-6)))
+      const runs: [number, number][] = []
+      for (let i = 0; i < nb; i++) {
+        if (!onBridge[i]) continue
+        let j = i
+        while (j + 1 < nb && onBridge[j + 1]) j++
+        runs.push([Math.max(0, i - PAD), Math.min(nb - 1, j + PAD)])
+        i = j
+      }
+
+      if (runs.length) {
+        const halfPos = (i: number) => (edgePos ? edgePos[i] : ROAD_WIDTH / 2)
+        const halfNeg = (i: number) => (edgeNeg ? edgeNeg[i] : ROAD_WIDTH / 2)
+        const side = (i: number, sign: 1 | -1, dy: number) => {
+          const h = sign > 0 ? halfPos(i) : halfNeg(i)
+          const p = basePts[i]
+          return new THREE.Vector3(
+            p.x + perp[i].x * h * sign, p.y + dy, p.z + perp[i].z * h * sign,
+          )
+        }
+        const verts: number[] = []
+        const quad = (a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3, d: THREE.Vector3) => {
+          verts.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z)
+          verts.push(a.x, a.y, a.z, c.x, c.y, c.z, d.x, d.y, d.z)
+        }
+
+        const piers: THREE.Matrix4[] = []
+        for (const [from, to] of runs) {
+          let sinceP = PIER_EVERY
+          for (let i = from; i < to; i++) {
+            const i2 = i + 1
+            // Underside
+            quad(side(i, 1, -DECK), side(i2, 1, -DECK), side(i2, -1, -DECK), side(i, -1, -DECK))
+            // The two edges of the deck, road level down to the underside
+            for (const sg of [1, -1] as const) {
+              quad(side(i, sg, 0), side(i2, sg, 0), side(i2, sg, -DECK), side(i, sg, -DECK))
+              // Parapet, road level up
+              quad(side(i, sg, 0), side(i2, sg, 0), side(i2, sg, WALL), side(i, sg, WALL))
+            }
+            sinceP += Math.hypot(basePts[i2].x - basePts[i].x, basePts[i2].z - basePts[i].z)
+            if (sinceP >= PIER_EVERY) {
+              sinceP = 0
+              const p = basePts[i]
+              const gy = groundHeightAt(p.x, p.z)
+              const top = p.y - DECK
+              const h = top - gy
+              if (h > 0.5 * M) {
+                const m = new THREE.Matrix4()
+                m.makeTranslation(p.x, gy + h / 2, p.z)
+                m.scale(new THREE.Vector3(PIER_HALF * 2, h, PIER_HALF * 2))
+                piers.push(m)
+              }
+            }
+          }
+        }
+
+        const concrete = new THREE.MeshLambertMaterial({
+          color: isDark ? 0x6b6f75 : 0x9aa0a6, side: THREE.DoubleSide,
+        })
+        const g = new THREE.BufferGeometry()
+        g.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3))
+        g.computeVertexNormals()
+        scene.add(new THREE.Mesh(g, concrete))
+
+        if (piers.length) {
+          const pierMesh = new THREE.InstancedMesh(
+            new THREE.BoxGeometry(1, 1, 1), concrete, piers.length)
+          piers.forEach((m, i) => pierMesh.setMatrixAt(i, m))
+          pierMesh.instanceMatrix.needsUpdate = true
+          scene.add(pierMesh)
+        }
+      }
+    }
+
     // Road surface — material kept in a ref so wet conditions can darken it
     // Asphalt rather than a flat fill. The texture repeats every few metres of
     // track; MeshLambert so it takes the scene light like everything else.
