@@ -2774,7 +2774,15 @@ export default function Replay3DViewer() {
     cameraTargetRef.current.copy(initPos).addScaledVector(initFwd, 7).setY(initPos.y + 0.8)
     camera.position.copy(cameraPosRef.current)
     camera.lookAt(cameraTargetRef.current)
-    currentTimeRef.current = tInit
+    // Whatever already asked for a position keeps it. This effect rebuilds the
+    // scene whenever the laps change, and selecting an event's lap does exactly
+    // that — so setting the playhead to the lap start here threw away the moment
+    // the click had just asked for, and playback ran from the line instead.
+    // `crosshairRef` holds what the effect above settled on, request included.
+    const tLast = pLap.timestamps[pLap.timestamps.length - 1]
+    const asked = crosshairRef.current
+    currentTimeRef.current =
+      asked != null && asked >= tInit && asked <= tLast ? asked : tInit
 
     // Resize
     const ro = new ResizeObserver(entries => {
