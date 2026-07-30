@@ -45,7 +45,11 @@ interface LapSummary {
  *  entirely on what the engineer is chasing. */
 type ColGroup = 'sectors' | 'fuel' | 'inputs' | 'tyres' | 'weather'
 const COL_GROUPS: ColGroup[] = ['sectors', 'fuel', 'inputs', 'tyres', 'weather']
-const GROUP_KEY = 'srLapTableCols'
+/** Which groups a fresh start shows. Not remembered between runs: a column
+ *  switch and a race length are where the reader happens to be looking, not a
+ *  preference, and an app that reopens mid-thought is confusing. Theme and
+ *  units are preferences, and those do persist. */
+const DEFAULT_GROUPS: ColGroup[] = ['sectors', 'fuel', 'inputs']
 const CORNERS = ['LF', 'RF', 'LR', 'RR'] as const
 
 const fmtLap = (t: number) =>
@@ -71,14 +75,6 @@ function stdDev(xs: number[]): number {
   if (xs.length < 2) return 0
   const m = xs.reduce((a, b) => a + b, 0) / xs.length
   return Math.sqrt(xs.reduce((a, b) => a + (b - m) ** 2, 0) / (xs.length - 1))
-}
-
-function loadGroups(): Set<ColGroup> {
-  try {
-    const raw = localStorage.getItem(GROUP_KEY)
-    if (raw) return new Set(JSON.parse(raw) as ColGroup[])
-  } catch { /* fall through to the default */ }
-  return new Set<ColGroup>(['sectors', 'fuel', 'inputs'])
 }
 
 // ── Summary cards ─────────────────────────────────────────────────────────────
@@ -123,14 +119,11 @@ export default function LapTable() {
   const [summaries, setSummaries] = useState<LapSummary[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [groups, setGroups] = useState<Set<ColGroup>>(loadGroups)
+  const [groups, setGroups] = useState<Set<ColGroup>>(() => new Set(DEFAULT_GROUPS))
   /** Name of the file just written, so the export confirms it did something */
   const [exported, setExported] = useState<string | null>(null)
-  /** Race length for the fuel plan, remembered between sessions */
-  const [raceLen, setRaceLen] = useState(() => localStorage.getItem('srRaceLen') ?? '')
-  const [raceUnit, setRaceUnit] = useState<'laps' | 'min'>(
-    () => (localStorage.getItem('srRaceUnit') === 'min' ? 'min' : 'laps'),
-  )
+  const [raceLen, setRaceLen] = useState('')
+  const [raceUnit, setRaceUnit] = useState<'laps' | 'min'>('laps')
 
   const session = sessions.find(s => s.id === activeSessionId) ?? sessions[0]
 
@@ -138,7 +131,6 @@ export default function LapTable() {
     setGroups(prev => {
       const next = new Set(prev)
       next.has(g) ? next.delete(g) : next.add(g)
-      localStorage.setItem(GROUP_KEY, JSON.stringify([...next]))
       return next
     })
   }
@@ -380,14 +372,14 @@ export default function LapTable() {
           <input
             type="number" min="1" inputMode="numeric"
             value={raceLen}
-            onChange={e => { setRaceLen(e.target.value); localStorage.setItem('srRaceLen', e.target.value) }}
+            onChange={e => setRaceLen(e.target.value)}
             placeholder={raceUnit === 'laps' ? '20' : '45'}
             className="w-20 text-xs tabular-nums bg-transparent border border-border rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-ring"
           />
           {(['laps', 'min'] as const).map(u => (
             <button
               key={u}
-              onClick={() => { setRaceUnit(u); localStorage.setItem('srRaceUnit', u) }}
+              onClick={() => setRaceUnit(u)}
               className={`text-xs font-semibold px-2.5 py-1 rounded-lg border transition-colors ${
                 raceUnit === u
                   ? 'border-primary text-primary bg-primary/10'

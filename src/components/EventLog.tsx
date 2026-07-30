@@ -18,19 +18,11 @@ interface LapEvent {
 
 type Kind = 'lockup' | 'wheelspin' | 'offTrack' | 'abs' | 'missedShift'
 const KINDS: Kind[] = ['lockup', 'wheelspin', 'offTrack', 'abs', 'missedShift']
-const HIDDEN_KEY = 'srEventHidden'
-
-/** ABS starts hidden. In a car that has it there is an engagement per braking
- *  zone — 175 over eighteen laps of the Nordschleife — which would bury the
- *  thirty entries that mean something. Its card still shows the count, and one
- *  click brings it in. A choice already made is kept. */
-function loadHidden(): Set<string> {
-  try {
-    const raw = localStorage.getItem(HIDDEN_KEY)
-    if (raw) return new Set(JSON.parse(raw) as string[])
-  } catch { /* fall through to the default */ }
-  return new Set(['abs'])
-}
+/** ABS starts hidden, every run. In a car that has it there is an engagement
+ *  per braking zone — 175 over eighteen laps of the Nordschleife — which would
+ *  bury the thirty entries that mean something. Its card still shows the count,
+ *  and one click brings it in for as long as the app is open. */
+const DEFAULT_HIDDEN = ['abs']
 
 /** Colour per kind, dark and light. Kept away from the lap colours so an event
  *  is never mistaken for a lap. */
@@ -54,7 +46,7 @@ export default function EventLog() {
   const [events, setEvents] = useState<LapEvent[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [hidden, setHidden] = useState<Set<string>>(loadHidden)
+  const [hidden, setHidden] = useState<Set<string>>(() => new Set(DEFAULT_HIDDEN))
 
   const session = sessions.find(s => s.id === activeSessionId) ?? sessions[0]
 
@@ -114,7 +106,6 @@ export default function EventLog() {
   const toggleKind = (k: string) => setHidden(prev => {
     const next = new Set(prev)
     next.has(k) ? next.delete(k) : next.add(k)
-    localStorage.setItem(HIDDEN_KEY, JSON.stringify([...next]))
     return next
   })
 

@@ -278,7 +278,7 @@ export default function GgDiagram() {
   const { sessions, selectedLapKeys } = useSessionStore()
   const [laps, setLaps] = useState<LapGg[]>([])
   const [status, setStatus] = useState<'idle' | 'loading' | 'ok' | 'nodata'>('idle')
-  const [showShares, setShowShares] = useState(() => localStorage.getItem('srGgShares') === 'true')
+  const [showShares, setShowShares] = useState(false)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
   const lapsRef = useRef<LapGg[]>([])
@@ -445,11 +445,7 @@ export default function GgDiagram() {
             <h3 className="text-sm font-semibold text-foreground">{t('ggTitle')}</h3>
             <div className="flex items-center gap-3">
               <button
-                onClick={() => {
-                  const v = !showShares
-                  setShowShares(v)
-                  localStorage.setItem('srGgShares', String(v))
-                }}
+                onClick={() => setShowShares(v => !v)}
                 disabled={laps.length > 3}
                 title={laps.length > 3 ? t('ggSharesTooMany') : t('ggSharesHint')}
                 className={`text-xs font-semibold px-2.5 py-1 rounded-lg border transition-colors ${
