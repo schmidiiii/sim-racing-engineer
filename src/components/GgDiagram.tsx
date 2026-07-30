@@ -31,6 +31,29 @@ const IMPACT_G = 4
 /** Both axes are loaded past this before a sample counts as combined */
 const COMBINED_G = 0.5
 
+/** Below this the car is not really doing anything in that direction. It splits
+ *  the picture into nine: three bands sideways by three up and down, which is
+ *  what the share figures are counted in. */
+const NEUTRAL_G = 0.25
+
+/** Share of the lap spent in each of the nine regions, row by row from the
+ *  braking side up, and left to right. Sums to 100. */
+function regionShares(lap: LapGg): number[] {
+  const cells = new Array(9).fill(0)
+  let used = 0
+  const n = Math.min(lap.lat.length, lap.lon.length)
+  for (let i = 0; i < n; i++) {
+    const lat = lap.lat[i], lon = lap.lon[i]
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue
+    if (Math.hypot(lat, lon) > IMPACT_G) continue
+    const col = lat < -NEUTRAL_G ? 0 : lat > NEUTRAL_G ? 2 : 1
+    const row = lon < -NEUTRAL_G ? 0 : lon > NEUTRAL_G ? 2 : 1
+    cells[row * 3 + col]++
+    used++
+  }
+  return used ? cells.map(c => c / used * 100) : cells
+}
+
 function quantile(xs: number[], p: number): number {
   if (!xs.length) return 0
   const s = [...xs].sort((a, b) => a - b)
@@ -55,6 +78,7 @@ function paint(
   h: number,
   lim: Limits,
   labels: Record<string, string>,
+  shares: { colorIndex: number; cells: number[] }[] | null,
   dark: boolean,
 ) {
   const ctx = canvas.getContext('2d')
@@ -137,6 +161,38 @@ function paint(
   ctx.stroke()
   ctx.setLineDash([])
 
+  // The nine bands the shares are counted in, so the numbers have visible edges
+  if (shares) {
+    ctx.strokeStyle = dark ? 'rgba(255,255,255,0.13)' : 'rgba(0,0,0,0.13)'
+    ctx.lineWidth = 1
+    ctx.setLineDash([2, 3])
+    for (const g of [-NEUTRAL_G, NEUTRAL_G]) {
+      const x = px(g)
+      ctx.beginPath(); ctx.moveTo(x, PADT); ctx.lineTo(x, PADT + IH); ctx.stroke()
+      const y = py(g)
+      ctx.beginPath(); ctx.moveTo(PADL, y); ctx.lineTo(PADL + IW, y); ctx.stroke()
+    }
+    ctx.setLineDash([])
+
+    // One line per lap in each cell, in the lap's colour, so two laps can be
+    // compared region by region instead of guessing from the cloud
+    const midX = [(-xMax - NEUTRAL_G) / 2, 0, (xMax + NEUTRAL_G) / 2]
+    const midY = [(-yDown - NEUTRAL_G) / 2, 0, (yUp + NEUTRAL_G) / 2]
+    ctx.font = 'bold 10px system-ui,sans-serif'
+    ctx.textAlign = 'center'
+    for (let row = 0; row < 3; row++) {
+      for (let col = 0; col < 3; col++) {
+        const x = px(midX[col])
+        const y0 = py(midY[row])
+        shares.forEach((sh, k) => {
+          ctx.fillStyle = getLapColor(sh.colorIndex)
+          ctx.textBaseline = 'middle'
+          ctx.fillText(`${sh.cells[row * 3 + col].toFixed(1)}%`, x, y0 + (k - (shares.length - 1) / 2) * 12)
+        })
+      }
+    }
+  }
+
   // Region names. Placed inside the frame at the eight points a reader looks,
   // and skipped when the frame is too small to hold them without overlapping.
   if (IW > 300 && IH > 220) {
@@ -163,6 +219,7 @@ export default function GgDiagram() {
   const { sessions, selectedLapKeys } = useSessionStore()
   const [laps, setLaps] = useState<LapGg[]>([])
   const [status, setStatus] = useState<'idle' | 'loading' | 'ok' | 'nodata'>('idle')
+  const [showShares, setShowShares] = useState(() => localStorage.getItem('srGgShares') === 'true')
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
   const lapsRef = useRef<LapGg[]>([])
@@ -206,6 +263,17 @@ export default function GgDiagram() {
   }, [lapKeyStr, sessions.length])
 
   useEffect(() => { lapsRef.current = laps }, [laps])
+
+  // Three laps of numbers in one cell is unreadable, so beyond that the shares
+  // stay off however the toggle is set
+  const shares = useMemo(
+    () => (showShares && laps.length <= 3
+      ? laps.map(l => ({ colorIndex: l.colorIndex, cells: regionShares(l) }))
+      : null),
+    [showShares, laps],
+  )
+  const sharesRef = useRef(shares)
+  useEffect(() => { sharesRef.current = shares }, [shares])
 
   // One limit per direction. Sideways a car reaches much further than the engine
   // does forwards, so a single shared scale would leave the top of the frame
@@ -279,6 +347,7 @@ export default function GgDiagram() {
       const ctx = canvas.getContext('2d')
       if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
       paint(canvas, lapsRef.current, w, h, limit, regionLabels,
+        sharesRef.current,
         document.documentElement.classList.contains('dark'))
     }
 
@@ -293,7 +362,7 @@ export default function GgDiagram() {
     ro.observe(wrap)
     redraw()
     return () => ro.disconnect()
-  }, [laps, limit, regionLabels])
+  }, [laps, limit, regionLabels, showShares])
 
   if (!selectedLapKeys.length)
     return <div className="flex-1 flex items-center justify-center">
@@ -316,6 +385,24 @@ export default function GgDiagram() {
           <div className="flex items-center justify-between mb-2 gap-4">
             <h3 className="text-sm font-semibold text-foreground">{t('ggTitle')}</h3>
             <div className="flex items-center gap-3">
+              <button
+                onClick={() => {
+                  const v = !showShares
+                  setShowShares(v)
+                  localStorage.setItem('srGgShares', String(v))
+                }}
+                disabled={laps.length > 3}
+                title={laps.length > 3 ? t('ggSharesTooMany') : t('ggSharesHint')}
+                className={`text-xs font-semibold px-2.5 py-1 rounded-lg border transition-colors ${
+                  laps.length > 3
+                    ? 'border-border text-muted-foreground/40 cursor-not-allowed'
+                    : showShares
+                      ? 'border-primary text-primary bg-primary/10'
+                      : 'border-border text-muted-foreground hover:text-foreground hover:bg-secondary/60'
+                }`}
+              >
+                {t('ggShares')}
+              </button>
               {laps.map(l => (
                 <span key={l.key} className="flex items-center gap-1 text-xs text-muted-foreground">
                   <span className="inline-block w-3 h-0.5 rounded"

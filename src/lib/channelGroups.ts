@@ -124,7 +124,7 @@ export const CHANNEL_GROUPS: ChannelGroupDef[] = [
     yDomains: {},
   },
   {
-    label: 'g-g',
+    label: 'G-G',
     viewType: 'gg',
     channels: [],
     units: {},
