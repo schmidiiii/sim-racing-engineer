@@ -356,9 +356,9 @@ export interface Props {
   unit?: string
   yDomain?: [YBound, YBound]
   traces: LapTrace[]
-  /** Series drawn as shaded vertical bands behind the traces rather than as
-   *  lines. Used for on/off channels — ABS under the brake trace — where the
-   *  question is where it happened, not what value it took. */
+  /** On/off series that recolour the trace of the same lap instead of getting a
+   *  line of their own — ABS inside the brake trace. Matched to a trace by
+   *  `colorIndex`, so the amber lands on the lap it belongs to. */
   bands?: LapTrace[]
   crosshairTime: number | null
   onMouseMove: (t: number | null) => void
