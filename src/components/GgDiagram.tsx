@@ -36,6 +36,27 @@ const COMBINED_G = 0.5
  *  what the share figures are counted in. */
 const NEUTRAL_G = 0.25
 
+/** One colour per region, row by row from the braking side up and left to
+ *  right. Deliberately unlike the lap colours, which are cool and desaturated:
+ *  these say "region", not "lap". */
+const REGION_COLORS = [
+  '#1f4e9c', // trail braking into a right
+  '#8a5a2b', // pure braking
+  '#e0a800', // trail braking into a left
+  '#e07b39', // pure right cornering
+  '#64748b', // neither — straight and steady
+  '#2f86d6', // pure left cornering
+  '#d64545', // accelerating out of a right
+  '#7c4dbd', // pure acceleration
+  '#2f9e5f', // accelerating out of a left
+]
+
+const cellOf = (lat: number, lon: number) => {
+  const col = lat < -NEUTRAL_G ? 0 : lat > NEUTRAL_G ? 2 : 1
+  const row = lon < -NEUTRAL_G ? 0 : lon > NEUTRAL_G ? 2 : 1
+  return row * 3 + col
+}
+
 /** Share of the lap spent in each of the nine regions, row by row from the
  *  braking side up, and left to right. Sums to 100. */
 function regionShares(lap: LapGg): number[] {
@@ -46,9 +67,7 @@ function regionShares(lap: LapGg): number[] {
     const lat = lap.lat[i], lon = lap.lon[i]
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue
     if (Math.hypot(lat, lon) > IMPACT_G) continue
-    const col = lat < -NEUTRAL_G ? 0 : lat > NEUTRAL_G ? 2 : 1
-    const row = lon < -NEUTRAL_G ? 0 : lon > NEUTRAL_G ? 2 : 1
-    cells[row * 3 + col]++
+    cells[cellOf(lat, lon)]++
     used++
   }
   return used ? cells.map(c => c / used * 100) : cells
@@ -133,15 +152,47 @@ function paint(
   ctx.moveTo(cx, PADT); ctx.lineTo(cx, PADT + IH)
   ctx.stroke()
 
-  // The cloud, translucent so density reads as density
+  // The envelope as a closed path, reused for the clip and the outline
+  const rx = px(xMax) - cx
+  const envelope = () => {
+    const p = new Path2D()
+    p.ellipse(cx, cy, rx, cy - py(yUp), 0, Math.PI, 2 * Math.PI)
+    p.ellipse(cx, cy, rx, py(-yDown) - cy, 0, 0, Math.PI)
+    return p
+  }
+
+  // The nine regions, tinted inside the envelope. Faint: they are the
+  // background the cloud sits on, not the subject.
+  const bx = [PADL, px(-NEUTRAL_G), px(NEUTRAL_G), PADL + IW]
+  const by = [PADT + IH, py(-NEUTRAL_G), py(NEUTRAL_G), PADT]
+  if (shares) {
+    ctx.save()
+    ctx.clip(envelope())
+    ctx.globalAlpha = dark ? 0.20 : 0.13
+    for (let row = 0; row < 3; row++) {
+      for (let col = 0; col < 3; col++) {
+        ctx.fillStyle = REGION_COLORS[row * 3 + col]
+        ctx.fillRect(bx[col], by[row + 1], bx[col + 1] - bx[col], by[row] - by[row + 1])
+      }
+    }
+    ctx.globalAlpha = 1
+    ctx.restore()
+  }
+
+  // The cloud, translucent so density reads as density. With one lap up the
+  // points take their region's colour, which is what makes the split visible
+  // rather than merely stated; comparing laps keeps the lap colours, because
+  // there the question is which lap, not which region.
+  const byRegion = !!shares && laps.length === 1
   for (const lap of laps) {
-    ctx.fillStyle = getLapColor(lap.colorIndex)
-    ctx.globalAlpha = dark ? 0.32 : 0.26
+    ctx.globalAlpha = dark ? 0.36 : 0.30
+    if (!byRegion) ctx.fillStyle = getLapColor(lap.colorIndex)
     const n = Math.min(lap.lat.length, lap.lon.length)
     for (let i = 0; i < n; i++) {
       const lat = lap.lat[i], lon = lap.lon[i]
       if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue
       if (Math.hypot(lat, lon) > IMPACT_G) continue
+      if (byRegion) ctx.fillStyle = REGION_COLORS[cellOf(lat, lon)]
       ctx.fillRect(px(lat) - 1, py(lon) - 1, 2, 2)
     }
     ctx.globalAlpha = 1
@@ -153,41 +204,49 @@ function paint(
   ctx.strokeStyle = dark ? 'rgba(255,255,255,0.34)' : 'rgba(0,0,0,0.30)'
   ctx.lineWidth = 1.5
   ctx.setLineDash([4, 3])
-  ctx.beginPath()
-  ctx.ellipse(cx, cy, px(xMax) - cx, cy - py(yUp), 0, Math.PI, 0)
-  ctx.stroke()
-  ctx.beginPath()
-  ctx.ellipse(cx, cy, px(xMax) - cx, py(-yDown) - cy, 0, 0, Math.PI)
-  ctx.stroke()
+  ctx.stroke(envelope())
   ctx.setLineDash([])
 
-  // The nine bands the shares are counted in, so the numbers have visible edges
   if (shares) {
-    ctx.strokeStyle = dark ? 'rgba(255,255,255,0.13)' : 'rgba(0,0,0,0.13)'
-    ctx.lineWidth = 1
-    ctx.setLineDash([2, 3])
-    for (const g of [-NEUTRAL_G, NEUTRAL_G]) {
-      const x = px(g)
-      ctx.beginPath(); ctx.moveTo(x, PADT); ctx.lineTo(x, PADT + IH); ctx.stroke()
-      const y = py(g)
-      ctx.beginPath(); ctx.moveTo(PADL, y); ctx.lineTo(PADL + IW, y); ctx.stroke()
-    }
-    ctx.setLineDash([])
-
-    // One line per lap in each cell, in the lap's colour, so two laps can be
-    // compared region by region instead of guessing from the cloud
-    const midX = [(-xMax - NEUTRAL_G) / 2, 0, (xMax + NEUTRAL_G) / 2]
-    const midY = [(-yDown - NEUTRAL_G) / 2, 0, (yUp + NEUTRAL_G) / 2]
-    ctx.font = 'bold 10px system-ui,sans-serif'
-    ctx.textAlign = 'center'
+    // Region borders, clipped to the envelope so the boxes follow its curve the
+    // way the drawn regions do rather than running off into empty corners
+    ctx.save()
+    ctx.clip(envelope())
+    ctx.lineWidth = 1.5
     for (let row = 0; row < 3; row++) {
       for (let col = 0; col < 3; col++) {
-        const x = px(midX[col])
-        const y0 = py(midY[row])
+        ctx.strokeStyle = REGION_COLORS[row * 3 + col]
+        ctx.globalAlpha = 0.8
+        ctx.strokeRect(bx[col], by[row + 1], bx[col + 1] - bx[col], by[row] - by[row + 1])
+      }
+    }
+    ctx.globalAlpha = 1
+    ctx.restore()
+
+    // The figure for each region, in a box on the region's own colour. One line
+    // per lap where laps are being compared.
+    ctx.font = 'bold 10px system-ui,sans-serif'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    for (let row = 0; row < 3; row++) {
+      for (let col = 0; col < 3; col++) {
+        const i = row * 3 + col
+        const x = (bx[col] + bx[col + 1]) / 2
+        const yc = (by[row] + by[row + 1]) / 2
         shares.forEach((sh, k) => {
-          ctx.fillStyle = getLapColor(sh.colorIndex)
-          ctx.textBaseline = 'middle'
-          ctx.fillText(`${sh.cells[row * 3 + col].toFixed(1)}%`, x, y0 + (k - (shares.length - 1) / 2) * 12)
+          const label = `${sh.cells[i].toFixed(1)}%`
+          const wTxt = ctx.measureText(label).width
+          const y = yc + (k - (shares.length - 1) / 2) * 15
+          ctx.fillStyle = dark ? 'rgba(14,16,22,0.86)' : 'rgba(255,255,255,0.88)'
+          ctx.strokeStyle = REGION_COLORS[i]
+          ctx.lineWidth = 1
+          const bw = wTxt + 8, bh = 13
+          ctx.beginPath()
+          ctx.roundRect(x - bw / 2, y - bh / 2, bw, bh, 3)
+          ctx.fill()
+          ctx.stroke()
+          ctx.fillStyle = REGION_COLORS[i]
+          ctx.fillText(label, x, y + 0.5)
         })
       }
     }
