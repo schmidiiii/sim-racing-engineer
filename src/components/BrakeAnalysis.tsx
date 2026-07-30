@@ -32,9 +32,23 @@ interface LapData {
 
 const BRAKE_THRESHOLD = 3
 const MIN_PEAK        = 15
-const MIN_DURATION    = 0.008
+/** A braking zone has to be this long to count, in METRES.
+ *
+ *  This was a fraction of a lap — 0.008, meaning eight tenths of a percent.
+ *  On a four-kilometre circuit that is thirty metres and works; on the
+ *  Nordschleife it is two hundred, longer than anyone brakes for, so every
+ *  zone was rejected and the tab came up empty. A braking zone is a distance,
+ *  not a share of a lap. */
+const MIN_ZONE_M = 25
 
-function detectBrakeZones(brake: number[], lapDistPct: number[], speed: number[]): BrakeZone[] {
+/** How near two zones must be to count as the same corner, also in metres. Was
+ *  4% of a lap, which is a kilometre of the Nordschleife — enough to pair up
+ *  two entirely different corners. */
+const MATCH_M = 120
+
+function detectBrakeZones(
+  brake: number[], lapDistPct: number[], speed: number[], trackLengthM: number,
+): BrakeZone[] {
   const zones: BrakeZone[] = []
   let inZone = false, entryIdx = 0, peak = 0
 
@@ -52,7 +66,8 @@ function detectBrakeZones(brake: number[], lapDistPct: number[], speed: number[]
           peakPressure: peak,
           speedAtEntry: speed[entryIdx] ?? 0,
         }
-        if (zone.exitDist - zone.entryDist > MIN_DURATION && zone.peakPressure > MIN_PEAK) {
+        const lengthM = (zone.exitDist - zone.entryDist) * trackLengthM
+        if (lengthM > MIN_ZONE_M && zone.peakPressure > MIN_PEAK) {
           zones.push(zone)
         }
         inZone = false; peak = 0
@@ -69,10 +84,12 @@ interface MatchedZone {
 
 function matchZones(lapDataArr: LapData[]): MatchedZone[] {
   if (lapDataArr.length === 0) return []
+  const lengthM = lapDataArr[0].trackLengthM || 4000
+  const tol = MATCH_M / lengthM
   return lapDataArr[0].zones.map(refZone => {
     const entries: { lapKey: string; zone: BrakeZone }[] = []
     for (const ld of lapDataArr) {
-      const match = ld.zones.find(z => Math.abs(z.entryDist - refZone.entryDist) < 0.04)
+      const match = ld.zones.find(z => Math.abs(z.entryDist - refZone.entryDist) < tol)
       if (match) entries.push({ lapKey: ld.lapKey, zone: match })
     }
     return { refDist: refZone.entryDist, entries }
@@ -129,15 +146,15 @@ export default function BrakeAnalysis() {
           const lapDistPct = brakeData.lap_dist_pct
           const speedData = byChannel['Speed']
           const speed = (speedData?.samples ?? []).map(v => v * 3.6)
-          const zones = detectBrakeZones(brake, lapDistPct, speed)
-
-          // Integrate speed (m/s) over time to get track length
+          // Integrate speed (m/s) over time to get track length. Needed before
+          // the zones, since the minimum zone length is stated in metres.
           let trackLengthM = 0
           if (speedData) {
             const ts = speedData.timestamps
             const sp = speedData.samples
             for (let i = 1; i < sp.length; i++) trackLengthM += sp[i] * (ts[i] - ts[i - 1])
           }
+          const zones = detectBrakeZones(brake, lapDistPct, speed, trackLengthM || 4000)
 
           results.push({
             lapKey: key, lapNumber: lapNum, colorIndex: ci,
