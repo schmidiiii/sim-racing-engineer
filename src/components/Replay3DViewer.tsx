@@ -1821,15 +1821,26 @@ export default function Replay3DViewer() {
     // count: the old constant behaved like 680 m on a big track, which averaged
     // the whole lap into one flat height.
     const IDW_SOFT = (30 * M) * (30 * M)
+    // Where the circuit crosses itself the ground has to pass under the LOWER
+    // of the two, and the shielding radius is too small to see it: a vertex ten
+    // metres from the bridge and thirty-five from the road beneath it took the
+    // bridge's height and stood four metres above the road below, as a green
+    // wall alongside it. So a road that far below anywhere in the near zone
+    // pulls the ground down to itself. Only that case — widening the radius for
+    // every vertex was tried and dropped the Nordschleife's ground by 77 m.
+    const UNDER_DY = 4 * M
+    const NEAR_SQ = T_NEAR * T_NEAR
     const groundHeightAt = (vx: number, vz: number): number => {
-      let minD2 = Infinity, closestY = 0, minNearY = Infinity
+      let minD2 = Infinity, closestY = 0, minNearY = Infinity, minZoneY = Infinity
       // j+=1: find true nearest road point — j+=2 could skip odd-index nearest → wrong closestY → clipping
       for (let j = 0; j < basePts.length; j++) {
         const dx = basePts[j].x - vx, dz = basePts[j].z - vz
         const d2 = dx * dx + dz * dz
         if (d2 < minD2) { minD2 = d2; closestY = basePts[j].y }
         if (d2 < SHIELD_SQ) minNearY = Math.min(minNearY, basePts[j].y)
+        if (d2 < NEAR_SQ) minZoneY = Math.min(minZoneY, basePts[j].y)
       }
+      if (closestY - minZoneY > UNDER_DY) minNearY = Math.min(minNearY, minZoneY)
       // IDW with j+=2 is fine for smooth height (nearby jitter negligible)
       let totalW = 0, weightedY = 0
       for (let j = 0; j < basePts.length; j += 2) {
