@@ -2578,6 +2578,10 @@ export default function Replay3DViewer() {
     const shadows: THREE.Mesh[] = laps.map(() => {
       const m = new THREE.Mesh(shadowGeo, new THREE.MeshBasicMaterial({
         color: 0x000000, transparent: true, opacity: isDark ? 0.32 : 0.24, depthWrite: false,
+        // The patch lies all but flat on the tarmac, and a centimetre of
+        // clearance is not enough to separate two coplanar surfaces — the same
+        // reason the painted markings needed this
+        polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -8,
       }))
       m.renderOrder = 1
       scene.add(m)
@@ -2832,13 +2836,19 @@ export default function Replay3DViewer() {
         // as-is: negative Roll then drops the left side to match.
         if (lap.roll.length > idx) group.rotation.z = lerpAt(lap.roll)
 
-        // After the heading, so it turns with the car — and just below the
-        // wheels, so it reads as a shadow rather than a disc the car stands on.
-        // It stays flat: pitch and roll belong to the car, not to the ground.
+        // Set after the car's orientation so it can copy it whole.
+        //
+        // It used to be kept flat, on the reasoning that pitch and roll belong
+        // to the car rather than to the ground. That is backwards for roll:
+        // iRacing's Roll is dominated by the banking of the track, which is why
+        // a left-hander always reads negative. So a flat patch on a banked
+        // corner cuts through the tarmac — the disc is nearly three metres long
+        // and the road falls further than that across it. Copying the car's
+        // attitude lays the patch parallel to the road instead.
         const shadow = shadows[li]
         if (shadow) {
           shadow.position.set(group.position.x, group.position.y - 0.01 * M, group.position.z)
-          shadow.rotation.y = group.rotation.y
+          shadow.rotation.copy(group.rotation)
         }
 
         // Wheels: each one rolls at its own measured speed, so a locked wheel
