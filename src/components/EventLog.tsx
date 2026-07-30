@@ -55,6 +55,15 @@ export default function EventLog() {
 
   const session = sessions.find(s => s.id === activeSessionId) ?? sessions[0]
 
+  // Laps iRacing timed in full. Events on the others are kept — an out-lap from
+  // the garage can still contain the spin of the session — but marked, because
+  // they behave differently: those laps are not offered anywhere else in the
+  // app, so comparing one against another is not possible.
+  const timed = useMemo(
+    () => new Set((session?.laps ?? []).filter(l => l.is_valid).map(l => l.lap_number)),
+    [session],
+  )
+
   // Jumping to an event shows that car alone; the selection the rest of the app
   // was working with — normally the two fastest laps — is put back on the way
   // out. Without this, walking down the list leaves five or six cars on track.
@@ -218,14 +227,21 @@ export default function EventLog() {
                 </tr>
               </thead>
               <tbody>
-                {shown.map((e, i) => (
+                {shown.map((e, i) => {
+                  const full = timed.has(e.lap_number)
+                  return (
                   <tr
                     key={`${e.session_time}-${e.kind}-${i}`}
                     onClick={() => jumpTo(e)}
-                    title={t('eventJump')}
-                    className="border-b border-border/40 last:border-0 cursor-pointer odd:bg-secondary/15 hover:bg-secondary/40 transition-colors"
+                    title={full ? t('eventJump') : t('eventUntimedLap')}
+                    className={`border-b border-border/40 last:border-0 cursor-pointer odd:bg-secondary/15 hover:bg-secondary/40 transition-colors ${
+                      full ? '' : 'text-muted-foreground'
+                    }`}
                   >
-                    <td className="px-2 py-1.5 text-left font-semibold">{e.lap_number}</td>
+                    <td className="px-2 py-1.5 text-left font-semibold">
+                      {e.lap_number}
+                      {!full && <span className="text-[9px] font-normal opacity-70 ml-1">{t('eventUntimed')}</span>}
+                    </td>
                     <td className="px-2 py-1.5 text-right">{fmtAt(e.at)}</td>
                     <td className="px-2 py-1.5 text-right border-l border-border">
                       {(e.lap_dist_pct * 100).toFixed(1)}<span className="opacity-45 text-[10px] ml-0.5">%</span>
@@ -249,7 +265,8 @@ export default function EventLog() {
                       <span className="opacity-45 text-[10px] ml-0.5">{su}</span>
                     </td>
                   </tr>
-                ))}
+                  )
+                })}
               </tbody>
             </table>
           </div>
