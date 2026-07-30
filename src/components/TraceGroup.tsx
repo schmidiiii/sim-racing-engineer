@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useSessionStore, parseLapKey } from '@/store/session'
-import { CHANNEL_GROUPS } from '@/lib/channelGroups'
+import { CHANNEL_GROUPS, channelLabel } from '@/lib/channelGroups'
 import { convertByUnit, unitLabel } from '@/lib/units'
 import TraceChart, { LapTrace } from '@/components/TraceChart'
 import SetupView from '@/components/SetupView'
@@ -10,6 +10,7 @@ import BrakeAnalysis from '@/components/BrakeAnalysis'
 import CornerSpeed from '@/components/CornerSpeed'
 import LapTable from '@/components/LapTable'
 import EventLog from '@/components/EventLog'
+import GgDiagram from '@/components/GgDiagram'
 import LapMap from '@/components/LapMap'
 import { useT, translateChannelLabel } from '@/lib/i18n'
 
@@ -249,6 +250,7 @@ export default function TraceGroup() {
       {group.viewType === 'cornerSpeed' && <CornerSpeed />}
       {group.viewType === 'lapTable' && <LapTable />}
       {group.viewType === 'events' && <EventLog />}
+      {group.viewType === 'gg' && <GgDiagram />}
 
       {!group.viewType && <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-background">
 
@@ -344,6 +346,7 @@ export default function TraceGroup() {
               yDomain={group.yDomains[channel]}
               traces={traces[channel] ?? []}
               bands={group.bandsFor?.[channel] ? traces[group.bandsFor[channel]] : undefined}
+              bandLabel={group.bandsFor?.[channel] ? channelLabel(group.bandsFor[channel]) : undefined}
               crosshairTime={crosshairTime}
               onMouseMove={setCrosshairTime}
               zoomRef={zoomRef}
