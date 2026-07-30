@@ -207,14 +207,40 @@ export default function LapTable() {
     const need = laps * stint.avgFuel
     const needSafe = laps * (stint.maxFuel || stint.avgFuel)
     const reserve = stint.maxFuel || stint.avgFuel   // one lap in hand
+    const heavy = stint.maxFuel || stint.avgFuel
+    const lapsPerTank = cap > 0 ? Math.floor(cap / heavy) : 0
+    const stops = cap > 0 ? Math.max(0, Math.ceil((needSafe + reserve) / cap) - 1) : 0
+
+    // Two answers, because there are two questions. Splitting the race into
+    // equal stints is what a team plans; running the tank dry is the deadline
+    // that cannot be moved. Both assume the car starts full.
+    const stints = stops + 1
+    const schedule = Array.from({ length: stops }, (_, i) => {
+      const latest = Math.min(laps - 1, lapsPerTank * (i + 1))
+      // Never later than the deadline: rounding an even split can land a lap
+      // past where the tank runs dry, and a plan that says to stop after
+      // running out is worse than no plan
+      const even = Math.min(Math.round(laps * (i + 1) / stints), latest)
+      const after = laps - even            // laps still to run after this stop
+      return {
+        even,
+        latest,
+        // Enough for what is left, or a full tank when what is left needs more
+        add: Math.min(cap, after * heavy + reserve),
+      }
+    })
+
     return {
       laps,
       pace,
       need,
       needSafe: needSafe + reserve,
       cap,
-      lapsPerTank: cap > 0 ? Math.floor(cap / (stint.maxFuel || stint.avgFuel)) : 0,
-      stops: cap > 0 ? Math.max(0, Math.ceil((needSafe + reserve) / cap) - 1) : 0,
+      lapsPerTank,
+      stops,
+      schedule,
+      // What to leave the pits with at the start
+      startFuel: cap > 0 ? Math.min(cap, needSafe + reserve) : needSafe + reserve,
     }
   }, [session?.fuel_capacity, raceLen, raceUnit, stint])
 
@@ -419,6 +445,29 @@ export default function LapTable() {
                 <p className="text-[10px] text-muted-foreground">{t('planNoTank')}</p>
               )}
             </div>
+          </div>
+        )}
+
+        {plan && plan.cap > 0 && (
+          <div className="mt-3 pt-2.5 border-t border-border/50">
+            <p className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">
+              {t('planSchedule')}
+            </p>
+            <p className="text-xs text-foreground">
+              {t('planStart').replace('%v%', `${fuelFromL(plan.startFuel, units).toFixed(1)} ${fu}`)}
+            </p>
+            {plan.stops === 0 ? (
+              <p className="text-xs text-muted-foreground mt-0.5">{t('planNoStop')}</p>
+            ) : plan.schedule.map((st, i) => (
+              <p key={i} className="text-xs text-foreground mt-0.5 tabular-nums">
+                {t('planStopLine')
+                  .replace('%n%', String(i + 1))
+                  .replace('%lap%', String(st.even))
+                  .replace('%latest%', String(st.latest))
+                  .replace('%add%', `${fuelFromL(st.add, units).toFixed(1)} ${fu}`)}
+              </p>
+            ))}
+            <p className="text-[10px] text-muted-foreground mt-1">{t('planAssume')}</p>
           </div>
         )}
       </div>
