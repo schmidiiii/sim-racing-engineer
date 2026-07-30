@@ -1,8 +1,8 @@
 # Sim Racing Engineer
 
-**iRacing telemetry analysis with AI coaching — desktop app for Windows**
+**iRacing telemetry analysis with a 3D replay and AI coaching — desktop app for Windows**
 
-Load your `.ibt` session files and immediately see what's happening across every lap: overlaid traces, brake zone comparison, lap delta, and an AI coach that gives you direct, data-driven feedback on your driving.
+Load your `.ibt` session files and see what happened: overlaid traces across every lap, a 3D replay on the real circuit, the moments where something went wrong, and an AI race engineer that gives direct, data-driven feedback on your driving.
 
 ## Download
 
@@ -15,65 +15,80 @@ Windows only. Just install and run — no Python, no Node, no setup required. Th
 
 ---
 
-## Features
-
-### Telemetry Viewer
-Multi-lap overlays for 12 channel groups, each color-coded by lap:
+## The tabs
 
 | Tab | What you see |
 |-----|-------------|
-| General | Throttle, Brake, Speed, Gear, G-Forces, Steering |
-| Braking | Brake zone detection, entry speed, pressure profile |
-| Corner Speed | Minimum speed per corner, grouped bar chart across laps |
-| Ride Height | All 4 corners (mm) |
-| Rake | Pitch & Roll |
-| Wheel Speed | All 4 wheels |
-| Wheel Spin | Slip angle & ratio |
-| Shocks | Deflection per corner |
-| Shocks Hist | Shock velocity histogram |
-| Tyre Temp | L/M/R per corner |
-| Tyre Pressure | Hot pressure per corner |
-| Delta | Lap time delta vs. reference lap, sector splits |
+| General | Speed, throttle, brake, gear, steering angle — with ABS drawn inside the brake trace |
+| Delta | Time gained and lost across the lap, split at iRacing's own sector lines, plus a map of where it went |
+| Laps | The whole session as a table: sectors, fuel, tyres, driver inputs, off-track excursions — and a fuel plan |
+| Events | The handful of moments worth a second look: lockups, wheelspin, excursions, missed shifts |
+| G-G | Lateral against longitudinal acceleration — how much of the tyre's grip is actually being used |
+| Braking | Brake zone detection, entry position and speed, compared lap against lap |
+| Corner Speed | Minimum speed through every corner, across all selected laps |
+| Adjustments | Brake bias, ABS, traction control and throttle shape as the driver changed them |
+| Setup | The car setup from the file, with a filter for the parameters that differ |
+| Tyre Temp / Pressure | Per corner, three points across each tyre |
+| Wheel Speed / Spin | Per wheel, with computed slip ratio |
+| Ride Height / Rake / Shocks | Suspension, per corner |
 
-### Track Map
-Live SVG circuit map generated from GPS data. The cursor syncs to the chart crosshair so you always know exactly where on track you are. Colored by throttle, brake, or gear.
+---
 
-### Brake Analysis
-Detects all brake zones per lap and overlays them on the track map. A comparison table shows the exact entry position (% of lap) and entry speed for each zone across all selected laps — with Δ showing whether you brake earlier or later than the reference lap.
+## Features
 
-### Corner Speed
-Automatically detects every corner on the circuit and shows the minimum speed through each one across all selected laps. A grouped bar chart and detail table with Δ km/h make it easy to spot where you're losing speed in the middle of corners.
+### 3D replay
+Watch the lap back on the circuit. Chase, hood, front and TV cameras. The car sits on the road, leans with the banking, and its wheels turn at their own measured speeds — a locked wheel actually stops.
 
-### Consistency Score
-Shown in the sidebar when two or more laps are selected. Calculates a consistency percentage from the lap time standard deviation — green (≥95%), amber (≥85%), red (<85%) — with best lap time and total spread.
+The driving line can be coloured three ways: one colour per lap, by throttle and brake, or by where time is being gained and lost.
 
-### Track Guide
-Each session card has a **▶ Track Guide** button that opens a YouTube search for onboard footage of your specific car and track combination with one click.
+Alongside it: tyre temperatures and tread per corner, ABS and wheelspin lamps, live weather and track conditions from the session, sun position taken from the session clock — and moonlight after dark.
 
-### Lap Delta
-Time delta chart across the full lap distance. See exactly where time is gained or lost between any two laps, with sector time breakdown.
+### Real track geometry
+Thirteen circuits are drawn from stored geometry rather than from your driving line, so the road is where the road is and you can see a car take a kerb or run wide.
 
-### Setup Viewer
-Reads the car setup embedded in the `.ibt` file and displays it alongside your telemetry. Compare setups across sessions.
+Road Atlanta · Road America · Spa-Francorchamps (GP and Endurance) · Hockenheimring · Silverstone Arena GP · Red Bull Ring · Watkins Glen Classic · Imola · Okayama · Winton · Summit Point · Nordschleife VLN
 
-### AI Coaching
-An AI race engineer that analyzes your data and gives you direct, honest feedback. No filler, no generic advice — specific lap numbers, corner references, and concrete things to fix.
+Everywhere else the road is still built around the driving line, which works but always shows the car in the middle of it.
 
-**Supported AI providers:**
-- **Ollama** (local, free) — runs models on your own PC
-- **OpenAI** — GPT-4o and others via API key
-- **Google Gemini** — Gemini 2.5 Flash and others via API key
+### Lap table and fuel plan
+One row per lap: sector splits at iRacing's real sector lines, fuel burned and left, tyre temperature, pressure and tread per corner, the share of the lap at full throttle, on the brakes, on neither and on both, steering corrections, off-track excursions, track and air temperature. Columns are grouped and can be switched off; the whole table exports to CSV.
 
-**10 languages:** English, Deutsch, Français, Español, Italiano, Português, Nederlands, Polski, Русский, 日本語, 中文
+Out-laps and in-laps are told apart and kept out of the pace figures — an in-lap is driven flat out and only ends in the pits.
 
-### Auto-Update
-When a new version is released, a banner appears in the app. One click downloads and installs it silently.
+Give it a race length in laps or minutes and it works out the fuel needed, the laps a tank lasts, how many stops that means and which lap each falls on, with the lap the tank runs dry beside it.
+
+### Event log
+A session reduced to the moments that matter. Clicking one selects that lap, jumps to a second before it happened and plays it back. The tab also surfaces the places you keep hitting — the same corner exit spinning up the rear in three separate laps.
+
+Thresholds were measured against real telemetry rather than guessed: wheel slip below −12 % finds two lockups across a GT3 stint and twelve in a quarter of an hour of Formula Vee, which is what driving one is like.
+
+### G-G diagram
+Lateral against longitudinal acceleration, one cloud per lap. A cross means braking, turning and accelerating happen one after another; a filled round cloud means they overlap. A toggle splits it into the nine regions and gives the share of the lap spent in each.
+
+### Track map
+Circuit map generated from GPS. The cursor follows the chart crosshair, so you always know where on track you are. Coloured by throttle, brake or gear.
+
+### Consistency
+Shown in the sidebar when two or more laps are selected: a percentage from the spread of lap times, with the best lap and the ideal lap built from your best sectors.
+
+### AI coaching
+An AI race engineer that reads your data and answers directly — specific lap numbers, specific corners, concrete things to fix.
+
+**Providers:** Ollama (local, free) · OpenAI · Google Gemini
+
+**11 languages:** English, Deutsch, Français, Español, Italiano, Português, Nederlands, Polski, Русский, 日本語, 中文
+
+### Units
+Metric or imperial throughout. The CSV export always writes SI, whatever the display is set to.
+
+### Auto-update
+When a new version is released, a banner appears in the app. One click downloads and installs it.
 
 ---
 
 ## AI Setup
 
-### Ollama (Free, runs locally)
+### Ollama (free, runs locally)
 1. Download and install [Ollama](https://ollama.com)
 2. Open a terminal and run: `ollama serve`
 3. Pull a model: `ollama pull llama3.1` (or any model you prefer)
@@ -81,7 +96,7 @@ When a new version is released, a banner appears in the app. One click downloads
 
 Recommended models: `llama3.1`, `mistral`, `qwen2.5`
 
-### OpenAI (GPT-4o etc.)
+### OpenAI
 1. Create an account at [platform.openai.com](https://platform.openai.com)
 2. Add billing credits at [platform.openai.com/settings/billing](https://platform.openai.com/settings/billing)
 3. Generate an API key at [platform.openai.com/api-keys](https://platform.openai.com/api-keys)
@@ -97,11 +112,12 @@ Recommended models: `llama3.1`, `mistral`, `qwen2.5`
 
 ## How to Use
 
-1. **Load a session** — click `+ Load file(s)…` in the sidebar and select one or more `.ibt` files, or point the app at your iRacing telemetry folder (`Documents\iRacing\telemetry`)
-2. **Select laps** — check the laps you want to analyze in the sidebar (up to 5 at a time)
-3. **Browse tabs** — switch between channel groups using the tab bar
-4. **AI feedback** — select your AI provider in Settings, then switch to any tab — the AI coach automatically analyzes the current view and selected laps
-5. **Ask questions** — type a specific question in the chat panel at any time
+1. **Load a session** — click `+ Load file(s)…` in the sidebar and select one or more `.ibt` files, or let the app pick up new files from your iRacing telemetry folder (`Documents\iRacing\telemetry`) as they appear
+2. **Select laps** — click the laps you want to compare in the sidebar (up to 5 at a time)
+3. **Browse tabs** — switch between them in the tab bar, or with `[` and `]`
+4. **Watch it back** — press `L` for the full-screen replay
+5. **AI feedback** — choose a provider in Settings; the coach reads whichever view you are on
+6. **Ask questions** — type into the chat panel at any time
 
 ---
 
@@ -109,6 +125,13 @@ Recommended models: `llama3.1`, `mistral`, `qwen2.5`
 
 - **Frontend:** React + TypeScript + Tailwind CSS
 - **Backend:** Rust (Tauri v2)
-- **Charts:** Recharts
+- **3D:** three.js
+- **Charts:** custom canvas renderers, plus Recharts for the corner speed bars
 - **AI:** Ollama / OpenAI / Gemini (streaming SSE)
-- **Telemetry parsing:** Custom Rust `.ibt` parser
+- **Telemetry parsing:** custom Rust `.ibt` parser
+
+### Track geometry
+
+The stored circuits are built by the scripts in [`scripts/`](scripts/) from OpenStreetMap ways and the [TUM racetrack database](https://github.com/TUMFTM/racetrack-database), fitted to a real driven lap and checked against it. The check is whether the car stays inside the width stored for that spot, not how close the driven line is to the middle — a racing line is supposed to leave the middle.
+
+iRacing's own track files are encrypted and are not used.
