@@ -50,15 +50,19 @@ export const parseLapKey = (key: string): { sessionId: string; lapNumber: number
   return { sessionId: key.slice(0, idx), lapNumber: parseInt(key.slice(idx + 1)) }
 }
 
+// No amber and no orange anywhere in here: amber marks ABS inside the brake
+// trace, and a lap wearing the same colour would make its own trace look like
+// an ABS section. Teal and rose keep the first two places, which is what almost
+// every comparison uses.
 const LAP_COLORS = [
   '#64AAB2', // Teal
   '#F43F5E', // Rose
-  '#FBBF24', // Amber
   '#818CF8', // Indigo
   '#34D399', // Emerald
-  '#FB923C', // Orange
-  '#38BDF8', // Sky
   '#E879F9', // Fuchsia
+  '#38BDF8', // Sky
+  '#A78BFA', // Violet
+  '#94A3B8', // Slate
 ]
 
 export const getLapColor = (colorIndex: number) => LAP_COLORS[colorIndex % LAP_COLORS.length]
