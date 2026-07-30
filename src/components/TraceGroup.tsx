@@ -336,9 +336,7 @@ export default function TraceGroup() {
               </div>
             )
           }
-          return withData.map(channel => {
-            const bandCh = group.bandsFor?.[channel]
-            const chart = (
+          return withData.map(channel => (
             <TraceChart
               key={channel}
               channel={channel}
@@ -353,18 +351,7 @@ export default function TraceGroup() {
               registerRedraw={registerRedraw}
               height={130}
             />
-            )
-            if (!bandCh || !(traces[bandCh]?.length)) return chart
-            // The shading needs saying once, or it is just a coloured smear
-            return (
-              <div key={channel}>
-                {chart}
-                <p className="text-[10px] text-muted-foreground/70 px-1 pt-1">
-                  {t('bandHint').replace('%ch%', translateChannelLabel(bandCh, t))}
-                </p>
-              </div>
-            )
-          })
+          ))
         })()}
 
       </div>}
