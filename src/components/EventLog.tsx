@@ -34,6 +34,11 @@ const TINT: Record<string, string> = {
   missedShift: 'text-sky-500',
 }
 
+/** How far before the moment itself the jump lands. Landing on the peak shows
+ *  the aftermath — the wheel already locked, the car already off. A second of
+ *  run-up is what makes it possible to see how it happened. */
+const LEAD_IN_S = 1
+
 const fmtAt = (t: number) =>
   `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, '0')}`
 
@@ -115,7 +120,7 @@ export default function EventLog() {
     // The crosshair is measured from the start of a lap rather than from the
     // session, so `at` is the value that lines up with the traces.
     setSelectedLapKeys([lapKey(session!.id, e.lap_number)])
-    setCrosshairTime(e.at)
+    setCrosshairTime(Math.max(0, e.at - LEAD_IN_S))
   }
 
   if (!session) {
