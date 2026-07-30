@@ -73,8 +73,21 @@ function sliceVisible(data: DataPt[], domain: [number, number] | null): DataPt[]
 
 const PAD = { l: 44, r: 8, t: 12, b: 10 }
 
-/** Amber, the same one the 3D viewer's brake trace uses for ABS */
-const ABS_COLOR = '#f5a524'
+/** One amber per lap. The first is the shade the 3D viewer's brake trace uses,
+ *  so a single lap looks the same in both views; the rest vary in lightness and
+ *  saturation but stay inside the amber band, because the colour has to keep
+ *  saying "ABS" while telling two laps apart. */
+const ABS_COLORS = [
+  '#f5a524', // amber
+  '#ffd93d', // bright yellow
+  '#e07c0a', // deep amber
+  '#ffe98a', // pale yellow
+  '#f0b429', // gold
+  '#c98a05', // dark gold
+  '#ffc94d', // light amber
+  '#a87400', // bronze
+]
+const absColor = (colorIndex: number) => ABS_COLORS[colorIndex % ABS_COLORS.length]
 
 /** A y-axis bound: a fixed number, 'auto' to fit the data, or 'sym' to scale
  *  symmetrically around zero. */
@@ -234,7 +247,7 @@ function paintChart(
       const on = flags[i]
       let j = i + 1
       while (j < data.length - 1 && flags[j] === on) j++
-      ctx.strokeStyle = on ? ABS_COLOR : base
+      ctx.strokeStyle = on ? absColor(tr.colorIndex) : base
       ctx.lineWidth = on ? 2 : 1.5
       ctx.lineJoin = 'round'
       ctx.beginPath()
