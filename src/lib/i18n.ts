@@ -107,6 +107,7 @@ const EN = {
   // Lap table
   tabEvents: 'Events',
   tabAdjustments: 'Adjustments',
+  bandHint: 'Shaded areas: %ch% active, coloured by lap',
   setupLapTime: 'What the setup was worth',
   setupTimeAndGap: 'Lap time',
   setupOnlyDiff: 'Only differences',
@@ -261,6 +262,7 @@ const DICT: Record<string, Dict> = {
     tabGeneral: 'Allgemein', tabSetup: 'Setup', tabBraking: 'Bremsen', tabCornerSpeed: 'Kurvenspeed', tabLaps: 'Runden', tabRideHeight: 'Bodenfreiheit', tabRake: 'Neigung',
     tabEvents: 'Ereignisse',
     tabAdjustments: 'Verstellungen',
+    bandHint: 'Schattierte Bereiche: %ch% aktiv, in der Farbe der jeweiligen Runde',
     setupLapTime: 'Was das Setup gebracht hat',
     setupTimeAndGap: 'Rundenzeit',
     setupOnlyDiff: 'Nur Unterschiede',

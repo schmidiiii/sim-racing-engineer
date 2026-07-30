@@ -145,7 +145,8 @@ function paintChart(
   yDomain: [YBound, YBound] | undefined,
   dark: boolean,
   w: number,
-  h: number
+  h: number,
+  bands?: LapTrace[]
 ) {
   ctx.clearRect(0, 0, w, h)
   if (data.length < 2) return
@@ -181,6 +182,35 @@ function paintChart(
       PAD.l - 4,
       ty(v)
     )
+  }
+
+  // Bands first, so the trace is drawn over them. Each lap keeps its own
+  // colour: with two laps up it matters which of them had the ABS in.
+  if (bands?.length) {
+    const bData = buildData(bands)
+    ctx.save()
+    ctx.beginPath(); ctx.rect(PAD.l, PAD.t, W, H); ctx.clip()
+    for (const tr of bands) {
+      ctx.fillStyle = getLapColor(tr.colorIndex)
+      ctx.globalAlpha = dark ? 0.26 : 0.18
+      let from: number | null = null
+      for (let i = 0; i < bData.length; i++) {
+        const on = (bData[i][`t_${tr.colorIndex}`] ?? 0) > 0.5
+        if (on && from === null) from = bData[i].t
+        if (!on && from !== null) {
+          // At least a pixel wide, or a single-sample engagement would vanish
+          const x = tx(from), x2 = Math.max(tx(bData[i].t), x + 1)
+          ctx.fillRect(x, PAD.t, x2 - x, H)
+          from = null
+        }
+      }
+      if (from !== null) {
+        const x = tx(from)
+        ctx.fillRect(x, PAD.t, Math.max(tx(bData[bData.length - 1].t), x + 1) - x, H)
+      }
+    }
+    ctx.globalAlpha = 1
+    ctx.restore()
   }
 
   // Clip + trace lines — expand by 1px so lines exactly at 0%/100% aren't half-clipped
@@ -306,6 +336,10 @@ export interface Props {
   unit?: string
   yDomain?: [YBound, YBound]
   traces: LapTrace[]
+  /** Series drawn as shaded vertical bands behind the traces rather than as
+   *  lines. Used for on/off channels — ABS under the brake trace — where the
+   *  question is where it happened, not what value it took. */
+  bands?: LapTrace[]
   crosshairTime: number | null
   onMouseMove: (t: number | null) => void
   zoomRef: React.MutableRefObject<[number, number] | null>
@@ -316,7 +350,7 @@ export interface Props {
 
 
 export default function TraceChart({
-  channel, unit, yDomain, traces, crosshairTime, onMouseMove,
+  channel, unit, yDomain, traces, bands, crosshairTime, onMouseMove,
   zoomRef, onZoom, registerRedraw, height = 130,
 }: Props) {
   const dataCanvasRef = useRef<HTMLCanvasElement>(null)
@@ -326,6 +360,7 @@ export default function TraceChart({
 
   // Always-current refs (read during imperative draw, never stale)
   const tracesRef = useRef(traces); tracesRef.current = traces
+  const bandsRef = useRef(bands); bandsRef.current = bands
   const yDomainRef = useRef(yDomain); yDomainRef.current = yDomain
   const unitRef = useRef(unit); unitRef.current = unit
   const crosshairRef = useRef(crosshairTime); crosshairRef.current = crosshairTime
@@ -348,7 +383,7 @@ export default function TraceChart({
     const vis = sliceVisible(dataRef.current, zoomRef.current)
     const dcCtx = dc.getContext('2d')
     const xcCtx = xc.getContext('2d')
-    if (dcCtx) paintChart(dcCtx, vis, tracesRef.current, yDomainRef.current, dark, w, h)
+    if (dcCtx) paintChart(dcCtx, vis, tracesRef.current, yDomainRef.current, dark, w, h, bandsRef.current)
     if (xcCtx) paintCrosshair(xcCtx, vis, tracesRef.current, yDomainRef.current, unitRef.current, crosshairRef.current, dark, w, h)
   }, [zoomRef])
 

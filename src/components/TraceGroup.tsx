@@ -307,7 +307,10 @@ export default function TraceGroup() {
 
         {/* Chart cards — only render channels that have data */}
         {!isFetching && selectedLapKeys.length > 0 && (() => {
-          const channelsWithData = group.channels.filter(ch => (traces[ch]?.length ?? 0) > 0)
+          const hidden = new Set(group.hiddenChannels ?? [])
+          const channelsWithData = group.channels
+            .filter(ch => !hidden.has(ch))
+            .filter(ch => (traces[ch]?.length ?? 0) > 0)
 
           // Filter out channels that are flat (max-min below threshold) — some car models
           // report constant values for channels they don't simulate (e.g. tyre temps)
@@ -333,13 +336,16 @@ export default function TraceGroup() {
               </div>
             )
           }
-          return withData.map(channel => (
+          return withData.map(channel => {
+            const bandCh = group.bandsFor?.[channel]
+            const chart = (
             <TraceChart
               key={channel}
               channel={channel}
               unit={unitLabel(group.units[channel] ?? '', units)}
               yDomain={group.yDomains[channel]}
               traces={traces[channel] ?? []}
+              bands={group.bandsFor?.[channel] ? traces[group.bandsFor[channel]] : undefined}
               crosshairTime={crosshairTime}
               onMouseMove={setCrosshairTime}
               zoomRef={zoomRef}
@@ -347,7 +353,18 @@ export default function TraceGroup() {
               registerRedraw={registerRedraw}
               height={130}
             />
-          ))
+            )
+            if (!bandCh || !(traces[bandCh]?.length)) return chart
+            // The shading needs saying once, or it is just a coloured smear
+            return (
+              <div key={channel}>
+                {chart}
+                <p className="text-[10px] text-muted-foreground/70 px-1 pt-1">
+                  {t('bandHint').replace('%ch%', translateChannelLabel(bandCh, t))}
+                </p>
+              </div>
+            )
+          })
         })()}
 
       </div>}

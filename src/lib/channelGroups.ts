@@ -61,6 +61,13 @@ export interface ChannelGroupDef {
   transforms: Record<string, (v: number) => number>
   yDomains: Record<string, [YBound, YBound]>
   minVarianceToShow?: number  // skip channels with max-min below this threshold
+  /** Fetched but not given a chart of its own. `bandsFor` decides where it goes
+   *  instead. */
+  hiddenChannels?: string[]
+  /** Channel → an on/off channel shaded behind it. ABS belongs under the brake
+   *  trace, not in a chart of its own: on its own it is a row of blips with no
+   *  context, and what the reader wants is where in the braking it cut in. */
+  bandsFor?: Record<string, string>
 }
 
 const mps2kph = (v: number) => v * 3.6
@@ -78,6 +85,8 @@ export const CHANNEL_GROUPS: ChannelGroupDef[] = [
     // be inventing a meaning. The flag is what the 3D viewer's ABS lamp and the
     // amber section of the brake trace already use.
     channels: ['Speed', 'Throttle', 'Brake', 'Gear', 'SteeringWheelAngle', 'BrakeABSactive'],
+    hiddenChannels: ['BrakeABSactive'],
+    bandsFor: { Brake: 'BrakeABSactive' },
     units: {
       Speed: 'km/h', Throttle: '%', Brake: '%', Gear: '',
       SteeringWheelAngle: 'deg', BrakeABSactive: '',
