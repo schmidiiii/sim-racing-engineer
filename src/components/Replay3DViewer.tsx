@@ -1831,7 +1831,12 @@ export default function Replay3DViewer() {
     // pulls the ground down to itself. Only that case — widening the radius for
     // every vertex was tried and dropped the Nordschleife's ground by 77 m.
     const UNDER_DY = 4 * M
-    const NEAR_SQ = T_NEAR * T_NEAR
+    // Searched out to the far radius, not the near one. A terrain cell is about
+    // ninety metres across, so a forty-five metre search sits inside half a cell
+    // and often contains no grid vertex at all — the rule fired on paper and
+    // changed nothing on screen. The depression under a bridge has to be at
+    // least a cell wide to exist.
+    const UNDER_SQ = T_FAR * T_FAR
     const groundHeightAt = (vx: number, vz: number): number => {
       let minD2 = Infinity, closestY = 0, minNearY = Infinity, minZoneY = Infinity
       // j+=1: find true nearest road point — j+=2 could skip odd-index nearest → wrong closestY → clipping
@@ -1840,7 +1845,7 @@ export default function Replay3DViewer() {
         const d2 = dx * dx + dz * dz
         if (d2 < minD2) { minD2 = d2; closestY = basePts[j].y }
         if (d2 < SHIELD_SQ) minNearY = Math.min(minNearY, basePts[j].y)
-        if (d2 < NEAR_SQ) minZoneY = Math.min(minZoneY, basePts[j].y)
+        if (d2 < UNDER_SQ) minZoneY = Math.min(minZoneY, basePts[j].y)
       }
       if (closestY - minZoneY > UNDER_DY) minNearY = Math.min(minNearY, minZoneY)
       // IDW with j+=2 is fine for smooth height (nearby jitter negligible)
