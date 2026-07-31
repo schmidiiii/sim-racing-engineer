@@ -1797,6 +1797,37 @@ export default function Replay3DViewer() {
     // thin would disappear against it
     const LINE_WIDTH = LINE_WIDTH_M * DETAIL * M
 
+    // Which stretches have another stretch of road above them.
+    //
+    // Worked out before the terrain, because the ground has to be cut away
+    // under them: the car drives through there, and a bank rising to the level
+    // of the road overhead closes the gap into a hill. The corridor is carved
+    // explicitly rather than left to the height rules below, which reason from
+    // the nearest road and kept finding the bridge.
+    const UNDER_BRIDGE: { x: number; z: number; y: number }[] = []
+    {
+      const nb = basePts.length
+      const cum = new Float64Array(nb)
+      for (let i = 1; i < nb; i++) {
+        cum[i] = cum[i - 1] + Math.hypot(basePts[i].x - basePts[i - 1].x, basePts[i].z - basePts[i - 1].z)
+      }
+      const totalArc = cum[nb - 1]
+      for (let i = 0; i < nb; i++) {
+        for (let j = 0; j < nb; j++) {
+          let along = Math.abs(cum[i] - cum[j])
+          along = Math.min(along, totalArc - along)
+          if (along < 150 * M) continue
+          const dx = basePts[j].x - basePts[i].x, dz = basePts[j].z - basePts[i].z
+          if (dx * dx + dz * dz > (20 * M) * (20 * M)) continue
+          // j is above i, so i is the one that needs the sky kept open
+          if (basePts[j].y - basePts[i].y > 4 * M) {
+            UNDER_BRIDGE.push({ x: basePts[i].x, z: basePts[i].z, y: basePts[i].y })
+            break
+          }
+        }
+      }
+    }
+
     // ── Elevation terrain grid ─────────────────────────────────────────────
     // T_NEAR=20: any vertex within 20wu of track center → set to road height (flush, no float).
     // T_FAR=60:  blend to IDW beyond that.
@@ -1877,8 +1908,27 @@ export default function Replay3DViewer() {
       const rise = Math.min(FAR_RISE, (minD - T_FAR) / T_FAR * FAR_RISE)
       return Math.min(idwY, floorY + rise)
     }
+
+    // The corridor under a bridge, applied on top of whatever the rules above
+    // decided. Wide enough that the opening reads as something to drive
+    // through: the road is about fourteen metres, this clears fifty.
+    const UNDER_R = 50 * M
+    const UNDER_R_SQ = UNDER_R * UNDER_R
+    const groundWithUnderpass = (vx: number, vz: number): number => {
+      let y = groundHeightAt(vx, vz)
+      for (const u of UNDER_BRIDGE) {
+        const dx = u.x - vx, dz = u.z - vz
+        const d2 = dx * dx + dz * dz
+        if (d2 > UNDER_R_SQ) continue
+        // Flat under the deck, easing back up towards the edge of the corridor
+        const t = Math.sqrt(d2) / UNDER_R
+        const ease = t * t * (3 - 2 * t)
+        y = Math.min(y, u.y - 1.8 * M + ease * 6 * M)
+      }
+      return y
+    }
     for (let vi = 0; vi < tPos.count; vi++) {
-      tPos.setY(vi, groundHeightAt(tPos.getX(vi), tPos.getZ(vi)))
+      tPos.setY(vi, groundWithUnderpass(tPos.getX(vi), tPos.getZ(vi)))
     }
     tPos.needsUpdate = true
     terrainGeo.computeVertexNormals()
@@ -2003,7 +2053,7 @@ export default function Replay3DViewer() {
             if (sinceP >= PIER_EVERY) {
               sinceP = 0
               const p = basePts[i]
-              const gy = groundHeightAt(p.x, p.z)
+              const gy = groundWithUnderpass(p.x, p.z)
               const top = p.y - DECK
               const h = top - gy
               if (h > 0.5 * M) {
@@ -2672,7 +2722,7 @@ export default function Replay3DViewer() {
           // groundHeightAt deliberately sits 1.8 m below the road so the terrain
           // cannot push through it — a sign taking that verbatim ends up buried.
           // Four metres from the edge the road's own height is the better guide.
-          const base = Math.max(groundHeightAt(at.x, at.z), p.y - 0.4 * M)
+          const base = Math.max(groundWithUnderpass(at.x, at.z), p.y - 0.4 * M)
           if (!mats.has(dist)) mats.set(dist, board(dist))
           const g = new THREE.PlaneGeometry(W * 2, H * 2)
           const m = new THREE.Mesh(g, mats.get(dist)!)
@@ -2737,9 +2787,28 @@ export default function Replay3DViewer() {
         scene.add(new THREE.Mesh(paint(sideStrip(0, n - 1, side, halfW, inner,
           p => p.y - 0.10 * DETAIL * M, p => p.y - 0.16 * DETAIL * M)), vergeMat))
         // …and from there down to the terrain, picking up exactly the height the
-        // grid draws so the two meet flush
-        scene.add(new THREE.Mesh(paint(sideStrip(0, n - 1, side, inner, outer,
-          p => p.y - 0.16 * DETAIL * M, (_p, x, z) => groundHeightAt(x, z))), vergeMat))
+        // grid draws so the two meet flush.
+        //
+        // Not across a bridge. This strip runs from the road edge down to the
+        // ground, so over a crossing it hangs off the deck as a green curtain
+        // reaching all the way to the road below — which is what closed the
+        // underpass into a hill.
+        const vergeRuns: [number, number][] = []
+        if (!bridgeStations) vergeRuns.push([0, n - 1])
+        else {
+          let from = 0
+          for (let i = 0; i < n; i++) {
+            if (!bridgeStations[i]) continue
+            if (i - from >= 2) vergeRuns.push([from, i - 1])
+            while (i < n && bridgeStations[i]) i++
+            from = i
+          }
+          if (n - 1 - from >= 2) vergeRuns.push([from, n - 1])
+        }
+        for (const [a, b] of vergeRuns) {
+          scene.add(new THREE.Mesh(paint(sideStrip(a, b, side, inner, outer,
+            p => p.y - 0.16 * DETAIL * M, (_p, x, z) => groundWithUnderpass(x, z))), vergeMat))
+        }
       }
     }
 
@@ -2824,7 +2893,7 @@ export default function Replay3DViewer() {
         const pos = basePts[i].clone().addScaledVector(perp, side * lateral).addScaledVector(tan, fwdJitter)
         if (tooClose(pos.x, pos.z)) continue
         // Same height rule the ground uses, so trees stand on it rather than in it
-        pos.y = groundHeightAt(pos.x, pos.z)
+        pos.y = groundWithUnderpass(pos.x, pos.z)
         const trunkH = treeH * 0.32
         const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.35 * M, 0.55 * M, trunkH, 5), trunkMat)
         trunk.position.set(pos.x, pos.y + trunkH / 2, pos.z)
