@@ -42,6 +42,33 @@ function interpTime(samples: number[], ts: number[], dist: number): number | nul
   return null
 }
 
+/** How far round the lap the car was, in percent, `t` seconds in — the inverse
+ *  of `interpTime`, and what turns a time domain into a distance one. */
+function pctAtTime(lap: LapDist, t: number): number {
+  const { timestamps, samples } = lap
+  const last = timestamps.length - 1
+  if (last < 0) return 0
+  if (t <= timestamps[0]) return samples[0] * 100
+  if (t >= timestamps[last]) return samples[last] * 100
+  let lo = 0, hi = last
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1
+    if (timestamps[mid] <= t) lo = mid; else hi = mid
+  }
+  const span = timestamps[hi] - timestamps[lo]
+  const f = span > 0 ? (t - timestamps[lo]) / span : 0
+  return (samples[lo] + (samples[hi] - samples[lo]) * f) * 100
+}
+
+/** And back again. Clamped at both ends: the first sample is already a little
+ *  past the line and the last a little short of it, and a zoom that runs to
+ *  either edge must not come back as "no crossing found". */
+function timeAtPct(lap: LapDist, pct: number): number {
+  const t = interpTime(lap.samples, lap.timestamps, pct / 100)
+  if (t !== null) return t
+  return pct <= 0 ? lap.timestamps[0] : lap.timestamps[lap.timestamps.length - 1]
+}
+
 function computeDeltaPoints(ref: LapDist, other: LapDist): DeltaEntry['deltaPoints'] {
   const refT0 = ref.timestamps[0]
   const othT0 = other.timestamps[0]
@@ -80,11 +107,22 @@ function fmtT(t: number | null): string {
 
 // ── Chart ─────────────────────────────────────────────────────────────────────
 
-const VW = 1000, VH = 140, PL = 48, PR = 8, PT = 8, PB = 22
-const IW = VW - PL - PR, IH = VH - PT - PB
+// Drawn in real pixels rather than a fixed viewBox that stretches to the
+// container: scaled, the chart grew with the window and stood a third taller
+// than the trace charts under it, with labels to match. `PL`/`PR` are the
+// TraceChart paddings, so both axes stand on the same line down the page.
+const PL = 44, PR = 8, PT = 8, PB = 22
+
+/** The next round number up from `raw` — 1, 2, 2.5 or 5 times a power of ten. */
+function niceStep(raw: number): number {
+  if (!isFinite(raw) || raw <= 0) return 1
+  const p = Math.pow(10, Math.floor(Math.log10(raw)))
+  const n = raw / p
+  return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * p
+}
 
 function DeltaChart({
-  entries, refIdx, cursorPct, zoom, bounds, onHover, onZoomChange,
+  entries, refIdx, cursorPct, zoom, bounds, width, height, onHover, onZoomChange,
 }: {
   entries: DeltaEntry[]
   refIdx: number
@@ -92,16 +130,22 @@ function DeltaChart({
   zoom: [number, number] | null
   /** Interior sector lines as lap fractions */
   bounds: number[]
+  width: number
+  height: number
   onHover: (pct: number | null) => void
   onZoomChange: (z: [number, number] | null) => void
 }) {
   const svgRef = useRef<SVGSVGElement>(null)
+  const IW = Math.max(1, width - PL - PR)
+  const IH = Math.max(1, height - PT - PB)
 
-  // Stable refs so the wheel handler never captures stale zoom/callback values
+  // Stable refs so the wheel handler never captures stale zoom/size/callback values
   const zoomRef = useRef(zoom)
   zoomRef.current = zoom
   const onZoomRef = useRef(onZoomChange)
   onZoomRef.current = onZoomChange
+  const geomRef = useRef({ width, IW })
+  geomRef.current = { width, IW }
 
   // Scroll-to-zoom — same logic as TraceChart but in pct space [0, 100]
   useEffect(() => {
@@ -114,7 +158,8 @@ function DeltaChart({
       const factor = e.deltaY > 0 ? 1.25 : 0.8
       const newSpan = Math.min(span * factor, 100)
       const rect = el.getBoundingClientRect()
-      const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left - rect.width * PL / VW) / (rect.width * IW / VW)))
+      const g = geomRef.current
+      const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left - rect.width * PL / g.width) / (rect.width * g.IW / g.width)))
       const center = zMin + ratio * span
       let lo = center - ratio * newSpan
       let hi = center + (1 - ratio) * newSpan
@@ -125,6 +170,66 @@ function DeltaChart({
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
   }, [])
+
+  // Left-click drag → pan when zoomed in, as on the trace charts. Zoomed to a
+  // corner, the way to the next one was to zoom out and back in again.
+  const draggingRef = useRef(false)
+  useEffect(() => {
+    const el = svgRef.current
+    if (!el) return
+
+    let drag: { x: number; lo: number; hi: number } | null = null
+
+    const move = (e: MouseEvent) => {
+      if (!drag) return
+      const g = geomRef.current
+      const rect = el.getBoundingClientRect()
+      // The plot area in screen pixels — the viewBox may be scaled to fit
+      const W = rect.width * g.IW / g.width
+      if (W <= 0) return
+      const span = drag.hi - drag.lo
+      const d = -(e.clientX - drag.x) / W * span
+      let lo = drag.lo + d, hi = drag.hi + d
+      if (lo < 0) { lo = 0; hi = span }
+      if (hi > 100) { hi = 100; lo = 100 - span }
+      onZoomRef.current([lo, hi])
+    }
+
+    const up = () => {
+      drag = null
+      draggingRef.current = false
+      el.style.cursor = zoomRef.current ? 'grab' : 'crosshair'
+      document.body.style.userSelect = ''
+      document.removeEventListener('mousemove', move)
+      document.removeEventListener('mouseup', up)
+    }
+
+    const down = (e: MouseEvent) => {
+      if (e.button !== 0 || !zoomRef.current) return
+      e.preventDefault()
+      drag = { x: e.clientX, lo: zoomRef.current[0], hi: zoomRef.current[1] }
+      draggingRef.current = true
+      el.style.cursor = 'grabbing'
+      document.body.style.userSelect = 'none'
+      document.addEventListener('mousemove', move)
+      document.addEventListener('mouseup', up)
+    }
+
+    el.addEventListener('mousedown', down)
+    return () => {
+      el.removeEventListener('mousedown', down)
+      document.removeEventListener('mousemove', move)
+      document.removeEventListener('mouseup', up)
+    }
+  }, [])
+
+  // Set imperatively, not as a style prop: panning changes the zoom on every
+  // mouse move, and a re-render would put "grab" back under a hand that is
+  // already dragging
+  useEffect(() => {
+    const el = svgRef.current
+    if (el && !draggingRef.current) el.style.cursor = zoom ? 'grab' : 'crosshair'
+  }, [zoom])
 
   const nonRef = entries.filter((_, i) => i !== refIdx && entries[i].deltaPoints.length > 0)
   if (!nonRef.length) return null
@@ -148,6 +253,16 @@ function DeltaChart({
   const zY = yS(0)
   const buf = zRange * 0.01
 
+  // Gridlines on round values — a quarter of a second, half a second — rather
+  // than four even splits of whatever the range happens to be. Zero always lands
+  // on one of them, so the line that separates faster from slower is a gridline
+  // and not something drawn across them.
+  const step = niceStep(yRange / 4)
+  const decimals = step >= 1 ? 1 : step >= 0.1 ? 2 : 3
+  const yTicks: number[] = []
+  for (let v = Math.ceil(yMin / step) * step; v <= yMax + step * 1e-6; v += step)
+    yTicks.push(Math.abs(v) < step * 1e-6 ? 0 : v)
+
   // Interpolated, not the nearest point: the series is sampled every fraction of
   // a percent and the nearest one can be several hundredths of a second away.
   const deltaAt = (pts: { pct: number; delta: number }[], pct: number): number | null => {
@@ -166,7 +281,7 @@ function DeltaChart({
 
   const pctFromEvent = (e: React.MouseEvent<SVGSVGElement>) => {
     const rect = e.currentTarget.getBoundingClientRect()
-    const vbX = ((e.clientX - rect.left) / rect.width) * VW
+    const vbX = ((e.clientX - rect.left) / rect.width) * width
     const clamped = Math.max(PL, Math.min(PL + IW, vbX))
     return zMin + ((clamped - PL) / IW) * zRange
   }
@@ -174,11 +289,11 @@ function DeltaChart({
   return (
     <svg
       ref={svgRef}
-      viewBox={`0 0 ${VW} ${VH}`}
-      className="w-full cursor-crosshair select-none"
-      style={{ display: 'block' }}
-      onMouseMove={e => onHover(pctFromEvent(e))}
-      onMouseLeave={() => onHover(null)}
+      viewBox={`0 0 ${width} ${height}`}
+      className="w-full select-none"
+      style={{ display: 'block', height }}
+      onMouseMove={e => { if (!draggingRef.current) onHover(pctFromEvent(e)) }}
+      onMouseLeave={() => { if (!draggingRef.current) onHover(null) }}
     >
       <defs>
         <clipPath id="delta-clip">
@@ -187,18 +302,24 @@ function DeltaChart({
       </defs>
 
       {/* Transparent hit area so wheel/mouse events fire over empty space */}
-      <rect x={0} y={0} width={VW} height={VH} fill="transparent" />
+      <rect x={0} y={0} width={width} height={height} fill="transparent" />
 
-      {/* Zero line */}
-      <line x1={PL} y1={zY} x2={VW - PR} y2={zY}
+      {/* Horizontal grid, as on the trace charts */}
+      {yTicks.map(v => (
+        <line key={`g${v}`} x1={PL} y1={yS(v)} x2={width - PR} y2={yS(v)}
+          stroke="hsl(var(--foreground))" strokeWidth={1} opacity={0.08} />
+      ))}
+
+      {/* Zero line, drawn over the grid: it is the one the eye reads against */}
+      <line x1={PL} y1={zY} x2={width - PR} y2={zY}
         stroke="hsl(var(--foreground))" strokeWidth={1} opacity={0.3} />
 
       {/* Sector split lines */}
       {bounds.map((b, i) => {
         const x = xS(b * 100)
-        if (x < PL || x > VW - PR) return null
+        if (x < PL || x > width - PR) return null
         return (
-          <line key={i} x1={x} y1={PT} x2={x} y2={VH - PB}
+          <line key={i} x1={x} y1={PT} x2={x} y2={height - PB}
             stroke="hsl(var(--muted-foreground))" strokeWidth={1}
             strokeDasharray="4 3" opacity={0.4} />
         )
@@ -210,32 +331,30 @@ function DeltaChart({
       {[0, ...bounds, 1].slice(0, -1).map((from, i) => {
         const to = [0, ...bounds, 1][i + 1]
         const x = xS((from + to) / 2 * 100)
-        if (x < PL || x > VW - PR) return null
+        if (x < PL || x > width - PR) return null
         if (Math.abs(xS(to * 100) - xS(from * 100)) < 26) return null
         return (
-          <text key={i} x={x} y={PT + 11} textAnchor="middle" fontSize={11}
+          <text key={i} x={x} y={PT + 9} textAnchor="middle" fontSize={10}
             fill="hsl(var(--muted-foreground))" opacity={0.6}>S{i + 1}</text>
         )
       })}
 
-      {/* Y axis labels */}
-      <text x={PL - 5} y={zY + 4} textAnchor="end" fontSize={10} fill="hsl(var(--muted-foreground))">0</text>
-      <text x={PL - 5} y={yS(maxD) + 4} textAnchor="end" fontSize={10} fill="hsl(var(--muted-foreground))">
-        +{maxD.toFixed(2)}
-      </text>
-      {minD < -0.05 && (
-        <text x={PL - 5} y={yS(minD) + 4} textAnchor="end" fontSize={10} fill="hsl(var(--muted-foreground))">
-          {minD.toFixed(2)}
+      {/* Y axis labels — one per gridline, signed, because which side of zero a
+          value is on is the whole reading */}
+      {yTicks.map(v => (
+        <text key={`l${v}`} x={PL - 5} y={yS(v) + 3.5} textAnchor="end" fontSize={10}
+          fill="hsl(var(--muted-foreground))">
+          {v > 0 ? '+' : ''}{v.toFixed(decimals)}
         </text>
-      )}
+      ))}
 
       {/* X axis labels — show actual pct values within zoom range */}
       {[0, 25, 50, 75, 100].map(v => {
         const actualPct = zMin + (v / 100) * zRange
         const x = xS(actualPct)
-        if (x < PL - 5 || x > VW - PR + 5) return null
+        if (x < PL - 5 || x > width - PR + 5) return null
         return (
-          <text key={v} x={x} y={VH - PB + 14}
+          <text key={v} x={x} y={height - PB + 14}
             textAnchor="middle" fontSize={10} fill="hsl(var(--muted-foreground))">
             {actualPct.toFixed(0)}%
           </text>
@@ -303,7 +422,7 @@ function DeltaChart({
         <g>
           <line
             x1={xS(cursorPct)} y1={PT}
-            x2={xS(cursorPct)} y2={VH - PB}
+            x2={xS(cursorPct)} y2={height - PB}
             stroke="hsl(var(--foreground))" strokeWidth={1.5}
             opacity={0.5} strokeDasharray="3 2"
           />
@@ -443,17 +562,18 @@ function DeltaMap({ path, points, cursorPct }: {
   )
 }
 
-// ── Main component ─────────────────────────────────────────────────────────────
+// ── Data ───────────────────────────────────────────────────────────────────────
 
-export default function DeltaView() {
-  const t = useT()
+/** Everything the delta views read: the laps, which one is the reference, and
+ *  the two-way link between the chart's x position and the shared crosshair.
+ *  Split out from the view because the chart card is shown in two places. */
+function useDeltaData(withPath = true) {
   const { sessions, selectedLapKeys, crosshairTime, setCrosshairTime } = useSessionStore()
   const [entries, setEntries] = useState<DeltaEntry[]>([])
   // Position of the reference lap, for the map. Fetched separately because the
   // delta itself needs only lap distance.
   const [refPath, setRefPath] = useState<{ lat: number[]; lon: number[]; pct: number[] } | null>(null)
   const [status, setStatus] = useState<'idle' | 'loading' | 'ok' | 'nodata'>('idle')
-  const [zoom, setZoom] = useState<[number, number] | null>(null)
 
   const lapKeyStr = selectedLapKeys.join(',')
 
@@ -472,10 +592,6 @@ export default function DeltaView() {
     () => (sectorKey ? sectorKey.split(',').map(Number) : EVEN_THIRDS),
     [sectorKey],
   )
-
-  useEffect(() => {
-    setZoom(null)
-  }, [lapKeyStr])
 
   useEffect(() => {
     if (!selectedLapKeys.length) { setStatus('idle'); return }
@@ -530,6 +646,10 @@ export default function DeltaView() {
       })))
       setStatus('ok')
 
+      // Only the delta map reads the reference lap's position, so the chart on
+      // its own does not pay for two more channel fetches
+      if (!withPath) return
+
       try {
         const [la, lo] = await Promise.all(['Lat', 'Lon'].map(ch =>
           invoke<LapChannelData[]>('get_lap_channel_data',
@@ -548,30 +668,159 @@ export default function DeltaView() {
     ? entries.reduce((bi, e, i) => e.lap.lapTime < entries[bi].lap.lapTime ? i : bi, 0)
     : 0
 
-  // Convert crosshairTime → LapDistPct via binary search on reference lap timestamps
-  const cursorPct = useMemo(() => {
-    if (crosshairTime == null || entries.length < 2) return null
-    const ref = entries[refIdx]
-    if (!ref) return null
-    const { timestamps, samples } = ref.lap
-    let lo = 0, hi = timestamps.length - 1
-    while (lo < hi - 1) {
-      const mid = (lo + hi) >> 1
-      if (timestamps[mid] <= crosshairTime) lo = mid
-      else hi = mid
-    }
-    const idx = Math.abs(timestamps[lo] - crosshairTime) <= Math.abs(timestamps[hi] - crosshairTime) ? lo : hi
-    return samples[idx] * 100
-  }, [crosshairTime, entries, refIdx])
+  // The lap the trace charts scale their x axis by: TraceChart takes whichever
+  // selected lap has the most samples, and every channel of a lap is sampled
+  // together, so counting LapDistPct picks the same one. Both the crosshair and
+  // the zoom convert through it — through any other lap they would land a slice
+  // of a lap time out from the traces, and from each other.
+  const baseLap = entries.length
+    ? entries.reduce((a, b) =>
+        a.lap.timestamps.length >= b.lap.timestamps.length ? a : b).lap
+    : null
+
+  // crosshairTime (seconds into the lap) → LapDistPct
+  const cursorPct = useMemo(
+    () => (crosshairTime == null || !baseLap || entries.length < 2
+      ? null
+      : pctAtTime(baseLap, crosshairTime)),
+    [crosshairTime, baseLap, entries.length],
+  )
 
   // Hovered LapDistPct → timestamp → sync crosshairTime (drives track map + telemetry charts)
   const handleHover = (pct: number | null) => {
-    if (pct === null || entries.length < 2) return
-    const ref = entries[refIdx]
-    if (!ref) return
-    const time = interpTime(ref.lap.samples, ref.lap.timestamps, pct / 100)
-    if (time !== null) setCrosshairTime(time)
+    if (pct === null || !baseLap || entries.length < 2) return
+    setCrosshairTime(timeAtPct(baseLap, pct))
   }
+
+  return {
+    selectedLapKeys, lapKeyStr, entries, refIdx, refPath, status,
+    sectorBounds, cursorPct, handleHover, baseLap,
+  }
+}
+
+// ── Chart card ─────────────────────────────────────────────────────────────────
+
+/** The delta chart with its header and legend. Built like a TraceChart card —
+ *  same padding, same header, same plot height — so a row of them reads as one
+ *  stack. The zoom is the caller's: on the Delta tab it is the card's own, on
+ *  the General tab it is the one the traces share. */
+export function DeltaChartCard({
+  entries, refIdx, cursorPct, bounds, zoom, height = 130, showHint = false, onHover, onZoomChange,
+}: {
+  entries: DeltaEntry[]
+  refIdx: number
+  cursorPct: number | null
+  bounds: number[]
+  zoom: [number, number] | null
+  height?: number
+  showHint?: boolean
+  onHover: (pct: number | null) => void
+  onZoomChange: (z: [number, number] | null) => void
+}) {
+  const t = useT()
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const [width, setWidth] = useState(0)
+
+  // The chart draws in pixels, so it has to be told how many it has
+  useEffect(() => {
+    const el = wrapRef.current
+    if (!el) return
+    const ro = new ResizeObserver(() =>
+      setWidth(Math.max(1, Math.round(el.getBoundingClientRect().width))))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  return (
+    <div className="bg-card rounded-xl border border-border shadow-sm p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-semibold text-foreground">
+          Delta<span className="text-xs font-normal text-muted-foreground ml-1">(s)</span>
+        </h3>
+        <div className="flex items-center gap-3">
+          {entries.map((e, i) => (
+            <span key={e.lap.key} className="flex items-center gap-1 text-xs text-muted-foreground">
+              <span className="inline-block w-3 h-0.5 rounded"
+                style={{ background: getLapColor(e.lap.colorIndex) }} />
+              L{e.lap.lapNumber}{i === refIdx ? ' ★' : ''}
+            </span>
+          ))}
+        </div>
+      </div>
+      <div ref={wrapRef} style={{ height }}>
+        {width > 0 && (
+          <DeltaChart
+            entries={entries}
+            refIdx={refIdx}
+            cursorPct={cursorPct}
+            zoom={zoom}
+            bounds={bounds}
+            width={width}
+            height={height}
+            onHover={onHover}
+            onZoomChange={onZoomChange}
+          />
+        )}
+      </div>
+      {showHint && (
+        <p className="text-[10px] text-muted-foreground/50 mt-2">
+          ★ = {t('refLap')} · {t('deltaHint')}
+        </p>
+      )}
+    </div>
+  )
+}
+
+/** The same card for tabs that are about something else — it sits above the
+ *  traces there, so it stays quiet: no placeholders, nothing at all until there
+ *  are two laps to compare.
+ *
+ *  Its zoom is the traces' zoom, converted at the edges: they scale in seconds
+ *  into the lap, the delta in distance round it, and scrolling one without the
+ *  other left two charts above each other showing different corners. */
+export function DeltaOverviewCard({ onZoomTime }: {
+  onZoomTime: (domain: [number, number] | null) => void
+}) {
+  const { entries, refIdx, status, sectorBounds, cursorPct, handleHover, baseLap } = useDeltaData(false)
+  const zoomDomain = useSessionStore(s => s.zoomDomain)
+
+  if (status !== 'ok' || entries.length < 2 || !baseLap) return null
+
+  const zoom: [number, number] | null = zoomDomain
+    ? [pctAtTime(baseLap, zoomDomain[0]), pctAtTime(baseLap, zoomDomain[1])]
+    : null
+
+  const handleZoom = (z: [number, number] | null) => {
+    if (!z) { onZoomTime(null); return }
+    const lo = timeAtPct(baseLap, z[0]), hi = timeAtPct(baseLap, z[1])
+    onZoomTime(hi > lo ? [lo, hi] : null)
+  }
+
+  return (
+    <DeltaChartCard
+      entries={entries}
+      refIdx={refIdx}
+      cursorPct={cursorPct}
+      bounds={sectorBounds}
+      zoom={zoom}
+      onHover={handleHover}
+      onZoomChange={handleZoom}
+    />
+  )
+}
+
+// ── Main component ─────────────────────────────────────────────────────────────
+
+export default function DeltaView() {
+  const t = useT()
+  const {
+    selectedLapKeys, lapKeyStr, entries, refIdx, refPath, status,
+    sectorBounds, cursorPct, handleHover,
+  } = useDeltaData()
+
+  // This tab has no traces to keep in step, so the zoom is the chart's own
+  const [zoom, setZoom] = useState<[number, number] | null>(null)
+  useEffect(() => { setZoom(null) }, [lapKeyStr])
 
   if (!selectedLapKeys.length)
     return <div className="flex-1 flex items-center justify-center"><p className="text-sm text-muted-foreground">{t('selectLapsCompare')}</p></div>
@@ -592,31 +841,17 @@ export default function DeltaView() {
     <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-background">
 
       {/* Delta chart card */}
-      <div className="bg-card rounded-xl border border-border shadow-sm overflow-hidden">
-        <div className="flex items-center px-4 py-2.5 border-b border-border gap-4">
-          <p className="flex-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Delta</p>
-          {entries.map((e, i) => (
-            <span key={e.lap.key} className="text-[10px] font-bold flex items-center gap-1"
-              style={{ color: getLapColor(e.lap.colorIndex) }}>
-              L{e.lap.lapNumber}{i === refIdx ? ' ★' : ''}
-            </span>
-          ))}
-        </div>
-        <div className="px-3 py-2">
-          <DeltaChart
-            entries={entries}
-            refIdx={refIdx}
-            cursorPct={cursorPct}
-            zoom={zoom}
-            bounds={sectorBounds}
-            onHover={handleHover}
-            onZoomChange={setZoom}
-          />
-        </div>
-        <p className="text-[10px] text-muted-foreground/50 px-4 pb-2">
-          ★ = {t('refLap')} · {t('deltaHint')}
-        </p>
-      </div>
+      <DeltaChartCard
+        entries={entries}
+        refIdx={refIdx}
+        cursorPct={cursorPct}
+        bounds={sectorBounds}
+        zoom={zoom}
+        height={200}
+        showHint
+        onHover={handleHover}
+        onZoomChange={setZoom}
+      />
 
       {/* Where the time went, on the track itself */}
       {refPath && entries.some(e => e.deltaPoints.length > 0) && (

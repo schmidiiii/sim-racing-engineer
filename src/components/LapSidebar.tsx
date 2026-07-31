@@ -204,6 +204,62 @@ function ConsistencyPanel() {
   )
 }
 
+/** Fastest selected lap, track, car, driver. It sits above the viewer rather
+ *  than on the General tab because it describes the whole selection, not the
+ *  traces of one tab — and one line rather than a row of cards, so it costs the
+ *  viewer underneath it almost no height. */
+function SessionInfoBar() {
+  const t = useT()
+  const { sessions, selectedLapKeys, activeSessionId } = useSessionStore()
+
+  if (sessions.length === 0 || selectedLapKeys.length === 0) return null
+
+  const session = sessions.find(s => s.id === activeSessionId) ?? sessions[0]
+  const validTimes = (session?.laps ?? [])
+    .filter(l => selectedLapKeys.some(k => k.endsWith(`:${l.lap_number}`)))
+    .filter(l => l.is_valid && l.lap_time > 10)
+    .map(l => l.lap_time)
+  const fastest = validTimes.length > 0 ? Math.min(...validTimes) : null
+
+  // Two blocks rather than a run of label-value pairs: the time is the number
+  // being read, the rest says what it was set in. Laid out so nothing wraps —
+  // a long track name is cut, not moved to a line of its own.
+  return (
+    <div className="shrink-0 border-t border-border px-3 py-2 flex items-center gap-3 min-w-0">
+      <div className="shrink-0">
+        <p className="text-[9px] font-semibold uppercase tracking-widest text-muted-foreground/70 leading-none whitespace-nowrap">
+          {t('fastestSelected')}
+        </p>
+        <p className="mt-1 text-sm font-bold font-mono tabular-nums leading-none text-foreground">
+          {fastest != null ? fmtTime(fastest) : '–'}
+        </p>
+      </div>
+
+      <div className="w-px self-stretch bg-border/70" />
+
+      <div className="min-w-0 flex-1">
+        <p className="text-xs font-semibold text-foreground truncate leading-tight"
+          title={session?.track ?? ''}>
+          {session?.track ?? '–'}
+        </p>
+        {/* Older files and some offline sessions name no driver, and a dangling
+            separator reads worse than a line with just the car on it */}
+        <p className="text-[10px] text-muted-foreground truncate leading-tight"
+          title={[session?.car, session?.driver].filter(Boolean).join(' · ')}>
+          {session?.car ?? '–'}
+          {session?.driver && (
+            <><span className="text-muted-foreground/40 mx-1">·</span>{session.driver}</>
+          )}
+        </p>
+      </div>
+
+      <span className="shrink-0 text-[10px] font-medium text-muted-foreground/80 border border-border rounded-full px-2 py-0.5 whitespace-nowrap">
+        {selectedLapKeys.length} {t('lapsSelected')}
+      </span>
+    </div>
+  )
+}
+
 export default function LapSidebar() {
   const t = useT()
   const { sessions, activeSessionId, setActiveSessionId, removeSession, loading, error, loadFiles, autoLoad, setAutoLoad, sidebarMapExpanded } = useSessionStore()
@@ -342,6 +398,8 @@ export default function LapSidebar() {
       </div>
 
       <ConsistencyPanel />
+
+      <SessionInfoBar />
 
       <SidebarTrackMap />
     </aside>

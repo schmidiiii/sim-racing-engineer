@@ -5,7 +5,7 @@ import { CHANNEL_GROUPS, channelLabel } from '@/lib/channelGroups'
 import { convertByUnit, unitLabel } from '@/lib/units'
 import TraceChart, { LapTrace } from '@/components/TraceChart'
 import SetupView from '@/components/SetupView'
-import DeltaView from '@/components/DeltaView'
+import DeltaView, { DeltaOverviewCard } from '@/components/DeltaView'
 import BrakeAnalysis from '@/components/BrakeAnalysis'
 import CornerSpeed from '@/components/CornerSpeed'
 import LapTable from '@/components/LapTable'
@@ -22,19 +22,9 @@ interface LapChannelData {
   lap_dist_pct: number[]
 }
 
-function StatCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
-  return (
-    <div className="bg-card rounded-xl border border-border shadow-sm p-3 min-w-0">
-      <p className="text-muted-foreground text-[10px] font-medium uppercase tracking-wide truncate">{label}</p>
-      <p className="font-bold text-base mt-0.5 leading-tight text-foreground truncate" title={value}>{value}</p>
-      {sub && <p className="text-muted-foreground text-[10px] mt-0.5 truncate">{sub}</p>}
-    </div>
-  )
-}
-
 export default function TraceGroup() {
   const t = useT()
-  const { sessions, selectedLapKeys, crosshairTime, setCrosshairTime, setZoomDomain, activeSessionId, setActiveTabLabel, lapMapFullscreen, setLapMapFullscreen, units } = useSessionStore()
+  const { sessions, selectedLapKeys, crosshairTime, setCrosshairTime, setZoomDomain, setActiveTabLabel, lapMapFullscreen, setLapMapFullscreen, units } = useSessionStore()
   const [activeGroup, setActiveGroup] = useState(0)
   const [traces, setTraces] = useState<Record<string, LapTrace[]>>({})
   const [fetchError, setFetchError] = useState<string | null>(null)
@@ -207,17 +197,6 @@ export default function TraceGroup() {
     )
   }
 
-  // KPI values — follow activeSessionId
-  const session = sessions.find(s => s.id === activeSessionId) ?? sessions[0]
-  const selectedLaps = session?.laps.filter(l =>
-    selectedLapKeys.some(k => k.endsWith(`:${l.lap_number}`))
-  ) ?? []
-  const validTimes = selectedLaps.filter(l => l.is_valid && l.lap_time > 10).map(l => l.lap_time)
-  const fastest = validTimes.length > 0 ? Math.min(...validTimes) : null
-  const fastestStr = fastest != null
-    ? `${Math.floor(fastest / 60)}:${(fastest % 60).toFixed(3).padStart(6, '0')}`
-    : '–'
-
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Channel group tab bar */}
@@ -254,34 +233,12 @@ export default function TraceGroup() {
 
       {!group.viewType && <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-background">
 
-        {/* KPI row */}
-        {selectedLapKeys.length > 0 && (
-          <div className={`grid gap-2 ${session?.driver ? 'grid-cols-4' : 'grid-cols-3'}`}>
-            <StatCard
-              label={t('fastestSelected')}
-              value={fastestStr}
-              sub={`${selectedLapKeys.length} ${t('lapsSelected').toLowerCase()}`}
-            />
-            <StatCard
-              label={t('track')}
-              value={session?.track ?? '–'}
-              sub={session?.date?.slice(0, 10)}
-            />
-            <StatCard
-              label={t('car')}
-              value={session?.car ?? '–'}
-              sub={`${session?.laps.length ?? 0} ${t('lapsTotal')}`}
-            />
-            {/* Only when the session named a driver — older files and some
-                offline sessions do not carry one, and an empty card is worse
-                than none */}
-            {session?.driver && (
-              <StatCard
-                label={t('driver')}
-                value={session.driver}
-              />
-            )}
-          </div>
+        {/* Delta above everything else on the first tab: it is the question the
+            traces underneath it answer — where the time went — and it reads with
+            them because both follow the same crosshair. It shows itself only
+            when two laps are selected, so the tab is unchanged otherwise. */}
+        {group.label === 'General' && selectedLapKeys.length > 1 && (
+          <DeltaOverviewCard onZoomTime={handleZoom} />
         )}
 
         {/* Error */}
