@@ -1821,6 +1821,8 @@ export default function Replay3DViewer() {
     // count: the old constant behaved like 680 m on a big track, which averaged
     // the whole lap into one flat height.
     const IDW_SOFT = (30 * M) * (30 * M)
+    // How far the distant ground may sit above the nearest piece of road
+    const FAR_RISE = 10 * M
     // Where the circuit crosses itself the ground has to pass under the LOWER
     // of the two, and the shielding radius is too small to see it: a vertex ten
     // metres from the bridge and thirty-five from the road beneath it took the
@@ -1857,7 +1859,18 @@ export default function Replay3DViewer() {
         const st = (minD - T_NEAR) / (T_FAR - T_NEAR)
         return Math.min(floorY * (1 - st) + idwY * st, floorY)
       }
-      return idwY
+      // Beyond the blend the height was the inverse-distance average of the
+      // whole lap, with nothing holding it down. That is fine on a flat circuit,
+      // where the average is near the road anyway. Suzuka runs from 13.8 m to
+      // 54.0 m, so where the track is low the average sits some twenty metres
+      // above it and the ground rose into a wall closing in on the road.
+      //
+      // The far field may now climb above the nearest road, but only gradually
+      // and only so far — hills and banks survive, walls beside the track do
+      // not. The allowance starts at nothing exactly where the blend ends, so
+      // there is no step at the seam.
+      const rise = Math.min(FAR_RISE, (minD - T_FAR) / T_FAR * FAR_RISE)
+      return Math.min(idwY, floorY + rise)
     }
     for (let vi = 0; vi < tPos.count; vi++) {
       tPos.setY(vi, groundHeightAt(tPos.getX(vi), tPos.getZ(vi)))
