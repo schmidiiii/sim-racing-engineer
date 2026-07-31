@@ -2020,6 +2020,11 @@ export default function Replay3DViewer() {
         runs.push([Math.max(0, i - PAD), Math.min(nb - 1, j + PAD)])
         i = j
       }
+      // The stations that really are over something, before the padding is
+      // added. The deck and the aprons want the padded range; the piers do not
+      // — a pier in the padded part stands beside a road that crosses nothing,
+      // which is a concrete slab planted next to the circuit.
+      const core = onBridge.slice()
       // Mark the padding too, so the gravel stops where the deck starts rather
       // than overlapping its first few metres
       for (const [a, b] of runs) for (let i = a; i <= b; i++) onBridge[i] = 1
@@ -2055,7 +2060,7 @@ export default function Replay3DViewer() {
               quad(side(i, sg, 0), side(i2, sg, 0), side(i2, sg, WALL), side(i, sg, WALL))
             }
             sinceP += Math.hypot(basePts[i2].x - basePts[i].x, basePts[i2].z - basePts[i].z)
-            if (sinceP >= PIER_EVERY) {
+            if (core[i] && sinceP >= PIER_EVERY) {
               sinceP = 0
               const p = basePts[i]
               const gy = groundWithUnderpass(p.x, p.z)
