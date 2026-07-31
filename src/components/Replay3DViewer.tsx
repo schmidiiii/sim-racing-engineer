@@ -314,19 +314,7 @@ function resample(src: number[], length: number): number[] {
 // lateral placement that was wrong. The result is already evenly spaced and
 // ordered, so it needs none of the smoothing the driven line does.
 function storedCentrelinePts(track: StoredTrack, driven: THREE.Vector3[], tf: WorldTF): THREE.Vector3[] {
-  const m = driven.length
-  const cn = track.centreline.length
-  // Only a stretch of the driven line around where this point belongs is
-  // considered, not the whole lap.
-  //
-  // Suzuka crosses over itself, and the search is in plan only: a point on the
-  // bridge sits directly above the back straight, so scanning everything let it
-  // take the altitude of the road underneath. Both levels then came out at the
-  // same height and the crossover flattened into one surface — no bridge.
-  // Both paths run the same way round from the same line, so the position
-  // around the lap says which of the two is meant.
-  const WINDOW = Math.max(20, Math.round(m * 0.05))
-  const pts = track.centreline.map(([lat, lon], ci) => {
+  const pts = track.centreline.map(([lat, lon]) => {
     const p = toWorld(lat, lon, 0, tf)
     // Interpolated along the driven line rather than snapped to its nearest
     // sample. Snapping let neighbouring centreline points pick altitudes from
@@ -335,10 +323,8 @@ function storedCentrelinePts(track: StoredTrack, driven: THREE.Vector3[], tf: Wo
     // surface with it.
     let best = Infinity
     let y = driven.length ? driven[0].y : 0
-    const centre = Math.round((ci / cn) * m)
-    for (let k = -WINDOW; k <= WINDOW && m > 1; k++) {
-      const i = ((centre + k) % m + m) % m
-      const a = driven[(i - 1 + m) % m], b = driven[i]
+    for (let i = 1; i < driven.length; i++) {
+      const a = driven[i - 1], b = driven[i]
       const dx = b.x - a.x, dz = b.z - a.z
       const l2 = dx * dx + dz * dz
       let t = l2 ? ((p.x - a.x) * dx + (p.z - a.z) * dz) / l2 : 0
@@ -575,16 +561,7 @@ const softOffset = (d: number, R: number) => Number.isFinite(R) ? d / (1 + d / R
 // apron then cuts clean through the tarmac of its neighbour. Each point gets
 // half the distance to the nearest section that is far away along the lap, so
 // two neighbours meet at the midpoint instead of overlapping.
-/** Two stretches of road that pass over one another do not crowd each other.
- *
- *  Suzuka crosses itself — the back straight runs under the bridge — and this
- *  test only ever looked at x and z, so it read the two levels as neighbours a
- *  few metres apart and squeezed the road and its aprons down to nothing right
- *  where they should be at their normal width. A separation in height is a
- *  separation. */
-const CROSSOVER_M = 4
-
-function selfClearance(pts: THREE.Vector3[], perp: THREE.Vector3[], minArcSep: number, unitsPerMetre = 1) {
+function selfClearance(pts: THREE.Vector3[], perp: THREE.Vector3[], minArcSep: number) {
   const n = pts.length
   const pos = new Float64Array(n).fill(Infinity)
   const neg = new Float64Array(n).fill(Infinity)
@@ -600,8 +577,6 @@ function selfClearance(pts: THREE.Vector3[], perp: THREE.Vector3[], minArcSep: n
       let along = Math.abs(cum[i] - cum[j])
       along = Math.min(along, total - along)
       if (along < minArcSep) continue                 // same stretch of road
-      // Far enough above or below to be a bridge rather than a neighbour
-      if (Math.abs(pts[j].y - pi.y) > CROSSOVER_M * unitsPerMetre) continue
       const dx = pts[j].x - pi.x, dz = pts[j].z - pi.z
       const d = Math.hypot(dx, dz)
       if (dx * pe.x + dz * pe.z > 0) { if (d < pos[i]) pos[i] = d }
@@ -1797,40 +1772,6 @@ export default function Replay3DViewer() {
     // thin would disappear against it
     const LINE_WIDTH = LINE_WIDTH_M * DETAIL * M
 
-    // Which stretches have another stretch of road above them.
-    //
-    // Worked out before the terrain, because the ground has to be cut away
-    // under them: the car drives through there, and a bank rising to the level
-    // of the road overhead closes the gap into a hill. The corridor is carved
-    // explicitly rather than left to the height rules below, which reason from
-    // the nearest road and kept finding the bridge.
-    const UNDER_BRIDGE: { x: number; z: number; y: number; overY: number; i: number }[] = []
-    {
-      const nb = basePts.length
-      const cum = new Float64Array(nb)
-      for (let i = 1; i < nb; i++) {
-        cum[i] = cum[i - 1] + Math.hypot(basePts[i].x - basePts[i - 1].x, basePts[i].z - basePts[i - 1].z)
-      }
-      const totalArc = cum[nb - 1]
-      for (let i = 0; i < nb; i++) {
-        for (let j = 0; j < nb; j++) {
-          let along = Math.abs(cum[i] - cum[j])
-          along = Math.min(along, totalArc - along)
-          if (along < 150 * M) continue
-          const dx = basePts[j].x - basePts[i].x, dz = basePts[j].z - basePts[i].z
-          if (dx * dx + dz * dz > (20 * M) * (20 * M)) continue
-          // j is above i, so i is the one that needs the sky kept open
-          if (basePts[j].y - basePts[i].y > 4 * M) {
-            UNDER_BRIDGE.push({
-              x: basePts[i].x, z: basePts[i].z, y: basePts[i].y,
-              overY: basePts[j].y, i,
-            })
-            break
-          }
-        }
-      }
-    }
-
     // ── Elevation terrain grid ─────────────────────────────────────────────
     // T_NEAR=20: any vertex within 20wu of track center → set to road height (flush, no float).
     // T_FAR=60:  blend to IDW beyond that.
@@ -1855,33 +1796,15 @@ export default function Replay3DViewer() {
     // count: the old constant behaved like 680 m on a big track, which averaged
     // the whole lap into one flat height.
     const IDW_SOFT = (30 * M) * (30 * M)
-    // How far the distant ground may sit above the nearest piece of road
-    const FAR_RISE = 10 * M
-    // Where the circuit crosses itself the ground has to pass under the LOWER
-    // of the two, and the shielding radius is too small to see it: a vertex ten
-    // metres from the bridge and thirty-five from the road beneath it took the
-    // bridge's height and stood four metres above the road below, as a green
-    // wall alongside it. So a road that far below anywhere in the near zone
-    // pulls the ground down to itself. Only that case — widening the radius for
-    // every vertex was tried and dropped the Nordschleife's ground by 77 m.
-    const UNDER_DY = 4 * M
-    // Searched out to the far radius, not the near one. A terrain cell is about
-    // ninety metres across, so a forty-five metre search sits inside half a cell
-    // and often contains no grid vertex at all — the rule fired on paper and
-    // changed nothing on screen. The depression under a bridge has to be at
-    // least a cell wide to exist.
-    const UNDER_SQ = T_FAR * T_FAR
     const groundHeightAt = (vx: number, vz: number): number => {
-      let minD2 = Infinity, closestY = 0, minNearY = Infinity, minZoneY = Infinity
+      let minD2 = Infinity, closestY = 0, minNearY = Infinity
       // j+=1: find true nearest road point — j+=2 could skip odd-index nearest → wrong closestY → clipping
       for (let j = 0; j < basePts.length; j++) {
         const dx = basePts[j].x - vx, dz = basePts[j].z - vz
         const d2 = dx * dx + dz * dz
         if (d2 < minD2) { minD2 = d2; closestY = basePts[j].y }
         if (d2 < SHIELD_SQ) minNearY = Math.min(minNearY, basePts[j].y)
-        if (d2 < UNDER_SQ) minZoneY = Math.min(minZoneY, basePts[j].y)
       }
-      if (closestY - minZoneY > UNDER_DY) minNearY = Math.min(minNearY, minZoneY)
       // IDW with j+=2 is fine for smooth height (nearby jitter negligible)
       let totalW = 0, weightedY = 0
       for (let j = 0; j < basePts.length; j += 2) {
@@ -1898,40 +1821,10 @@ export default function Replay3DViewer() {
         const st = (minD - T_NEAR) / (T_FAR - T_NEAR)
         return Math.min(floorY * (1 - st) + idwY * st, floorY)
       }
-      // Beyond the blend the height was the inverse-distance average of the
-      // whole lap, with nothing holding it down. That is fine on a flat circuit,
-      // where the average is near the road anyway. Suzuka runs from 13.8 m to
-      // 54.0 m, so where the track is low the average sits some twenty metres
-      // above it and the ground rose into a wall closing in on the road.
-      //
-      // The far field may now climb above the nearest road, but only gradually
-      // and only so far — hills and banks survive, walls beside the track do
-      // not. The allowance starts at nothing exactly where the blend ends, so
-      // there is no step at the seam.
-      const rise = Math.min(FAR_RISE, (minD - T_FAR) / T_FAR * FAR_RISE)
-      return Math.min(idwY, floorY + rise)
-    }
-
-    // The corridor under a bridge, applied on top of whatever the rules above
-    // decided. Wide enough that the opening reads as something to drive
-    // through: the road is about fourteen metres, this clears fifty.
-    const UNDER_R = 50 * M
-    const UNDER_R_SQ = UNDER_R * UNDER_R
-    const groundWithUnderpass = (vx: number, vz: number): number => {
-      let y = groundHeightAt(vx, vz)
-      for (const u of UNDER_BRIDGE) {
-        const dx = u.x - vx, dz = u.z - vz
-        const d2 = dx * dx + dz * dz
-        if (d2 > UNDER_R_SQ) continue
-        // Flat under the deck, easing back up towards the edge of the corridor
-        const t = Math.sqrt(d2) / UNDER_R
-        const ease = t * t * (3 - 2 * t)
-        y = Math.min(y, u.y - 1.8 * M + ease * 6 * M)
-      }
-      return y
+      return idwY
     }
     for (let vi = 0; vi < tPos.count; vi++) {
-      tPos.setY(vi, groundWithUnderpass(tPos.getX(vi), tPos.getZ(vi)))
+      tPos.setY(vi, groundHeightAt(tPos.getX(vi), tPos.getZ(vi)))
     }
     tPos.needsUpdate = true
     terrainGeo.computeVertexNormals()
@@ -1961,166 +1854,6 @@ export default function Replay3DViewer() {
     }
     terrainGeo.setAttribute('color', new THREE.BufferAttribute(tCol, 3))
     scene.add(new THREE.Mesh(terrainGeo, new THREE.MeshLambertMaterial({ vertexColors: true })))
-
-    // ── Bridge where the circuit crosses itself ────────────────────────────
-    // Shared with the runoff below: a bridge carries a parapet, not a gravel
-    // trap, and an apron built at road height over a crossing hangs in the air
-    // above the road underneath. That overhang is what looked like a hill of
-    // terrain — the ground itself was measured and is below the road at every
-    // station on the lap.
-    let bridgeStations: Uint8Array | null = null
-    // Suzuka runs its back straight under the rest of the lap. Measured on a
-    // real lap the two branches pass 0.7 m apart in plan and 6.20 m apart in
-    // height, at 44% and 85% of the way round — so the pair is found by arc
-    // distance, plan distance and height together, and the higher of the two
-    // gets a deck, walls and piers. Nothing is built where a circuit does not
-    // cross itself, which is most of them.
-    {
-      const BRIDGE_MIN_ARC = 150 * M   // further apart than this along the lap
-      // Close enough in plan that the two really do overlap, not merely run
-      // parallel: a pair of straights forty metres apart with a step in height
-      // between them is a hillside, not a bridge. Suzuka's branches pass 4.7 m
-      // apart, so twenty is not tight.
-      const BRIDGE_NEAR = 20 * M
-      const BRIDGE_MIN_DY = 4 * M      // and this far above
-      const DECK = 0.9 * M             // how thick the deck reads from below
-      const WALL = 1.05 * M            // parapet height
-      const PIER_EVERY = 14 * M
-      const PIER_HALF = 0.7 * M
-
-      const { perp } = lateralLimits(basePts)
-      const nb = basePts.length
-      const cum = new Float64Array(nb)
-      for (let i = 1; i < nb; i++) {
-        cum[i] = cum[i - 1] + Math.hypot(basePts[i].x - basePts[i - 1].x, basePts[i].z - basePts[i - 1].z)
-      }
-      const totalArc = cum[nb - 1]
-      const onBridge = new Uint8Array(nb)
-      for (let i = 0; i < nb; i++) {
-        for (let j = 0; j < nb; j++) {
-          let along = Math.abs(cum[i] - cum[j])
-          along = Math.min(along, totalArc - along)
-          if (along < BRIDGE_MIN_ARC) continue
-          const dx = basePts[j].x - basePts[i].x, dz = basePts[j].z - basePts[i].z
-          if (dx * dx + dz * dz > BRIDGE_NEAR * BRIDGE_NEAR) continue
-          if (basePts[i].y - basePts[j].y > BRIDGE_MIN_DY) { onBridge[i] = 1; break }
-        }
-      }
-
-      // Contiguous runs, padded a little so the deck starts before the crossing
-      // and ends after it rather than stopping at the exact overlap
-      // Generous: the aprons and the verge stop across this range, and a few
-      // metres of either left beside the deck hang in the air
-      const PAD = Math.max(4, Math.round(30 * M / Math.max(totalArc / nb, 1e-6)))
-      const runs: [number, number][] = []
-      for (let i = 0; i < nb; i++) {
-        if (!onBridge[i]) continue
-        let j = i
-        while (j + 1 < nb && onBridge[j + 1]) j++
-        runs.push([Math.max(0, i - PAD), Math.min(nb - 1, j + PAD)])
-        i = j
-      }
-      // The stations that really are over something, before the padding is
-      // added. The deck and the aprons want the padded range; the piers do not
-      // — a pier in the padded part stands beside a road that crosses nothing,
-      // which is a concrete slab planted next to the circuit.
-      const core = onBridge.slice()
-      // Mark the padding too, so the gravel stops where the deck starts rather
-      // than overlapping its first few metres
-      for (const [a, b] of runs) for (let i = a; i <= b; i++) onBridge[i] = 1
-
-      bridgeStations = runs.length ? onBridge : null
-      if (runs.length) {
-        const halfPos = (i: number) => (edgePos ? edgePos[i] : ROAD_WIDTH / 2)
-        const halfNeg = (i: number) => (edgeNeg ? edgeNeg[i] : ROAD_WIDTH / 2)
-        const side = (i: number, sign: 1 | -1, dy: number) => {
-          const h = sign > 0 ? halfPos(i) : halfNeg(i)
-          const p = basePts[i]
-          return new THREE.Vector3(
-            p.x + perp[i].x * h * sign, p.y + dy, p.z + perp[i].z * h * sign,
-          )
-        }
-        const verts: number[] = []
-        const quad = (a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3, d: THREE.Vector3) => {
-          verts.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z)
-          verts.push(a.x, a.y, a.z, c.x, c.y, c.z, d.x, d.y, d.z)
-        }
-
-        const piers: THREE.Matrix4[] = []
-        for (const [from, to] of runs) {
-          let sinceP = PIER_EVERY
-          for (let i = from; i < to; i++) {
-            const i2 = i + 1
-            // Underside
-            quad(side(i, 1, -DECK), side(i2, 1, -DECK), side(i2, -1, -DECK), side(i, -1, -DECK))
-            // The two edges of the deck, road level down to the underside
-            for (const sg of [1, -1] as const) {
-              quad(side(i, sg, 0), side(i2, sg, 0), side(i2, sg, -DECK), side(i, sg, -DECK))
-              // Parapet, road level up
-              quad(side(i, sg, 0), side(i2, sg, 0), side(i2, sg, WALL), side(i, sg, WALL))
-            }
-            sinceP += Math.hypot(basePts[i2].x - basePts[i].x, basePts[i2].z - basePts[i].z)
-            if (core[i] && sinceP >= PIER_EVERY) {
-              sinceP = 0
-              const p = basePts[i]
-              const gy = groundWithUnderpass(p.x, p.z)
-              const top = p.y - DECK
-              const h = top - gy
-              if (h > 0.5 * M) {
-                const m = new THREE.Matrix4()
-                m.makeTranslation(p.x, gy + h / 2, p.z)
-                m.scale(new THREE.Vector3(PIER_HALF * 2, h, PIER_HALF * 2))
-                piers.push(m)
-              }
-            }
-          }
-        }
-
-        const concrete = new THREE.MeshLambertMaterial({
-          color: isDark ? 0x6b6f75 : 0x9aa0a6, side: THREE.DoubleSide,
-        })
-        const g = new THREE.BufferGeometry()
-        g.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3))
-        g.computeVertexNormals()
-        scene.add(new THREE.Mesh(g, concrete))
-
-        // Walls either side of the road underneath, from the ground up to the
-        // deck. Without them the crossing is a bridge seen from below; with
-        // them it reads as something to drive through, which is what it is.
-        if (UNDER_BRIDGE.length) {
-          const wallV: number[] = []
-          const WALL_OUT = 11 * M          // clear of the road beneath
-          const { perp: uPerp } = { perp }
-          for (const u of UNDER_BRIDGE) {
-            const nxt = UNDER_BRIDGE.find(v => v.i === u.i + 1)
-            if (!nxt) continue
-            const top = u.overY - DECK, topN = nxt.overY - DECK
-            for (const sg of [1, -1] as const) {
-              const a = uPerp[u.i], b = uPerp[nxt.i]
-              const ax = u.x + a.x * WALL_OUT * sg, az = u.z + a.z * WALL_OUT * sg
-              const bx = nxt.x + b.x * WALL_OUT * sg, bz = nxt.z + b.z * WALL_OUT * sg
-              const ga = groundWithUnderpass(ax, az), gb = groundWithUnderpass(bx, bz)
-              wallV.push(ax, ga, az, bx, gb, bz, bx, topN, bz)
-              wallV.push(ax, ga, az, bx, topN, bz, ax, top, az)
-            }
-          }
-          if (wallV.length) {
-            const wg = new THREE.BufferGeometry()
-            wg.setAttribute('position', new THREE.Float32BufferAttribute(wallV, 3))
-            wg.computeVertexNormals()
-            scene.add(new THREE.Mesh(wg, concrete))
-          }
-        }
-
-        if (piers.length) {
-          const pierMesh = new THREE.InstancedMesh(
-            new THREE.BoxGeometry(1, 1, 1), concrete, piers.length)
-          piers.forEach((m, i) => pierMesh.setMatrixAt(i, m))
-          pierMesh.instanceMatrix.needsUpdate = true
-          scene.add(pierMesh)
-        }
-      }
-    }
 
     // Road surface — material kept in a ref so wet conditions can darken it
     // Asphalt rather than a flat fill. The texture repeats every few metres of
@@ -2596,7 +2329,7 @@ export default function Replay3DViewer() {
     // centreline: the corner radius (so a strip can't fold through a hairpin)
     // and the clearance to other sections (so it can't cross them).
     const baseLim   = lateralLimits(basePts)
-    const baseClear = selfClearance(basePts, baseLim.perp, 150 * M, M)
+    const baseClear = selfClearance(basePts, baseLim.perp, 150 * M)
     // A strip between two lateral distances, following the centreline. Both
     // edges obey the limits above, so where a neighbouring section crowds in the
     // strip narrows and finally disappears rather than cutting through it.
@@ -2760,7 +2493,7 @@ export default function Replay3DViewer() {
           // groundHeightAt deliberately sits 1.8 m below the road so the terrain
           // cannot push through it — a sign taking that verbatim ends up buried.
           // Four metres from the edge the road's own height is the better guide.
-          const base = Math.max(groundWithUnderpass(at.x, at.z), p.y - 0.4 * M)
+          const base = Math.max(groundHeightAt(at.x, at.z), p.y - 0.4 * M)
           if (!mats.has(dist)) mats.set(dist, board(dist))
           const g = new THREE.PlaneGeometry(W * 2, H * 2)
           const m = new THREE.Mesh(g, mats.get(dist)!)
@@ -2776,17 +2509,7 @@ export default function Replay3DViewer() {
 
     for (const [side, segs] of Object.entries(runoffSegs)) {
       for (const seg of mergeSegs(segs)) {
-        const hi = Math.min(seg.e, n - 1)
-        if (!bridgeStations) { addRunoff(seg.s, hi, Number(side)); continue }
-        // Split the stretch around any part of it that is on a bridge
-        let from = seg.s
-        for (let i = seg.s; i <= hi; i++) {
-          if (!bridgeStations[i]) continue
-          if (i - from >= 2) addRunoff(from, i - 1, Number(side))
-          while (i <= hi && bridgeStations[i]) i++
-          from = i
-        }
-        if (hi - from >= 2) addRunoff(from, hi, Number(side))
+        addRunoff(seg.s, Math.min(seg.e, n - 1), Number(side))
       }
     }
 
@@ -2825,28 +2548,9 @@ export default function Replay3DViewer() {
         scene.add(new THREE.Mesh(paint(sideStrip(0, n - 1, side, halfW, inner,
           p => p.y - 0.10 * DETAIL * M, p => p.y - 0.16 * DETAIL * M)), vergeMat))
         // …and from there down to the terrain, picking up exactly the height the
-        // grid draws so the two meet flush.
-        //
-        // Not across a bridge. This strip runs from the road edge down to the
-        // ground, so over a crossing it hangs off the deck as a green curtain
-        // reaching all the way to the road below — which is what closed the
-        // underpass into a hill.
-        const vergeRuns: [number, number][] = []
-        if (!bridgeStations) vergeRuns.push([0, n - 1])
-        else {
-          let from = 0
-          for (let i = 0; i < n; i++) {
-            if (!bridgeStations[i]) continue
-            if (i - from >= 2) vergeRuns.push([from, i - 1])
-            while (i < n && bridgeStations[i]) i++
-            from = i
-          }
-          if (n - 1 - from >= 2) vergeRuns.push([from, n - 1])
-        }
-        for (const [a, b] of vergeRuns) {
-          scene.add(new THREE.Mesh(paint(sideStrip(a, b, side, inner, outer,
-            p => p.y - 0.16 * DETAIL * M, (_p, x, z) => groundWithUnderpass(x, z))), vergeMat))
-        }
+        // grid draws so the two meet flush
+        scene.add(new THREE.Mesh(paint(sideStrip(0, n - 1, side, inner, outer,
+          p => p.y - 0.16 * DETAIL * M, (_p, x, z) => groundHeightAt(x, z))), vergeMat))
       }
     }
 
@@ -2931,7 +2635,7 @@ export default function Replay3DViewer() {
         const pos = basePts[i].clone().addScaledVector(perp, side * lateral).addScaledVector(tan, fwdJitter)
         if (tooClose(pos.x, pos.z)) continue
         // Same height rule the ground uses, so trees stand on it rather than in it
-        pos.y = groundWithUnderpass(pos.x, pos.z)
+        pos.y = groundHeightAt(pos.x, pos.z)
         const trunkH = treeH * 0.32
         const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.35 * M, 0.55 * M, trunkH, 5), trunkMat)
         trunk.position.set(pos.x, pos.y + trunkH / 2, pos.z)

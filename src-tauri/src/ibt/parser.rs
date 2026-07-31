@@ -1134,6 +1134,33 @@ mod tests {
     }
 
     #[test]
+    fn reset_session_lap_lookup() {
+        if !Path::new(RESET_FILE).exists() { return }
+        let f = IbtFile::open(RESET_FILE).expect("open");
+        let s = f.parse_session(RESET_FILE.to_string()).unwrap();
+        println!("segments:");
+        for (i, l) in s.laps.iter().enumerate() {
+            println!("  [{}] lap {} time {:.3} valid {} samples {}..{} ({})",
+                i, l.lap_number, l.lap_time, l.is_valid,
+                l.start_sample, l.end_sample, l.end_sample - l.start_sample);
+        }
+        // Exactly what the 3D viewer asks for, and what it takes: the first hit
+        for want in [1, 2, 3] {
+            let hits: Vec<_> = s.laps.iter().filter(|l| l.lap_number == want).collect();
+            println!("lap {} -> {} matching segment(s)", want, hits.len());
+            for l in &hits {
+                let d = f.get_lap_channel_data(l, "Lat");
+                match d {
+                    Some(d) => println!("     samples {} timestamps {:.2}..{:.2}",
+                        d.samples.len(), d.timestamps.first().copied().unwrap_or(0.0),
+                        d.timestamps.last().copied().unwrap_or(0.0)),
+                    None => println!("     no data"),
+                }
+            }
+        }
+    }
+
+    #[test]
     fn print_gps_channels() {
         let Some(f) = open_test_file() else { return };
         let names: Vec<_> = f.channels().iter().map(|c| c.name.clone()).collect();
