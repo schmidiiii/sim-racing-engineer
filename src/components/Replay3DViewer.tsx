@@ -1910,6 +1910,12 @@ export default function Replay3DViewer() {
     scene.add(new THREE.Mesh(terrainGeo, new THREE.MeshLambertMaterial({ vertexColors: true })))
 
     // ── Bridge where the circuit crosses itself ────────────────────────────
+    // Shared with the runoff below: a bridge carries a parapet, not a gravel
+    // trap, and an apron built at road height over a crossing hangs in the air
+    // above the road underneath. That overhang is what looked like a hill of
+    // terrain — the ground itself was measured and is below the road at every
+    // station on the lap.
+    let bridgeStations: Uint8Array | null = null
     // Suzuka runs its back straight under the rest of the lap. Measured on a
     // real lap the two branches pass 0.7 m apart in plan and 6.20 m apart in
     // height, at 44% and 85% of the way round — so the pair is found by arc
@@ -1959,7 +1965,11 @@ export default function Replay3DViewer() {
         runs.push([Math.max(0, i - PAD), Math.min(nb - 1, j + PAD)])
         i = j
       }
+      // Mark the padding too, so the gravel stops where the deck starts rather
+      // than overlapping its first few metres
+      for (const [a, b] of runs) for (let i = a; i <= b; i++) onBridge[i] = 1
 
+      bridgeStations = runs.length ? onBridge : null
       if (runs.length) {
         const halfPos = (i: number) => (edgePos ? edgePos[i] : ROAD_WIDTH / 2)
         const halfNeg = (i: number) => (edgeNeg ? edgeNeg[i] : ROAD_WIDTH / 2)
@@ -2678,7 +2688,17 @@ export default function Replay3DViewer() {
 
     for (const [side, segs] of Object.entries(runoffSegs)) {
       for (const seg of mergeSegs(segs)) {
-        addRunoff(seg.s, Math.min(seg.e, n - 1), Number(side))
+        const hi = Math.min(seg.e, n - 1)
+        if (!bridgeStations) { addRunoff(seg.s, hi, Number(side)); continue }
+        // Split the stretch around any part of it that is on a bridge
+        let from = seg.s
+        for (let i = seg.s; i <= hi; i++) {
+          if (!bridgeStations[i]) continue
+          if (i - from >= 2) addRunoff(from, i - 1, Number(side))
+          while (i <= hi && bridgeStations[i]) i++
+          from = i
+        }
+        if (hi - from >= 2) addRunoff(from, hi, Number(side))
       }
     }
 
