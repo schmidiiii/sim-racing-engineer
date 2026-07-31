@@ -1804,7 +1804,7 @@ export default function Replay3DViewer() {
     // of the road overhead closes the gap into a hill. The corridor is carved
     // explicitly rather than left to the height rules below, which reason from
     // the nearest road and kept finding the bridge.
-    const UNDER_BRIDGE: { x: number; z: number; y: number }[] = []
+    const UNDER_BRIDGE: { x: number; z: number; y: number; overY: number; i: number }[] = []
     {
       const nb = basePts.length
       const cum = new Float64Array(nb)
@@ -1821,7 +1821,10 @@ export default function Replay3DViewer() {
           if (dx * dx + dz * dz > (20 * M) * (20 * M)) continue
           // j is above i, so i is the one that needs the sky kept open
           if (basePts[j].y - basePts[i].y > 4 * M) {
-            UNDER_BRIDGE.push({ x: basePts[i].x, z: basePts[i].z, y: basePts[i].y })
+            UNDER_BRIDGE.push({
+              x: basePts[i].x, z: basePts[i].z, y: basePts[i].y,
+              overY: basePts[j].y, i,
+            })
             break
           }
         }
@@ -2006,7 +2009,9 @@ export default function Replay3DViewer() {
 
       // Contiguous runs, padded a little so the deck starts before the crossing
       // and ends after it rather than stopping at the exact overlap
-      const PAD = Math.max(2, Math.round(12 * M / Math.max(totalArc / nb, 1e-6)))
+      // Generous: the aprons and the verge stop across this range, and a few
+      // metres of either left beside the deck hang in the air
+      const PAD = Math.max(4, Math.round(30 * M / Math.max(totalArc / nb, 1e-6)))
       const runs: [number, number][] = []
       for (let i = 0; i < nb; i++) {
         if (!onBridge[i]) continue
@@ -2073,6 +2078,34 @@ export default function Replay3DViewer() {
         g.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3))
         g.computeVertexNormals()
         scene.add(new THREE.Mesh(g, concrete))
+
+        // Walls either side of the road underneath, from the ground up to the
+        // deck. Without them the crossing is a bridge seen from below; with
+        // them it reads as something to drive through, which is what it is.
+        if (UNDER_BRIDGE.length) {
+          const wallV: number[] = []
+          const WALL_OUT = 11 * M          // clear of the road beneath
+          const { perp: uPerp } = { perp }
+          for (const u of UNDER_BRIDGE) {
+            const nxt = UNDER_BRIDGE.find(v => v.i === u.i + 1)
+            if (!nxt) continue
+            const top = u.overY - DECK, topN = nxt.overY - DECK
+            for (const sg of [1, -1] as const) {
+              const a = uPerp[u.i], b = uPerp[nxt.i]
+              const ax = u.x + a.x * WALL_OUT * sg, az = u.z + a.z * WALL_OUT * sg
+              const bx = nxt.x + b.x * WALL_OUT * sg, bz = nxt.z + b.z * WALL_OUT * sg
+              const ga = groundWithUnderpass(ax, az), gb = groundWithUnderpass(bx, bz)
+              wallV.push(ax, ga, az, bx, gb, bz, bx, topN, bz)
+              wallV.push(ax, ga, az, bx, topN, bz, ax, top, az)
+            }
+          }
+          if (wallV.length) {
+            const wg = new THREE.BufferGeometry()
+            wg.setAttribute('position', new THREE.Float32BufferAttribute(wallV, 3))
+            wg.computeVertexNormals()
+            scene.add(new THREE.Mesh(wg, concrete))
+          }
+        }
 
         if (piers.length) {
           const pierMesh = new THREE.InstancedMesh(
