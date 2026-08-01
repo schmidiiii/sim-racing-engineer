@@ -173,6 +173,14 @@ const yamlStr = (yaml: string, key: string): string | null => {
 const meanOf = (a?: number[]): number | null =>
   a && a.length ? a.reduce((s, v) => s + v, 0) / a.length : null
 
+/** What the dash would read. iRacing counts reverse as -1 and neutral as 0,
+ *  and no car shows a driver "-1". */
+const gearLabel = (gear: number): string =>
+  gear < 0 ? 'R' : gear === 0 ? 'N' : String(gear)
+
+/** The fixed cameras, plus `free` — the one the middle mouse button drives. */
+type CameraMode = 'chase' | 'cockpit' | 'front' | 'tv' | 'free'
+
 interface WorldTF {
   centerLat: number
   centerLon: number
@@ -1330,8 +1338,14 @@ export default function Replay3DViewer() {
   const speedRef = useRef(1)
   const currentTimeRef = useRef(0)
   const crosshairRef = useRef<number | null>(null)
-  const cameraModeRef = useRef<'chase' | 'cockpit' | 'front' | 'tv'>('chase')
+  const cameraModeRef = useRef<CameraMode>('chase')
   const zoomRef = useRef(1)   // mouse wheel: >1 pulls back, <1 moves in
+  // Free camera: where it stands relative to the car it follows. The angles are
+  // world-referenced, not car-referenced — a camera that swung round with every
+  // corner would be no use for looking at anything but the car. `init` asks the
+  // animation loop to read the angles off wherever the last camera stood, so
+  // taking over never jumps the view.
+  const orbitRef = useRef({ yaw: 0, pitch: 0.25, radius: 0, init: false })
   const followIdxRef = useRef(0)
   const unitsRef = useRef<UnitSystem>('metric')   // read by the animation loop
 
@@ -1343,7 +1357,19 @@ export default function Replay3DViewer() {
   // are written directly to DOM refs to avoid React re-renders during playback
   const [currentT, setCurrentT] = useState(0)
   const [isDark, setIsDark] = useState(() => document.documentElement.classList.contains('dark'))
-  const [cameraMode, setCameraMode] = useState<'chase' | 'cockpit' | 'front' | 'tv'>('chase')
+  const [cameraMode, setCameraMode] = useState<CameraMode>('chase')
+  // Whether the mouse has taken the view somewhere it cannot be put back with
+  // the camera buttons — zoomed, or swung round on the free camera. Only then is
+  // there anything for a reset button to do, so only then is one shown. Mirrored
+  // in a ref because the wheel fires far too often to re-render on.
+  const [cameraMoved, setCameraMoved] = useState(false)
+  const cameraMovedRef = useRef(false)
+  const syncCameraMoved = useCallback(() => {
+    const moved = Math.abs(zoomRef.current - 1) > 0.01 || cameraModeRef.current === 'free'
+    if (moved === cameraMovedRef.current) return
+    cameraMovedRef.current = moved
+    setCameraMoved(moved)
+  }, [])
   // How the driving lines are coloured. All three sets are worked out once when
   // the scene is built and swapped on the geometry afterwards — rebuilding the
   // scene on every click would stall for a second on a long circuit.
@@ -3042,7 +3068,7 @@ export default function Replay3DViewer() {
         const cssDeg = -stDeg
 
         const speedEl = hudSpeedRefs.current[li]; if (speedEl) speedEl.textContent = String(speed)
-        const gearEl  = hudGearRefs.current[li];  if (gearEl)  gearEl.textContent  = String(gear)
+        const gearEl  = hudGearRefs.current[li];  if (gearEl)  gearEl.textContent  = gearLabel(gear)
         const thrEl   = hudThrRefs.current[li];   if (thrEl)   thrEl.style.height   = `${thr}%`
         const brkEl   = hudBrkRefs.current[li];   if (brkEl)   brkEl.style.height   = `${brk}%`
         const wheelEl = hudWheelRefs.current[li]; if (wheelEl) wheelEl.style.transform = `rotate(${cssDeg}deg)`
@@ -3286,6 +3312,32 @@ export default function Replay3DViewer() {
           cameraPosRef.current.copy(front)
           const carCenter = new THREE.Vector3(car0.position.x, carY + 1.4 * M, car0.position.z)
           cameraTargetRef.current.lerp(carCenter, lookAlpha)
+        } else if (cameraModeRef.current === 'free') {
+          // Orbits the car at whatever angle the mouse has been dragged to. The
+          // wheel still works: it scales the radius the same way it scales the
+          // distance of the follow cams.
+          const o = orbitRef.current
+          const carCentre = new THREE.Vector3(car0.position.x, carY + 1.2 * M, car0.position.z)
+          if (o.init) {
+            const d = cameraPosRef.current.clone().sub(carCentre)
+            const r = Math.max(3 * M, d.length())
+            o.radius = r / Math.max(0.35, zoom)
+            o.yaw = Math.atan2(d.x, d.z)
+            o.pitch = Math.asin(Math.max(-1, Math.min(1, d.y / r)))
+            o.init = false
+          }
+          const r = o.radius * zoom
+          const cp = Math.cos(o.pitch)
+          const eye = new THREE.Vector3(
+            carCentre.x + Math.sin(o.yaw) * cp * r,
+            carCentre.y + Math.sin(o.pitch) * r,
+            carCentre.z + Math.cos(o.yaw) * cp * r,
+          )
+          // Same floor as the chase cam: dropped below the road, the view is of
+          // the underside of the circuit
+          eye.y = Math.max(eye.y, roadYAt(eye) + 1.5 * M)
+          cameraPosRef.current.copy(eye)
+          cameraTargetRef.current.copy(carCentre)
         } else if (cameraModeRef.current === 'tv') {
           const n = tvCamPositions.length
           if (n > 0) {
@@ -3598,10 +3650,81 @@ export default function Replay3DViewer() {
       e.preventDefault()   // don't scroll the panel behind the viewer
       const next = zoomRef.current * Math.exp(e.deltaY * 0.0012)
       zoomRef.current = Math.min(3, Math.max(0.35, next))
+      // Scrolled back to where it started, the reset button goes away again
+      syncCameraMoved()
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
-  }, [laps.length, loading])
+  }, [laps.length, loading, syncCameraMoved])
+
+  // ── Middle mouse: free camera ──────────────────────────────────────────────
+  // Held down and dragged, it takes the camera off its rails and swings it round
+  // the car — from wherever the camera already was, so the view never jumps. It
+  // stays free until another camera button is pressed.
+  useEffect(() => {
+    const el = mountRef.current
+    if (!el) return
+
+    let drag: { x: number; y: number } | null = null
+
+    const move = (e: MouseEvent) => {
+      if (!drag) return
+      const o = orbitRef.current
+      o.yaw -= (e.clientX - drag.x) * 0.006
+      // Stops short of straight overhead and of going under the circuit, where
+      // there is nothing to see and the up vector flips
+      o.pitch = Math.max(-0.2, Math.min(1.35, o.pitch + (e.clientY - drag.y) * 0.005))
+      drag = { x: e.clientX, y: e.clientY }
+    }
+
+    const up = (e: MouseEvent) => {
+      if (e.button !== 1) return
+      drag = null
+      el.style.cursor = ''
+      document.removeEventListener('mousemove', move)
+      document.removeEventListener('mouseup', up)
+    }
+
+    const down = (e: MouseEvent) => {
+      if (e.button !== 1) return
+      e.preventDefault()   // no middle-click autoscroll
+      drag = { x: e.clientX, y: e.clientY }
+      if (cameraModeRef.current !== 'free') {
+        orbitRef.current.init = true
+        cameraModeRef.current = 'free'
+        setCameraMode('free')
+        syncCameraMoved()
+      }
+      el.style.cursor = 'grabbing'
+      document.addEventListener('mousemove', move)
+      document.addEventListener('mouseup', up)
+    }
+
+    // Chrome raises autoscroll on auxclick even with mousedown defaulted away
+    const aux = (e: MouseEvent) => { if (e.button === 1) e.preventDefault() }
+
+    el.addEventListener('mousedown', down)
+    el.addEventListener('auxclick', aux)
+    return () => {
+      el.removeEventListener('mousedown', down)
+      el.removeEventListener('auxclick', aux)
+      document.removeEventListener('mousemove', move)
+      document.removeEventListener('mouseup', up)
+      el.style.cursor = ''
+    }
+  }, [laps.length, loading, syncCameraMoved])
+
+  // Everything the mouse can change about the view, back to how the viewer
+  // opens: chase camera, no zoom, and the free camera's angles forgotten so it
+  // starts from the chase position again rather than from where it was left
+  const resetCamera = useCallback(() => {
+    zoomRef.current = 1
+    orbitRef.current = { yaw: 0, pitch: 0.25, radius: 0, init: true }
+    cameraModeRef.current = 'chase'
+    setCameraMode('chase')
+    cameraMovedRef.current = false
+    setCameraMoved(false)
+  }, [])
 
   // ── Playback controls ──────────────────────────────────────────────────────
   const togglePlay = useCallback(() => {
@@ -3694,6 +3817,12 @@ export default function Replay3DViewer() {
               {mode === 'chase' ? 'REAR' : mode === 'cockpit' ? 'HOOD' : mode === 'front' ? 'FRONT' : 'TV'}
             </button>
           ))}
+          {cameraMoved && (
+            <button onClick={resetCamera} title={t('resetCamera')}
+              className="text-[8px] font-bold rounded px-1.5 py-0.5 transition-colors bg-black/45 text-white/55 hover:text-white hover:bg-black/65">
+              RESET
+            </button>
+          )}
         </div>
 
         {/* Line colouring and camera, one row. Not stacked: the weather card
@@ -3721,6 +3850,12 @@ export default function Replay3DViewer() {
               {mode === 'chase' ? 'REAR' : mode === 'cockpit' ? 'HOOD' : mode === 'front' ? 'FRONT' : 'TV'}
             </button>
           ))}
+          {cameraMoved && (
+            <button onClick={resetCamera} title={t('resetCamera')}
+              className="text-[8px] font-bold rounded px-1.5 py-0.5 transition-colors bg-black/45 text-white/55 hover:text-white hover:bg-black/65">
+              RESET
+            </button>
+          )}
         </div>
 
 
@@ -4070,12 +4205,17 @@ export default function Replay3DViewer() {
 
       {/* Playback controls bar — adapts to light/dark */}
       <div className="shrink-0 bg-neutral-900 dark:bg-neutral-900 border-t select-none border-white/8 dark:border-white/8" style={isDark ? {} : { backgroundColor: '#f1f5f9', borderColor: '#cbd5e1' }}>
-        {/* Progress timeline */}
-        <div className="relative h-5 px-3 pt-3">
-          <div className="relative h-[3px] rounded-full" style={{ background: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.12)' }}>
-            <div className="absolute inset-y-0 left-0 rounded-full transition-none" style={{ width: `${sliderPct}%`, background: isDark ? 'rgba(255,255,255,0.30)' : 'rgba(0,0,0,0.25)' }} />
-            <div className="absolute top-1/2 w-2.5 h-2.5 bg-primary rounded-full shadow-md pointer-events-none"
-              style={{ left: `${sliderPct}%`, transform: 'translate(-50%, -50%)' }} />
+        {/* Progress timeline. The part already played takes the accent colour —
+            grey on grey said how far round the lap you were only by where the
+            knob sat. */}
+        <div className="group/seek relative h-5 px-3 pt-3">
+          <div className="relative h-[4px] rounded-full" style={{ background: isDark ? 'rgba(255,255,255,0.13)' : 'rgba(0,0,0,0.10)' }}>
+            <div className="absolute inset-y-0 left-0 rounded-full bg-primary transition-none" style={{ width: `${sliderPct}%` }} />
+            <div className="absolute top-1/2 w-3 h-3 bg-primary rounded-full shadow-md pointer-events-none transition-transform group-hover/seek:scale-125"
+              style={{
+                left: `${sliderPct}%`, transform: 'translate(-50%, -50%)',
+                boxShadow: `0 0 0 2px ${isDark ? 'rgba(20,22,28,0.9)' : 'rgba(255,255,255,0.95)'}, 0 1px 3px rgba(0,0,0,0.35)`,
+              }} />
           </div>
           {/* Transparent range input layered on top for native drag */}
           <input type="range" min={0} max={1000} value={sliderVal}
@@ -4089,66 +4229,78 @@ export default function Replay3DViewer() {
             className="absolute inset-0 w-full opacity-0 cursor-pointer"
           />
         </div>
-        {/* Transport row */}
-        <div className="flex items-center justify-center gap-2 px-3 py-2" style={{ color: isDark ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.6)' }}>
-          {/* Skip to start */}
-          <button
-            onClick={() => { currentTimeRef.current = tMin; setCrosshairTime(tMin) }}
-            className="p-1.5 rounded-lg hover:opacity-100 transition-opacity opacity-60 hover:bg-black/5 dark:hover:bg-white/10"
-            title={t('toStart')}
-          >
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
-              <rect x="1.5" y="2" width="2" height="10" rx="0.5" />
-              <path d="M5 7L12 2.5v9L5 7z" />
-            </svg>
-          </button>
+        {/* Transport row. Three columns, the outer two equal: whatever the speed
+            pill on the left and the clock on the right happen to measure, the
+            play button stands in the middle of the viewer — flowing them in one
+            row put it a clock's width off centre. */}
+        <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 px-3 pt-1 pb-2.5"
+          style={{ color: isDark ? 'rgba(255,255,255,0.65)' : 'rgba(0,0,0,0.6)' }}>
 
-          {/* Speed: − label + */}
-          <div className="flex items-center gap-0.5">
+          {/* Speed */}
+          <div className="justify-self-start flex items-center rounded-full border overflow-hidden"
+            style={{ borderColor: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.10)' }}>
             <button
               onClick={() => { const i = SPEEDS.indexOf(playbackSpeed); if (i > 0) setPlaybackSpeed(SPEEDS[i - 1]) }}
               disabled={SPEEDS.indexOf(playbackSpeed) === 0}
-              className="w-6 h-6 rounded hover:bg-black/8 dark:hover:bg-white/10 transition-colors disabled:opacity-25 text-base font-bold flex items-center justify-center"
+              className="w-7 h-6 hover:bg-black/8 dark:hover:bg-white/10 transition-colors disabled:opacity-20 text-base font-bold flex items-center justify-center"
             >−</button>
-            <span className="text-[11px] font-mono tabular-nums w-9 text-center opacity-65">{playbackSpeed}x</span>
+            <span className="text-[11px] font-mono tabular-nums w-9 text-center opacity-70">{playbackSpeed}x</span>
             <button
               onClick={() => { const i = SPEEDS.indexOf(playbackSpeed); if (i < SPEEDS.length - 1) setPlaybackSpeed(SPEEDS[i + 1]) }}
               disabled={SPEEDS.indexOf(playbackSpeed) === SPEEDS.length - 1}
-              className="w-6 h-6 rounded hover:bg-black/8 dark:hover:bg-white/10 transition-colors disabled:opacity-25 text-base font-bold flex items-center justify-center"
+              className="w-7 h-6 hover:bg-black/8 dark:hover:bg-white/10 transition-colors disabled:opacity-20 text-base font-bold flex items-center justify-center"
             >+</button>
           </div>
 
-          {/* Play / Pause */}
-          <button
-            onClick={togglePlay}
-            className="w-9 h-9 rounded-full bg-primary hover:opacity-90 flex items-center justify-center text-primary-foreground shadow-lg transition-opacity mx-1"
-          >
-            {playing ? (
-              <svg width="13" height="13" viewBox="0 0 12 12" fill="currentColor">
-                <rect x="2" y="2" width="3" height="8" rx="0.5" />
-                <rect x="7" y="2" width="3" height="8" rx="0.5" />
+          {/* Transport — skip, play, skip. Symmetrical, so its middle is the
+              play button's middle. */}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => { currentTimeRef.current = tMin; setCrosshairTime(tMin) }}
+              className="w-8 h-8 rounded-full flex items-center justify-center opacity-60 hover:opacity-100 hover:bg-black/8 dark:hover:bg-white/10 transition-all"
+              title={t('toStart')}
+            >
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
+                <rect x="1.5" y="2" width="2" height="10" rx="0.5" />
+                <path d="M5 7L12 2.5v9L5 7z" />
               </svg>
-            ) : (
-              <svg width="13" height="13" viewBox="0 0 12 12" fill="currentColor">
-                <path d="M3 2l7 4-7 4V2z" />
+            </button>
+
+            <button
+              onClick={togglePlay}
+              className="w-10 h-10 rounded-full bg-primary text-primary-foreground flex items-center justify-center shadow-lg hover:brightness-110 active:scale-95 transition-all"
+            >
+              {playing ? (
+                <svg width="14" height="14" viewBox="0 0 12 12" fill="currentColor">
+                  <rect x="2" y="2" width="3" height="8" rx="0.75" />
+                  <rect x="7" y="2" width="3" height="8" rx="0.75" />
+                </svg>
+              ) : (
+                // Nudged right by a hair: a triangle centred on its bounding box
+                // reads as sitting left of the middle of a circle
+                <svg width="14" height="14" viewBox="0 0 12 12" fill="currentColor" style={{ marginLeft: 1.5 }}>
+                  <path d="M3 2l7 4-7 4V2z" />
+                </svg>
+              )}
+            </button>
+
+            <button
+              onClick={() => { currentTimeRef.current = tMax; setCrosshairTime(tMax) }}
+              className="w-8 h-8 rounded-full flex items-center justify-center opacity-60 hover:opacity-100 hover:bg-black/8 dark:hover:bg-white/10 transition-all"
+              title={t('toEnd')}
+            >
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
+                <rect x="10.5" y="2" width="2" height="10" rx="0.5" />
+                <path d="M9 7L2 2.5v9L9 7z" />
               </svg>
-            )}
-          </button>
+            </button>
+          </div>
 
-          {/* Skip to end */}
-          <button
-            onClick={() => { currentTimeRef.current = tMax; setCrosshairTime(tMax) }}
-            className="p-1.5 rounded-lg hover:opacity-100 transition-opacity opacity-60 hover:bg-black/5 dark:hover:bg-white/10"
-            title={t('toEnd')}
-          >
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
-              <rect x="10.5" y="2" width="2" height="10" rx="0.5" />
-              <path d="M9 7L2 2.5v9L9 7z" />
-            </svg>
-          </button>
-
-          {/* Elapsed time */}
-          <span className="text-[10px] font-mono tabular-nums ml-1 opacity-50">{formatTime(currentT)}</span>
+          {/* Where you are, and how much lap there is */}
+          <span className="justify-self-end text-[11px] font-mono tabular-nums whitespace-nowrap">
+            {formatTime(currentT)}
+            <span className="opacity-45"> / {formatTime(tMax)}</span>
+          </span>
         </div>
       </div>
     </div>
