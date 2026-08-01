@@ -3,6 +3,8 @@ import { invoke } from '@tauri-apps/api/core'
 import { useAiStore, ProviderConfig, ProviderType } from '@/store/ai'
 import { useSessionStore } from '@/store/session'
 import { useT } from '@/lib/i18n'
+import AccentPicker from '@/components/AccentPicker'
+import { applyAccent, loadAccent, saveAccent } from '@/lib/accent'
 
 const PROVIDERS: ProviderType[] = ['Ollama', 'OpenAI', 'Gemini']
 
@@ -11,6 +13,7 @@ export default function Settings() {
   const { provider, setProvider } = useAiStore()
   const { units, setUnits } = useSessionStore()
   const [activeTab, setActiveTab] = useState<ProviderType>(provider.type)
+  const [accent, setAccent] = useState(loadAccent)
 
   // Load persisted drafts so API keys survive app restarts and provider switches
   const [drafts, setDrafts] = useState<Record<ProviderType, ProviderConfig>>(() => {
@@ -151,6 +154,14 @@ export default function Settings() {
             </button>
           ))}
         </div>
+      </div>
+
+      {/* Accent colour — writes straight through to the CSS variables, so the
+          whole app changes under the dialog while it is being picked */}
+      <div className="bg-card rounded-xl border border-border shadow-sm px-4 py-3">
+        <p className="text-xs font-semibold text-foreground">{t('accentColor')}</p>
+        <p className="text-[11px] text-muted-foreground mt-0.5 mb-3">{t('accentColorHint')}</p>
+        <AccentPicker value={accent} onChange={hex => { setAccent(hex); saveAccent(hex); applyAccent(hex) }} />
       </div>
 
       <p className="text-xs text-muted-foreground">{t('configureProvider')}</p>

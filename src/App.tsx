@@ -4,8 +4,10 @@ import Viewer from '@/pages/Viewer'
 import Settings from '@/pages/Settings'
 import UpdateBanner from '@/components/UpdateBanner'
 import TitleBar from '@/components/TitleBar'
+import Logo from '@/components/Logo'
 import { useAiStore, LANGUAGES, type Language } from '@/store/ai'
 import { useT } from '@/lib/i18n'
+import { applyAccent, loadAccent } from '@/lib/accent'
 
 export default function App() {
   const t = useT()
@@ -31,6 +33,9 @@ export default function App() {
   useEffect(() => {
     document.documentElement.classList.toggle('dark', dark)
     localStorage.setItem('srDark', String(dark))
+    // The accent sits at a different lightness on a dark background, so it is
+    // worked out again from the same picked colour
+    applyAccent(loadAccent())
   }, [dark])
 
   useEffect(() => {
@@ -56,7 +61,7 @@ export default function App() {
       <header className="shrink-0 border-b border-border bg-card">
         <div className="px-5 py-2.5 flex items-center gap-4">
           <div className="flex items-center gap-3">
-            <img src="/LogoSRE.png" alt="logo" className="h-11 w-11 object-contain" />
+            <Logo className="h-11 w-11 object-contain" />
             <div>
               <div className="font-bold text-lg text-foreground tracking-tight leading-tight">Sim Racing Engineer</div>
               {version && <div className="text-xs text-muted-foreground leading-tight">v{version} by schmidiiii</div>}
@@ -88,7 +93,7 @@ export default function App() {
               href="https://ko-fi.com/schmidiiii/donate"
               target="_blank"
               rel="noopener noreferrer"
-              className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-red-600 text-white hover:bg-red-700 transition-colors"
+              className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity"
             >
               {t('donate')}
             </a>

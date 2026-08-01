@@ -9,7 +9,9 @@
      border = 10% black #EAE7E8
      text   = black #31171F
      muted  = 60% black #837378
-     primary= red #EA0029
+     primary= teal #64AAB2 — the default accent, which Settings can replace.
+              A picked colour is written over --primary and --ring on the root
+              element, so everything built on them follows without being asked.
   */
   :root {
     --background: 188 28% 91%;
@@ -18,7 +20,7 @@
     --card-foreground: 343 36% 14%;
     --popover: 0 0% 100%;
     --popover-foreground: 343 36% 14%;
-    --primary: 354 100% 46%;
+    --primary: 186 34% 55%;
     --primary-foreground: 0 0% 100%;
     --secondary: 343 7% 91%;
     --secondary-foreground: 343 36% 14%;
@@ -30,7 +32,7 @@
     --destructive-foreground: 0 0% 100%;
     --border: 343 7% 91%;
     --input: 343 7% 91%;
-    --ring: 354 100% 46%;
+    --ring: 186 34% 55%;
     --radius: 0.75rem;
   }
 
@@ -42,7 +44,7 @@
     --card-foreground: 220 15% 88%;
     --popover: 220 12% 12%;
     --popover-foreground: 220 15% 88%;
-    --primary: 354 100% 58%;
+    --primary: 186 34% 65%;
     --primary-foreground: 0 0% 100%;
     --secondary: 220 10% 16%;
     --secondary-foreground: 220 15% 88%;
@@ -54,7 +56,7 @@
     --destructive-foreground: 0 0% 100%;
     --border: 220 8% 18%;
     --input: 220 10% 14%;
-    --ring: 354 100% 58%;
+    --ring: 186 34% 65%;
   }
 
   * { box-sizing: border-box; }
@@ -63,6 +65,18 @@
     @apply bg-background text-foreground;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
+  }
+
+  /* Lightness slider in the accent picker. Its track is a gradient, which needs
+     appearance:none — and that takes the thumb with it unless one is drawn. */
+  .accent-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 999px;
+    background: #fff;
+    border: 2px solid rgba(0, 0, 0, 0.4);
+    cursor: pointer;
   }
 
   ::-webkit-scrollbar { width: 5px; height: 5px; }
