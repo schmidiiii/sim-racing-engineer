@@ -1322,16 +1322,21 @@ export default function Replay3DViewer() {
   const [sceneEpoch, setSceneEpoch] = useState(0)
 
   // Pick the model from the car name: the Porsche stands in for Porsches, the
-  // formula car for open wheelers, and the Mercedes GT3 for everything else
-  const carModel = useMemo<CarModelSpec>(() => {
-    const { sessionId } = selectedLapKeys.length ? parseLapKey(selectedLapKeys[0]) : { sessionId: '' }
+  // formula car for open wheelers, and the Mercedes GT3 for everything else.
+  //
+  // Per lap, not per replay: laps of two cars round the same circuit can be
+  // selected together, and one model for all of them put a Mercedes body on the
+  // Porsche's line.
+  const modelFor = useCallback((lapKeyStr: string): CarModelSpec => {
+    const { sessionId } = lapKeyStr ? parseLapKey(lapKeyStr) : { sessionId: '' }
     const carName = sessions.find(s => s.id === sessionId)?.car ?? ''
     if (OPEN_WHEEL_RE.test(carName)) return { url: F1_MODEL_URL, rotY: -Math.PI / 2, openWheel: true }
     if (PORSCHE_RE.test(carName))    return { url: GT_MODEL_URL, rotY: Math.PI, openWheel: false }
     // Already built nose at +Z with the left side at +X, so it needs no turn
     return { url: MERC_MODEL_URL, rotY: 0, openWheel: false, parts: MERC_PARTS }
-  }, [sessions, selectedLapKeys])
-  const openWheelCar = carModel.openWheel
+  }, [sessions])
+  // What the scene has to rebuild for — the models in play, in lap order
+  const modelKey = selectedLapKeys.map(k => modelFor(k).url).join('|')
 
   // Refs that the animation loop reads (avoids stale closures with useEffect deps)
   const playingRef = useRef(false)
@@ -2746,64 +2751,77 @@ export default function Replay3DViewer() {
     })
     carMeshesRef.current = carGroups as unknown as THREE.Mesh[]
 
-    // Load the model and replace placeholders per lap
+    // Load the models and replace placeholders per lap. Laps of the same car
+    // share one loaded model and one preparation pass — the wheels are re-homed
+    // on the shared geometry, so it must happen exactly once per model.
     let loadCancelled = false
-    const { url: modelUrl, parts: modelParts } = carModel
-    const loadModel = /\.gl(b|tf)$/i.test(modelUrl)
-      ? new GLTFLoader().loadAsync(modelUrl).then(g => g.scene as unknown as THREE.Group)
-      : new OBJLoader().loadAsync(modelUrl)
-    loadModel
-      .then((baseModel: THREE.Group) => {
-        if (loadCancelled) return
-        // Parts that are never seen: motion-blur rim copies inside the real
-        // rims, and a full interior behind glass the lap colour makes opaque
-        if (modelParts) baseModel.traverse(c => { if (modelParts.hide.test(c.name)) c.visible = false })
-        // Rotation first, then fit: fitToWorldUnits centres the model on its
-        // bounding box, and three applies position outside the rotation. Centring
-        // before rotating left the F1 sitting 0.18 units off its own axis — beside
-        // its racing line, and every zone measured from the box was off with it.
-        // Porsche faces -Z natively → flip 180°; F1 faces +X → -90°; the
-        // Mercedes is already built nose at +Z.
-        baseModel.rotation.y = carModel.rotY
-        fitToWorldUnits(baseModel, (stored ? CAR_WIDTH_M : CAR_WIDTH_WIDE_M) * M)
-        // Split the wheels off before cloning — clones share geometry, so the
-        // re-homing must happen exactly once
-        prepareWheels(baseModel, modelParts)
-        // Measured after the rotation correction, so the box is already in the
-        // car frame the lights are placed in (nose at +Z)
-        const carBox = new THREE.Box3().setFromObject(baseModel)
-        const darkParts = shadeDarkParts(baseModel, carBox, modelParts)
-        // A model with its own tail lamps uses them; otherwise the closed-wheel
-        // car gets a band carved out of the bodywork, and the formula car — which
-        // has no such panel — keeps the built lamp.
-        const tailGeo = modelParts || openWheelCar ? null
-          : buildTailLightBand(baseModel, carBox, darkParts)
-        // Raycast the lamp seats once — same for every lap's copy of the car
-        const lampSpots = modelParts ? [] : computeLampSpots(baseModel, carBox, openWheelCar)
+    carWheelsRef.current = []
+    carLightsRef.current = []
 
-        carWheelsRef.current = []
-        carLightsRef.current = []
-        laps.forEach((lap, i) => {
-          const innerModel = baseModel.clone(true)
-          applyLapColor(innerModel, getLapColor(lap.colorIndex))
-          carWheelsRef.current[i] = collectWheels(innerModel)
-          // Outer group receives yaw from animation loop; inner model keeps the 180° correction
-          const outerGroup = new THREE.Group()
-          outerGroup.rotation.order = 'YXZ'   // yaw, then pitch — see buildPlaceholderCar
-          outerGroup.add(innerModel)
-          // A model with real tail lamps drives them directly — applyLapColor has
-          // just overwritten their materials, so this has to come after it
-          carLightsRef.current[i] = modelParts
-            ? attachNamedBrakeLights(innerModel, modelParts.lamp)
-            : addCarLights(outerGroup, lampSpots, carBox, openWheelCar, tailGeo)
-          outerGroup.position.copy(carGroups[i].position)
-          outerGroup.rotation.copy(carGroups[i].rotation)
-          scene.remove(carGroups[i])
-          scene.add(outerGroup)
-          carGroups[i] = outerGroup
+    const byModel = new Map<string, { spec: CarModelSpec; lapIdx: number[] }>()
+    laps.forEach((lap, i) => {
+      const spec = modelFor(lap.lapKey)
+      const entry = byModel.get(spec.url)
+      if (entry) entry.lapIdx.push(i)
+      else byModel.set(spec.url, { spec, lapIdx: [i] })
+    })
+
+    for (const { spec, lapIdx } of byModel.values()) {
+      const { url: modelUrl, parts: modelParts, openWheel } = spec
+      const loadModel = /\.gl(b|tf)$/i.test(modelUrl)
+        ? new GLTFLoader().loadAsync(modelUrl).then(g => g.scene as unknown as THREE.Group)
+        : new OBJLoader().loadAsync(modelUrl)
+      loadModel
+        .then((baseModel: THREE.Group) => {
+          if (loadCancelled) return
+          // Parts that are never seen: motion-blur rim copies inside the real
+          // rims, and a full interior behind glass the lap colour makes opaque
+          if (modelParts) baseModel.traverse(c => { if (modelParts.hide.test(c.name)) c.visible = false })
+          // Rotation first, then fit: fitToWorldUnits centres the model on its
+          // bounding box, and three applies position outside the rotation. Centring
+          // before rotating left the F1 sitting 0.18 units off its own axis — beside
+          // its racing line, and every zone measured from the box was off with it.
+          // Porsche faces -Z natively → flip 180°; F1 faces +X → -90°; the
+          // Mercedes is already built nose at +Z.
+          baseModel.rotation.y = spec.rotY
+          fitToWorldUnits(baseModel, (stored ? CAR_WIDTH_M : CAR_WIDTH_WIDE_M) * M)
+          // Split the wheels off before cloning — clones share geometry, so the
+          // re-homing must happen exactly once
+          prepareWheels(baseModel, modelParts)
+          // Measured after the rotation correction, so the box is already in the
+          // car frame the lights are placed in (nose at +Z)
+          const carBox = new THREE.Box3().setFromObject(baseModel)
+          const darkParts = shadeDarkParts(baseModel, carBox, modelParts)
+          // A model with its own tail lamps uses them; otherwise the closed-wheel
+          // car gets a band carved out of the bodywork, and the formula car — which
+          // has no such panel — keeps the built lamp.
+          const tailGeo = modelParts || openWheel ? null
+            : buildTailLightBand(baseModel, carBox, darkParts)
+          // Raycast the lamp seats once — same for every lap's copy of the car
+          const lampSpots = modelParts ? [] : computeLampSpots(baseModel, carBox, openWheel)
+
+          for (const i of lapIdx) {
+            const innerModel = baseModel.clone(true)
+            applyLapColor(innerModel, getLapColor(laps[i].colorIndex))
+            carWheelsRef.current[i] = collectWheels(innerModel)
+            // Outer group receives yaw from animation loop; inner model keeps the 180° correction
+            const outerGroup = new THREE.Group()
+            outerGroup.rotation.order = 'YXZ'   // yaw, then pitch — see buildPlaceholderCar
+            outerGroup.add(innerModel)
+            // A model with real tail lamps drives them directly — applyLapColor has
+            // just overwritten their materials, so this has to come after it
+            carLightsRef.current[i] = modelParts
+              ? attachNamedBrakeLights(innerModel, modelParts.lamp)
+              : addCarLights(outerGroup, lampSpots, carBox, openWheel, tailGeo)
+            outerGroup.position.copy(carGroups[i].position)
+            outerGroup.rotation.copy(carGroups[i].rotation)
+            scene.remove(carGroups[i])
+            scene.add(outerGroup)
+            carGroups[i] = outerGroup
+          }
         })
-      })
-      .catch(() => { /* OBJ failed to load — keep placeholder */ })
+        .catch(() => { /* model failed to load — keep placeholder */ })
+    }
 
 
     // Always start from the beginning when a new scene is built (new file loaded)
@@ -3456,9 +3474,10 @@ export default function Replay3DViewer() {
       renderer.dispose()
       if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement)
     }
-    // carModel, not openWheelCar: switching between two closed-wheel cars leaves
-    // that flag unchanged and would keep the previous model on screen
-  }, [laps, tf, carModel, isDark])
+    // modelKey, not openWheelCar: switching between two closed-wheel cars leaves
+    // that flag unchanged and would keep the previous model on screen. The key
+    // names every lap's model, so a swap in any one of them rebuilds.
+  }, [laps, tf, modelKey, isDark])
 
   // ── Weather visuals ────────────────────────────────────────────────────────
   // Cloud cover follows Skies, rain follows Precipitation, visibility follows

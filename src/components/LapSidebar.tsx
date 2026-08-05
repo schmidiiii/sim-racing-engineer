@@ -273,6 +273,12 @@ export default function LapSidebar() {
   // because the best one belonged to the other session. Sessions of the same
   // track and car still share a reference, which is the case where comparing
   // across sessions means something.
+  //
+  // Still per car, even though laps of two cars can now be selected together: a
+  // GT3 and a Cup car round the same circuit are seconds apart by class, and
+  // measuring the slower one's laps against the faster car's best would bury
+  // what the list is for — which of *its own* laps was the good one. Each car
+  // keeps its own best, and the delta view compares them against each other.
   const fastestByGroup = new Map<string, number>()
   for (const s of sessions) {
     const key = `${s.track}|${s.car}`
@@ -299,26 +305,27 @@ export default function LapSidebar() {
   const keyColorIndex: Record<string, number> = {}
   selectedLapKeys.forEach((k, i) => { keyColorIndex[k] = i })
 
-  // Determine compatibility: a session is incompatible if track OR car differs
-  // from any already-selected session. Compatible sessions can be added manually.
+  // Determine compatibility: a session is incompatible only if it was driven on
+  // a different circuit. The car may differ — two cars round the same track is
+  // a comparison worth having, and everything the app compares by is lap
+  // distance, which they share.
   const selectedSessionIds = new Set(selectedLapKeys.map(k => {
     const idx = k.lastIndexOf(':')
     return k.slice(0, idx)
   }))
   const selectedSessions = sessions.filter(s => selectedSessionIds.has(s.id))
   const refTrack = selectedSessions[0]?.track ?? null
-  const refCar = selectedSessions[0]?.car ?? null
   const isSessionCompatible = (s: typeof sessions[0]) =>
-    !refTrack || !refCar || (s.track === refTrack && s.car === refCar)
+    !refTrack || s.track === refTrack
 
   // Laps are listed for the active session, for any session laps are already
-  // selected from, and for every session sharing the active session's track and
-  // car — those are exactly the ones that can be compared against it
+  // selected from, and for every session on the active session's circuit —
+  // those are exactly the ones that can be compared against it
   const activeSession = sessions.find(s => s.id === activeSessionId)
   const showsLaps = (s: typeof sessions[0]) =>
     s.id === activeSessionId
     || selectedSessionIds.has(s.id)
-    || (!!activeSession && s.track === activeSession.track && s.car === activeSession.car)
+    || (!!activeSession && s.track === activeSession.track)
 
   return (
     <aside

@@ -149,17 +149,13 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   setLapMapFullscreen: (v) => set({ lapMapFullscreen: v }),
 
   setActiveSessionId: (id) => {
-    const { sessions, selectedLapKeys } = get()
+    const { sessions } = get()
     const session = sessions.find(s => s.id === id)
     if (!session) return
-    // Same track and car as what's already selected → keep the selection so laps
-    // from both sessions can be compared; otherwise start fresh with its 2 best
-    const selectedIds = new Set(selectedLapKeys.map(k => parseLapKey(k).sessionId))
-    const comparable = selectedLapKeys.length > 0 && [...selectedIds].every(sid => {
-      const s = sessions.find(x => x.id === sid)
-      return !s || (s.track === session.track && s.car === session.car)
-    })
-    if (comparable) { set({ activeSessionId: id }); return }
+    // Picking a session always starts from its own two fastest laps, whatever
+    // was selected before. The two gestures mean different things: choosing a
+    // session says "show me this one", and ticking a lap says "and this as
+    // well" — which still works across every session on the circuit, in any car.
     const newKeys = session.laps
       .filter(l => l.is_valid && l.lap_time > 10)
       .sort((a, b) => a.lap_time - b.lap_time)
@@ -227,15 +223,19 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       set({ selectedLapKeys: selectedLapKeys.filter(k => k !== key) })
       return
     }
-    // Cross-session guard: only allow if track AND car match all already-selected
-    // sessions. Checked before the session cap — otherwise dropping the oldest
-    // session would let an incompatible lap slip in
+    // Cross-session guard: the same circuit, and that is all. Two cars round
+    // the same track share a lap distance, which is what every comparison in
+    // the app is built on — the delta, the traces, the track map. Two circuits
+    // share nothing, and laying one over the other says nothing at all.
+    //
+    // Checked before the session cap — otherwise dropping the oldest session
+    // would let an incompatible lap slip in.
     const target = sessions.find(s => s.id === sessionId)
     if (target) {
       const otherIds = new Set(selectedLapKeys.map(k => parseLapKey(k).sessionId).filter(id => id !== sessionId))
       for (const otherId of otherIds) {
         const other = sessions.find(s => s.id === otherId)
-        if (other && (other.track !== target.track || other.car !== target.car)) return
+        if (other && other.track !== target.track) return
       }
     }
     // Cap active sessions at MAX_ACTIVE_SESSIONS — adding a lap from a new session drops the oldest session's laps
